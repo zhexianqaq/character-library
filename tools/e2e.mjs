@@ -358,6 +358,32 @@ try {
   const packCount = await evaluate(`document.querySelectorAll('.pack-card').length`);
   check('图包按月渲染', packCount > 0, `${packCount} 个`);
 
+  // 2.6 多选图包
+  const sel = await evaluate(`(async () => {
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    document.querySelector('[data-select-toggle]').click();
+    await sleep(1200);
+    const cards = [...document.querySelectorAll('.pack-card')];
+    cards[0]?.click();
+    cards[1]?.click();
+    await sleep(350);
+    const out = {
+      bar: !!document.querySelector('.sel-bar:not([hidden])'),
+      n: document.querySelector('.sel-n b')?.textContent,
+      selCount: document.querySelectorAll('.pack-card.is-sel').length,
+      ticks: document.querySelectorAll('.pack-card .tick').length,
+      path: location.pathname,
+    };
+    document.querySelector('[data-sel="exit"]').click();
+    await sleep(900);
+    out.afterBar = !!document.querySelector('.sel-bar:not([hidden])');
+    out.afterTicks = document.querySelectorAll('.pack-card .tick').length;
+    return out;
+  })()`);
+  check('选取模式能勾选图包', sel.bar && sel.n === '2' && sel.selCount === 2, JSON.stringify(sel));
+  check('选择模式点卡片不跳转', /^\/c\//.test(sel.path), sel.path);
+  check('完成后退回普通模式', sel.afterBar === false && sel.afterTicks === 0, `${sel.afterBar}/${sel.afterTicks}`);
+
   // 2.7 右键图包
   if (await realRightClick('.pack-card')) {
     const labels = await readMenuAndClose();

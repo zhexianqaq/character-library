@@ -44,6 +44,10 @@ export async function CharacterView(root, id) {
   let cat = CATEGORIES[0];
   let mediaItems = [];
   let packsCache = [];
+  // 多选：图包视图里选图包，媒体视图里选媒体
+  let selecting = false;
+  const picked = new Set();
+  let packsShown = [];
 
   function heroHtml() {
     const cover = c.coverMediaId ? api.thumb(c.coverMediaId) : '';
@@ -85,11 +89,13 @@ export async function CharacterView(root, id) {
              <button data-v="media">全部媒体</button>
            </div>
            <span class="spacer"></span>
+           <button class="tb-btn" data-select-toggle>选取</button>
            <button class="tb-btn" data-new-pack>＋ 图包</button>
            <button class="tb-btn primary" data-upload>↑ 上传素材</button>
          </div>
          ${isWorkShelf() ? '<div class="cat-row" data-cats></div>' : ''}
          <div data-body></div>
+         <div class="sel-bar" data-selbar hidden></div>
        </main>`
     );
   }
@@ -582,6 +588,181 @@ export async function CharacterView(root, id) {
     });
   }
 
+  // ---------- 多选 ----------
+  const selBar = () => root.querySelector('[data-selbar]');
+
+  function resetSelection() {
+    selecting = false;
+    picked.clear();
+    const bar = selBar();
+    if (bar) {
+      bar.hidden = true;
+      bar.innerHTML = '';
+    }
+    const t = root.querySelector('[data-select-toggle]');
+    if (t) t.textContent = '选取';
+    root.classList.remove('is-selecting');
+  }
+
+  function syncSelCount() {
+    const bar = selBar();
+    if (!bar || bar.hidden) return;
+    const n = bar.querySelector('.sel-n b');
+    if (n) n.textContent = String(picked.size);
+    bar.querySelectorAll('button[data-sel]').forEach((b) => {
+      const k = b.dataset.sel;
+      b.disabled = picked.size === 0 && k !== 'all' && k !== 'exit';
+    });
+  }
+
+  function buildSelBar() {
+    const bar = selBar();
+    if (!bar) return;
+    bar.hidden = false;
+    bar.innerHTML = `
+      <span class="sel-n">已选 <b>0</b> ${mode === 'packs' ? '个图包' : '个媒体'}</span>
+      <button data-sel="all">全选</button>
+      ${mode === 'packs' ? '<button data-sel="dissolve">解散</button>' : '<button data-sel="move">移动到…</button>'}
+      <button data-sel="del" class="danger">删除</button>
+      <button data-sel="exit" class="primary">完成</button>`;
+    bar.querySelectorAll('button[data-sel]').forEach((b) => {
+      b.addEventListener('click', () => onSelAction(b.dataset.sel));
+    });
+    syncSelCount();
+  }
+
+  function enterSelect() {
+    selecting = true;
+    picked.clear();
+    root.classList.add('is-selecting');
+    const t = root.querySelector('[data-select-toggle]');
+    if (t) t.textContent = '完成';
+    if (mode === 'packs') loadPacks();
+    else loadMedia();
+    buildSelBar();
+  }
+
+  function exitSelect() {
+    resetSelection();
+    if (mode === 'packs') loadPacks();
+    else loadMedia();
+  }
+
+  function togglePick(id) {
+    if (picked.has(id)) picked.delete(id);
+    else picked.add(id);
+    const el = root.querySelector(`.tile[data-id="${id}"], .pack-card[data-pack="${id}"]`);
+    if (el) el.classList.toggle('is-sel', picked.has(id));
+    syncSelCount();
+  }
+
+  function selectAllShown() {
+    const ids = mode === 'packs' ? packsShown.map((p) => p.id) : mediaItems.map((m) => m.id);
+    const allOn = ids.length > 0 && ids.every((id) => picked.has(id));
+    if (allOn) picked.clear();
+    else ids.forEach((id) => picked.add(id));
+    root.querySelectorAll('.pack-card, .tile').forEach((el) => {
+      const id = Number(el.dataset.pack || el.dataset.id);
+      el.classList.toggle('is-sel', picked.has(id));
+    });
+    syncSelCount();
+  }
+
+  async function onSelAction(action) {
+    if (action === 'exit') {
+      exitSelect();
+      return;
+    }
+    if (action === 'all') {
+      selectAllShown();
+      return;
+    }
+    if (!picked.size) return;
+    if (action === 'dissolve') bulkPacks('dissolve');
+    else if (action === 'del') mode === 'packs' ? bulkPacks('delete') : bulkMediaDelete();
+    else if (action === 'move') bulkMediaMove();
+  }
+
+  async function bulkPacks(action) {
+    const ids = [...picked];
+    const del = action === 'delete';
+    const ok = await confirmDialog(
+      del ? `删除 ${ids.length} 个图包和里面的媒体？` : `解散 ${ids.length} 个图包？`,
+      del
+        ? '图包里的图片 / 视频会一起删掉，磁盘文件也会删，不可恢复。'
+        : '只删图包这个壳，里面的媒体会变成未归包，文件一个都不动。'
+    );
+    if (!ok) return;
+    try {
+      const res = await api.bulkPacks(ids, action);
+      toast(del ? `已删除 ${res.done} 个图包 · ${res.removed} 个媒体` : `已解散 ${res.done} 个图包`);
+      resetSelection();
+      c = await api.character(id);
+      paint();
+      await loadPacks();
+    } catch (err) {
+      toast(err.message || '操作失败');
+    }
+  }
+
+  async function bulkMediaDelete() {
+    const ids = [...picked];
+    const ok = await confirmDialog(`删除 ${ids.length} 个媒体？`, '磁盘上的原件也会一起删掉，不可恢复。');
+    if (!ok) return;
+    try {
+      const res = await api.bulkMedia(ids, 'delete');
+      toast(`已删除 ${res.done} 个媒体`);
+      resetSelection();
+      c = await api.character(id);
+      paint();
+      if (mode === 'media') await loadMedia();
+      else await loadPacks();
+    } catch (err) {
+      toast(err.message || '删除失败');
+    }
+  }
+
+  async function bulkMediaMove() {
+    let data;
+    try {
+      data = await api.packs(c.id);
+    } catch (err) {
+      toast(err.message || '图包列表读取失败');
+      return;
+    }
+    if (!data.items.length) {
+      toast('还没有图包，先建一个');
+      return;
+    }
+    const v = await openModal({
+      title: `移动 ${picked.size} 个媒体`,
+      description: '只改所属图包，磁盘文件留在原地。',
+      fields: [
+        {
+          name: 'packId',
+          label: '目标图包',
+          type: 'select',
+          required: true,
+          options: data.items.map((p) => ({
+            value: String(p.id),
+            label: `${p.category ? `${p.category} / ` : ''}${p.title}（${p.mediaCount}）`,
+          })),
+        },
+      ],
+      submitText: '移动',
+    });
+    if (!v) return;
+    try {
+      const res = await api.bulkMedia([...picked], 'move', Number(v.packId));
+      toast(res.skipped ? `已移动 ${res.done} 个，跳过 ${res.skipped} 个` : `已移动 ${res.done} 个`);
+      resetSelection();
+      if (mode === 'media') await loadMedia();
+      else await loadPacks();
+    } catch (err) {
+      toast(err.message || '移动失败');
+    }
+  }
+
   /** 当前小库；人物库或「未分类」时返回 null */
   function packCategory() {
     return isWorkShelf() && CATEGORIES.includes(cat) ? cat : null;
@@ -621,6 +802,7 @@ export async function CharacterView(root, id) {
     packsCache = data.items;
     paintCats();
     const items = isWorkShelf() ? data.items.filter((p) => (p.category || '未分类') === cat) : data.items;
+    packsShown = items;
     if (!items.length) {
       holder.innerHTML = `<div class="empty" style="grid-column:1/-1">
         <b>${isWorkShelf() ? `「${cat}」还没有图包` : '还没有图包'}</b>上传图片或视频后，会按文件名里的日期自动月份归包；也可以点「＋ 图包」手动建一个
@@ -633,7 +815,9 @@ export async function CharacterView(root, id) {
         const meta = [p.imageCount ? `${p.imageCount} 图` : '', p.videoCount ? `${p.videoCount} 视频` : '']
           .filter(Boolean)
           .join(' · ');
-        return `<div class="pack-card" data-pack="${p.id}">
+        const on = selecting && picked.has(p.id);
+        return `<div class="pack-card${on ? ' is-sel' : ''}" data-pack="${p.id}">
+          ${selecting ? '<span class="tick" aria-hidden="true"></span>' : ''}
           <a class="pack-hit" href="/p/${p.id}" data-link aria-label="${esc(p.title)}"></a>
           <div class="cover single">
             ${img ? `<img src="${img}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : '<div class="cover-empty">空</div>'}
@@ -652,6 +836,21 @@ export async function CharacterView(root, id) {
       })
       .join('');
     holder.querySelectorAll('img').forEach(fadeIn);
+
+    // 选择模式下点卡片 = 勾选，必须用捕获阶段拦住 .pack-hit 的 data-link 跳转
+    if (selecting) {
+      holder.addEventListener(
+        'click',
+        (e) => {
+          const card = e.target.closest('.pack-card');
+          if (!card) return;
+          e.preventDefault();
+          e.stopPropagation();
+          togglePick(Number(card.dataset.pack));
+        },
+        true
+      );
+    }
 
     holder.querySelectorAll('[data-add-media]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
@@ -711,13 +910,23 @@ export async function CharacterView(root, id) {
       return;
     }
     requestAnimationFrame(() => {
-      renderMasonry(holder, mediaItems, (i) => gotoMedia(mediaItems[i].id), {
-        onContext: (e, item) =>
-          mediaMenu(e, item, {
-            characterId: c.id,
-            onOpen: () => gotoMedia(item.id),
-            onChange: loadMedia,
-          }),
+      renderMasonry(holder, mediaItems, (i) => {
+        if (selecting) {
+          togglePick(mediaItems[i].id);
+          return;
+        }
+        gotoMedia(mediaItems[i].id);
+      }, {
+        selectable: selecting,
+        isPicked: (it) => picked.has(it.id),
+        onContext: selecting
+          ? null
+          : (e, item) =>
+              mediaMenu(e, item, {
+                characterId: c.id,
+                onOpen: () => gotoMedia(item.id),
+                onChange: loadMedia,
+              }),
       });
     });
   }
@@ -769,9 +978,15 @@ export async function CharacterView(root, id) {
       const btn = e.target.closest('button[data-v]');
       if (!btn || btn.dataset.v === mode) return;
       root.querySelectorAll('[data-view] button').forEach((b) => b.classList.toggle('on', b === btn));
+      resetSelection();
       mode = btn.dataset.v;
       if (mode === 'packs') await loadPacks();
       else await loadMedia();
+    });
+
+    root.querySelector('[data-select-toggle]').addEventListener('click', () => {
+      if (selecting) exitSelect();
+      else enterSelect();
     });
 
     root.querySelector('[data-new-pack]').addEventListener('click', async () => {

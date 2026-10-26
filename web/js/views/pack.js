@@ -42,12 +42,17 @@ export async function PackView(root, id) {
          </div>
          <span class="spacer"></span>
          <span class="count" data-count></span>
+         <button class="tb-btn" data-select-toggle>选取</button>
          <button class="tb-btn" data-add-media>＋ 添加素材</button>
        </div>
        <div class="masonry" data-masonry></div>
+       <div class="sel-bar" data-selbar hidden></div>
      </main>`;
 
   bindTopbar(root);
+
+  let selecting = false;
+  const picked = new Set();
 
   const holder = root.querySelector('[data-masonry]');
   const titleEl = root.querySelector('[data-title]');
@@ -77,13 +82,23 @@ export async function PackView(root, id) {
       return;
     }
     requestAnimationFrame(() => {
-      renderMasonry(holder, items, (i) => gotoMedia(items[i].id), {
-        onContext: (e, item) =>
-          mediaMenu(e, item, {
-            characterId: pack.character.id,
-            onOpen: () => gotoMedia(item.id),
-            onChange: reload,
-          }),
+      renderMasonry(holder, items, (i) => {
+        if (selecting) {
+          togglePick(items[i].id);
+          return;
+        }
+        gotoMedia(items[i].id);
+      }, {
+        selectable: selecting,
+        isPicked: (it) => picked.has(it.id),
+        onContext: selecting
+          ? null
+          : (e, item) =>
+              mediaMenu(e, item, {
+                characterId: pack.character.id,
+                onOpen: () => gotoMedia(item.id),
+                onChange: reload,
+              }),
       });
     });
   }
@@ -102,6 +117,150 @@ export async function PackView(root, id) {
       paintMedia();
     } catch (err) {
       toast(err.message || '刷新失败');
+    }
+  }
+
+  // ---------- 多选 ----------
+  const selBar = () => root.querySelector('[data-selbar]');
+
+  function resetSelection() {
+    selecting = false;
+    picked.clear();
+    const bar = selBar();
+    if (bar) {
+      bar.hidden = true;
+      bar.innerHTML = '';
+    }
+    const t = root.querySelector('[data-select-toggle]');
+    if (t) t.textContent = '选取';
+  }
+
+  function syncSelCount() {
+    const bar = selBar();
+    if (!bar || bar.hidden) return;
+    const n = bar.querySelector('.sel-n b');
+    if (n) n.textContent = String(picked.size);
+    bar.querySelectorAll('button[data-sel]').forEach((b) => {
+      const k = b.dataset.sel;
+      b.disabled = picked.size === 0 && k !== 'all' && k !== 'exit';
+    });
+  }
+
+  function buildSelBar() {
+    const bar = selBar();
+    if (!bar) return;
+    bar.hidden = false;
+    bar.innerHTML = `
+      <span class="sel-n">已选 <b>0</b> 个媒体</span>
+      <button data-sel="all">全选</button>
+      <button data-sel="move">移动到…</button>
+      <button data-sel="del" class="danger">删除</button>
+      <button data-sel="exit" class="primary">完成</button>`;
+    bar.querySelectorAll('button[data-sel]').forEach((b) => {
+      b.addEventListener('click', () => onSelAction(b.dataset.sel));
+    });
+    syncSelCount();
+  }
+
+  function enterSelect() {
+    selecting = true;
+    picked.clear();
+    const t = root.querySelector('[data-select-toggle]');
+    if (t) t.textContent = '完成';
+    paintMedia();
+    buildSelBar();
+  }
+
+  function exitSelect() {
+    resetSelection();
+    paintMedia();
+  }
+
+  function togglePick(id) {
+    if (picked.has(id)) picked.delete(id);
+    else picked.add(id);
+    const el = root.querySelector(`.tile[data-id="${id}"]`);
+    if (el) el.classList.toggle('is-sel', picked.has(id));
+    syncSelCount();
+  }
+
+  function selectAllShown() {
+    const ids = items.map((m) => m.id);
+    const allOn = ids.length > 0 && ids.every((id) => picked.has(id));
+    if (allOn) picked.clear();
+    else ids.forEach((id) => picked.add(id));
+    root.querySelectorAll('.tile').forEach((el) => {
+      el.classList.toggle('is-sel', picked.has(Number(el.dataset.id)));
+    });
+    syncSelCount();
+  }
+
+  async function onSelAction(action) {
+    if (action === 'exit') {
+      exitSelect();
+      return;
+    }
+    if (action === 'all') {
+      selectAllShown();
+      return;
+    }
+    if (!picked.size) return;
+    if (action === 'del') bulkDelete();
+    else if (action === 'move') bulkMove();
+  }
+
+  async function bulkDelete() {
+    const ids = [...picked];
+    const ok = await confirmDialog(`删除 ${ids.length} 个媒体？`, '磁盘上的原件也会一起删掉，不可恢复。');
+    if (!ok) return;
+    try {
+      const res = await api.bulkMedia(ids, 'delete');
+      toast(`已删除 ${res.done} 个媒体`);
+      resetSelection();
+      await reload();
+    } catch (err) {
+      toast(err.message || '删除失败');
+    }
+  }
+
+  async function bulkMove() {
+    let data;
+    try {
+      data = await api.packs(pack.character.id);
+    } catch (err) {
+      toast(err.message || '图包列表读取失败');
+      return;
+    }
+    const others = data.items.filter((p) => p.id !== pack.id);
+    if (!others.length) {
+      toast('没有别的图包可以移过去');
+      return;
+    }
+    const v = await openModal({
+      title: `移动 ${picked.size} 个媒体`,
+      description: '只改所属图包，磁盘文件留在原地。',
+      fields: [
+        {
+          name: 'packId',
+          label: '目标图包',
+          type: 'select',
+          required: true,
+          options: others.map((p) => ({
+            value: String(p.id),
+            label: `${p.category ? `${p.category} / ` : ''}${p.title}（${p.mediaCount}）`,
+          })),
+        },
+      ],
+      submitText: '移动',
+    });
+    if (!v) return;
+    try {
+      const res = await api.bulkMedia([...picked], 'move', Number(v.packId));
+      toast(res.skipped ? `已移动 ${res.done} 个，跳过 ${res.skipped} 个` : `已移动 ${res.done} 个`);
+      resetSelection();
+      await reload();
+    } catch (err) {
+      toast(err.message || '移动失败');
     }
   }
 
@@ -146,6 +305,10 @@ export async function PackView(root, id) {
   }
 
   addBtn.addEventListener('click', () => openAddMenu(addBtn));
+  root.querySelector('[data-select-toggle]').addEventListener('click', () => {
+    if (selecting) exitSelect();
+    else enterSelect();
+  });
 
   // 传完自动刷新这一页
   queue.onIdle = () => {

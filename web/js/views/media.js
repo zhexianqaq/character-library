@@ -94,8 +94,9 @@ export async function MediaView(root, id) {
     canvas.style.width = '';
     canvas.style.height = '';
     if (isVideo) {
-      canvas.innerHTML = `<video data-v src="${api.original(item.id)}" controls playsinline preload="metadata"
-        poster="${api.thumb(item.id)}"></video>`;
+      // 静音 + 循环才能自动播放；想要声音点播放器上的音量按钮
+      canvas.innerHTML = `<video data-v src="${api.original(item.id)}" controls playsinline
+        autoplay muted loop preload="auto" poster="${api.thumb(item.id)}"></video>`;
       const v = canvas.querySelector('video');
       v.addEventListener('loadedmetadata', fitVideo, { once: true });
       if (v.videoWidth) fitVideo(); // 元数据已在缓存里的话事件不会再发

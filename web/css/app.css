@@ -1859,3 +1859,100 @@ img { display: block; }
   .mp-nav.prev { left: 12px; }
   .mp-nav.next { right: 12px; }
 }
+
+/* ============ 多选 ============ */
+/* 勾选圈：图包卡片和媒体瓦片共用 */
+.tick {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  z-index: 4;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(6px);
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  transition: background 0.14s var(--ease), box-shadow 0.14s var(--ease);
+}
+.tick::after {
+  content: '';
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: transparent;
+  transition: background 0.14s var(--ease);
+}
+.is-sel .tick { background: var(--accent); box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3); }
+.is-sel .tick::after { background: #fff; }
+
+.pack-card .tick { left: 14px; top: 14px; }
+
+.tile.is-sel { box-shadow: 0 0 0 2.5px var(--accent), var(--s2); }
+.pack-card.is-sel { box-shadow: 0 0 0 2.5px var(--accent), var(--s2); }
+.tile.is-sel:hover { transform: none; }
+
+/* 选择模式下让勾选圈独占左上角，别和「含视频」角标叠在一起 */
+.is-selecting .pack-card .kind { display: none; }
+
+/* 底部操作条 */
+.sel-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  z-index: 220;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100vw - 32px);
+  padding: 8px 8px 8px 18px;
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: var(--s3);
+  transform: translateX(-50%);
+  animation: sel-in 0.2s var(--ease);
+}
+.sel-bar[hidden] { display: none; }
+@keyframes sel-in {
+  from { opacity: 0; transform: translate(-50%, 10px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.sel-n {
+  margin-right: 6px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.sel-n b { color: var(--text); font-size: 13px; }
+.sel-bar button {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: var(--r-pill);
+  background: var(--fill);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background 0.16s var(--ease), transform 0.12s var(--ease);
+}
+.sel-bar button:hover { background: var(--fill-2); }
+.sel-bar button:active { transform: scale(0.97); }
+.sel-bar button:disabled { opacity: 0.4; cursor: default; }
+.sel-bar button:disabled:hover { background: var(--fill); }
+.sel-bar button.primary { background: var(--accent); color: var(--on-accent); }
+.sel-bar button.primary:hover { background: #000; }
+.sel-bar button.danger { background: #e24b4a; color: #fff; }
+.sel-bar button.danger:hover { background: #c93b3a; }
+
+/* 选择模式下给底部留出操作条的位置 */
+.is-selecting .page { padding-bottom: 88px; }
+
+@media (max-width: 760px) {
+  .sel-bar { gap: 4px; padding: 6px 6px 6px 14px; }
+  .sel-bar button { height: 30px; padding: 0 11px; font-size: 12px; }
+  .sel-n { font-size: 11.5px; margin-right: 2px; }
+}

@@ -1,25 +1,28 @@
 import { api } from '../api.js';
 import { aspectStyle, columnCount, splitColumns, fadeIn, fmtDur, esc } from '../util.js';
 
-function tileHtml(it) {
+function tileHtml(it, opts = {}) {
   const isVideo = it.kind === 'video';
   const fallback = isVideo ? 16 / 9 : 3 / 4;
-  return `<button class="tile ratio" style="${aspectStyle(it.width, it.height, fallback)}" data-id="${it.id}">
+  const picked = typeof opts.isPicked === 'function' ? opts.isPicked(it) : false;
+  return `<button class="tile ratio${picked ? ' is-sel' : ''}" style="${aspectStyle(it.width, it.height, fallback)}" data-id="${it.id}">
     <img src="${api.thumb(it.id)}" alt="${esc(it.fileName)}" loading="lazy" decoding="async">
     ${isVideo ? '<span class="play"><i></i></span>' : ''}
     ${isVideo && it.durationMs ? `<span class="dur">${fmtDur(it.durationMs)}</span>` : ''}
+    ${opts.selectable ? '<span class="tick" aria-hidden="true"></span>' : ''}
   </button>`;
 }
 
 /**
  * 渲染瀑布流。列数按容器宽度决定；图片用各自宽高比占位，不裁剪。
  * onOpen(indexInItems) 回调由调用方决定灯箱范围。
+ * opts.selectable / opts.isPicked 用来支持多选。
  */
 export function renderMasonry(container, items, onOpen, opts = {}) {
   const cols = columnCount(container.clientWidth);
   const buckets = splitColumns(items, cols);
   container.innerHTML = buckets
-    .map((col) => `<div class="col">${col.map(tileHtml).join('')}</div>`)
+    .map((col) => `<div class="col">${col.map((it) => tileHtml(it, opts)).join('')}</div>`)
     .join('');
 
   container.querySelectorAll('img').forEach(fadeIn);

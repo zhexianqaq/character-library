@@ -67,6 +67,8 @@ export const api = {
 
   media: (id) => req(`/api/media/${id}`),
   updateMedia: (id, patch) => json('PATCH')(`/api/media/${id}`, patch),
+  bulkMedia: (ids, action, packId) => json('POST')('/api/media/bulk', { ids, action, packId }),
+  bulkPacks: (ids, action) => json('POST')('/api/packs/bulk', { ids, action }),
   deleteMedia: (id) => req(`/api/media/${id}`, { method: 'DELETE' }),
 
   warm: () => json('POST')('/api/warm', {}),

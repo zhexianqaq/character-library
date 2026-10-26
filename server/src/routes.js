@@ -1,6 +1,6 @@
 import express from 'express';
 import fs from 'node:fs';
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import multer from 'multer';
@@ -402,7 +402,8 @@ export function createApp() {
     } else if (kind === 'pack') {
       const first = db.prepare('SELECT rel_path FROM media WHERE pack_id = ? LIMIT 1').get(numId);
       if (first) {
-        target = path.dirname(absPathOf(first.rel_path));
+        // <条目>/<图包>/<图片|视频>/<文件> 往上两级才是图包根目录
+        target = path.dirname(path.dirname(absPathOf(first.rel_path)));
       } else {
         const row = db
           .prepare('SELECT c.dir_slug FROM packs p JOIN characters c ON c.id = p.character_id WHERE p.id = ?')
@@ -422,8 +423,10 @@ export function createApp() {
     }
     try {
       const isDir = fs.statSync(abs).isDirectory();
-      // explorer 成功也可能返回 1，忽略退出码
-      execFile('explorer.exe', [isDir ? abs : `/select,${abs}`], () => {});
+      // 引号只能加在路径本身外面，也就是 /select,"路径" 这种形态；
+      // 交给 Node 自动加引号会变成 "/select,路径"，explorer 解析不了
+      const arg = isDir ? `"${abs}"` : `/select,"${abs}"`;
+      spawn('explorer.exe', [arg], { windowsVerbatimArguments: true, detached: true, stdio: 'ignore' }).unref();
       res.json({ ok: true, path: abs });
     } catch {
       res.status(404).json({ error: '文件已丢失', path: abs });
@@ -744,6 +747,103 @@ export function createApp() {
     db.prepare('DELETE FROM packs WHERE id = ?').run(id);
     refreshCharacter(row.character_id);
     res.json({ ok: true, removed });
+  });
+
+  /**
+   * 图包批量操作：dissolve 只删壳（媒体变成未归包），delete 连媒体和磁盘文件一起删。
+   */
+  app.post('/api/packs/bulk', async (req, res) => {
+    const db = getDb();
+    const raw = req.body && Array.isArray(req.body.ids) ? req.body.ids : [];
+    const ids = [...new Set(raw.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+    const action = String((req.body && req.body.action) || '');
+    if (!ids.length) return res.status(400).json({ error: '没有选择图包' });
+    if (action !== 'dissolve' && action !== 'delete') return res.status(400).json({ error: '未知操作' });
+
+    const getPack = db.prepare('SELECT id, character_id FROM packs WHERE id = ?');
+    const listMedia = db.prepare('SELECT rel_path FROM media WHERE pack_id = ?');
+    const delMedia = db.prepare('DELETE FROM media WHERE pack_id = ?');
+    const delPack = db.prepare('DELETE FROM packs WHERE id = ?');
+
+    let done = 0;
+    let removed = 0;
+    const chars = new Set();
+    for (const id of ids) {
+      const pack = getPack.get(id);
+      if (!pack) continue;
+      chars.add(pack.character_id);
+      if (action === 'delete') {
+        const rows = listMedia.all(id);
+        delMedia.run(id);
+        for (const r of rows) await removeLibraryFile(r.rel_path);
+        removed += rows.length;
+      }
+      // dissolve 时 media.pack_id 有 ON DELETE SET NULL，会自动变成未归包
+      delPack.run(id);
+      done += 1;
+    }
+    for (const cid of chars) {
+      refreshCharacterPacks(cid);
+      refreshCharacter(cid);
+    }
+    res.json({ ok: true, done, removed });
+  });
+
+  /** 媒体批量操作：delete 删记录和磁盘文件；move 只改分组（限同一批条目） */
+  app.post('/api/media/bulk', async (req, res) => {
+    const db = getDb();
+    const raw = req.body && Array.isArray(req.body.ids) ? req.body.ids : [];
+    const ids = [...new Set(raw.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+    const action = String((req.body && req.body.action) || '');
+    if (!ids.length) return res.status(400).json({ error: '没有选择媒体' });
+    if (action !== 'delete' && action !== 'move') return res.status(400).json({ error: '未知操作' });
+
+    const getRow = db.prepare('SELECT * FROM media WHERE id = ?');
+    const delRow = db.prepare('DELETE FROM media WHERE id = ?');
+    const chars = new Set();
+    const packs = new Set();
+
+    if (action === 'delete') {
+      let done = 0;
+      for (const id of ids) {
+        const row = getRow.get(id);
+        if (!row) continue;
+        delRow.run(id);
+        await removeLibraryFile(row.rel_path);
+        chars.add(row.character_id);
+        if (row.pack_id) packs.add(row.pack_id);
+        done += 1;
+      }
+      for (const cid of chars) refreshCharacter(cid);
+      for (const pid of packs) refreshPack(pid);
+      return res.json({ ok: true, done, skipped: ids.length - done });
+    }
+
+    const packId = Number(req.body.packId) || null;
+    const pack = packId ? db.prepare('SELECT * FROM packs WHERE id = ?').get(packId) : null;
+    if (!pack) return res.status(400).json({ error: '目标图包不存在' });
+
+    let order = db.prepare('SELECT COALESCE(MAX(sort_order),-1) AS n FROM media WHERE pack_id = ?').get(pack.id).n;
+    const upd = db.prepare('UPDATE media SET pack_id = ?, sort_order = ? WHERE id = ?');
+    let done = 0;
+    let skipped = 0;
+    for (const id of ids) {
+      const row = getRow.get(id);
+      // 跨条目移动要搬文件，走 POST /api/packs/:id/media（单个接口）
+      if (!row || row.pack_id === pack.id || row.character_id !== pack.character_id) {
+        skipped += 1;
+        continue;
+      }
+      order += 1;
+      upd.run(pack.id, order, id);
+      if (row.pack_id) packs.add(row.pack_id);
+      done += 1;
+    }
+    chars.add(pack.character_id);
+    packs.add(pack.id);
+    for (const pid of packs) refreshPack(pid);
+    for (const cid of chars) refreshCharacter(cid);
+    res.json({ ok: true, done, skipped });
   });
 
   app.get('/api/packs/:id/media', (req, res) => {
