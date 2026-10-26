@@ -574,7 +574,7 @@ export function createApp() {
     const db = getDb();
     const shelfId = Number(req.params.id);
     const q = String(req.query.q || '').trim();
-    const sort = String(req.query.sort || 'recent');
+    const sort = String(req.query.sort || 'media');
     const where = ['c.shelf_id = @shelfId', 'c.is_container = 0'];
     const params = { shelfId };
     if (q) {
@@ -583,8 +583,9 @@ export function createApp() {
     }
     const order =
       sort === 'name' ? 'ORDER BY c.name COLLATE NOCASE'
-      : sort === 'media' ? 'ORDER BY media_count DESC'
-      : 'ORDER BY c.updated_at DESC, c.id DESC';
+      : sort === 'packs' ? 'ORDER BY pack_count DESC, media_count DESC, c.id DESC'
+      : sort === 'recent' ? 'ORDER BY c.updated_at DESC, c.id DESC'
+      : 'ORDER BY media_count DESC, pack_count DESC, c.id DESC';
     const rows = db
       .prepare(`${CHAR_SELECT} WHERE ${where.join(' AND ')} ${order}`)
       .all(params);

@@ -1303,6 +1303,20 @@ try {
     })();
     check('每个资源自带「官方」图包与目录', official.ok, official.name);
 
+    const resSort = await evaluate(`(() => {
+      const dd = document.querySelector('.toolbar .sort-dd');
+      const subs = [...document.querySelectorAll('.res-card .sub')].map((s) => s.textContent);
+      const counts = subs.map((s) => Number((s.match(/(\\d+) 个条目/) || [0, '0'])[1]));
+      return { has: !!dd, label: dd ? dd.querySelector('.dd-input').value : '', counts };
+    })()`);
+    check(
+      '资源库默认按关联数量排序',
+      resSort.has &&
+        resSort.label === '关联数量' &&
+        resSort.counts.every((v, i) => i === 0 || resSort.counts[i - 1] >= v),
+      `${resSort.label} · ${resSort.counts.slice(0, 8).join(' / ')}`
+    );
+
     // 关联靠标签：造一个带同名标签 + 同名出处的条目，跑完删掉
     const workShelf = shelves.find((s) => s.kind === 'work');
     const link = workShelf
@@ -1476,18 +1490,27 @@ try {
     await goto(`${BASE}/e/${emojiShelf.id}`, 2600);
     const emo = await evaluate(`(() => {
       const cards = [...document.querySelectorAll('.emoji-card')];
+      const sortDD = document.querySelector('.toolbar .sort-dd');
       return {
         cards: cards.length,
         mosaics: cards.map((c) => c.querySelectorAll('.mosaic img').length),
         tabs: [...document.querySelectorAll('[data-view] button')].map((b) => b.dataset.v),
         meta: document.querySelector('[data-shelf-meta]')?.textContent || '',
         entryRows: document.querySelectorAll('.hero, .char-grid').length,
+        sortLabel: sortDD ? sortDD.querySelector('.dd-input').value : '',
+        packCounts: cards.map((c) => Number(((c.querySelector('.m') || { textContent: '0' }).textContent.match(/^\d+/) || ['0'])[0])),
       };
     })()`);
     check(
       '表情库直接展示图包（没有条目层）',
       emo.cards > 0 && emo.meta.includes('个图包') && emo.entryRows === 0,
       `${emo.cards} 个图包 · ${emo.meta}`
+    );
+    check(
+      '表情库图包默认按素材数量排序',
+      emo.sortLabel === '素材数量' &&
+        emo.packCounts.every((v, i) => i === 0 || emo.packCounts[i - 1] >= v),
+      `${emo.sortLabel} · ${emo.packCounts.join(' / ')}`
     );
     check(
       '图包封面是前 9 张拼图',
@@ -1724,6 +1747,58 @@ try {
       searchFocus.steps[3].value === 'zz焦点' &&
       searchFocus.empty,
     JSON.stringify(searchFocus.steps)
+  );
+
+  // 卡片默认按素材数量排序 + 工具栏右侧的排序选框
+  const sortUI = await evaluate(`(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    // 先把上一段搜索留下的关键词清掉，否则列表是空的
+    const box = document.querySelector('.search input');
+    if (box && box.value) {
+      box.value = '';
+      box.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      await sleep(800);
+    }
+    const dd = document.querySelector('.toolbar .sort-dd');
+    if (!dd) return { ok: false };
+    const label = dd.querySelector('.dd-input').value;
+    const order = () => [...document.querySelectorAll('.char-card .name')].map((n) => n.textContent.trim()).slice(0, 3);
+    const choose = async (text) => {
+      dd.querySelector('.dd-input').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      await sleep(280);
+      const opt = [...dd.querySelectorAll('.dd-opt')].find((o) => o.textContent.trim() === text);
+      if (!opt) return false;
+      opt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      await sleep(800);
+      return true;
+    };
+    const byMedia = order();
+    const switched = await choose('名称');
+    const byName = order();
+    await choose('素材数量');
+    const back = order();
+    return { ok: true, label, byMedia, switched, byName, back, same: JSON.stringify(byMedia) === JSON.stringify(back) };
+  })()`);
+  const sortExpect = await (async () => {
+    const byMedia = await fetch(`${BASE}/api/shelves/${peopleShelf.id}/characters?sort=media`).then((r) => r.json());
+    const byName = await fetch(`${BASE}/api/shelves/${peopleShelf.id}/characters?sort=name`).then((r) => r.json());
+    const counts = (byMedia.items || []).map((x) => x.mediaCount || 0);
+    return {
+      desc: counts.every((v, i) => i === 0 || counts[i - 1] >= v),
+      top: (byMedia.items || []).slice(0, 3).map((x) => x.name),
+      topName: (byName.items || []).slice(0, 3).map((x) => x.name),
+    };
+  })();
+  check(
+    '卡片默认按素材数量排序 + count 右侧有排序选框',
+    sortUI.ok &&
+      sortUI.label === '素材数量' &&
+      sortExpect.desc &&
+      JSON.stringify(sortUI.byMedia) === JSON.stringify(sortExpect.top) &&
+      sortUI.switched &&
+      JSON.stringify(sortUI.byName) === JSON.stringify(sortExpect.topName) &&
+      sortUI.same,
+    `${sortUI.label} · ${(sortUI.byMedia || []).join(' / ')} → ${(sortUI.byName || []).join(' / ')}`
   );
 
   const shelfLock = workShelf

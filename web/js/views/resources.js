@@ -4,6 +4,7 @@ import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openContextMenu } from '../components/context-menu.js';
 import { openTagPicker } from '../components/tag-picker.js';
+import { createDropdown } from '../components/dropdown.js';
 
 /** 资源分类：游戏 / 动画 / 电影 / 剧集（可自由加） */
 export const RES_CATS = ['游戏', '动画', '电影', '剧集'];
@@ -50,6 +51,32 @@ export async function ResourcesView(root, shelfId) {
   let items = data.items;
   let groups = data.groups;
   let cat = '';
+  // 卡片排序：默认按关联数量（卡片副标题里那个「N 个条目」）从多到少
+  let sort = 'linked';
+
+  const CARD_SORTS = [
+    { value: 'linked', label: '关联数量' },
+    { value: 'name', label: '名称' },
+    { value: 'category', label: '分类' },
+  ];
+
+  /** 分类筛选 + 排序后的列表（不动 items 本身） */
+  function visibleItems() {
+    const list = cat ? items.filter((x) => (x.category || '') === cat) : items.slice();
+    if (sort === 'name') {
+      list.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
+    } else if (sort === 'category') {
+      list.sort(
+        (a, b) =>
+          String(a.category || '').localeCompare(String(b.category || ''), 'zh') ||
+          (b.linked || 0) - (a.linked || 0) ||
+          a.name.localeCompare(b.name, 'zh-Hans-CN')
+      );
+    } else {
+      list.sort((a, b) => (b.linked || 0) - (a.linked || 0) || a.name.localeCompare(b.name, 'zh-Hans-CN'));
+    }
+    return list;
+  }
 
   function counts() {
     const map = Object.fromEntries(groups.map((g) => [g.name, g.count]));
@@ -88,11 +115,24 @@ export async function ResourcesView(root, shelfId) {
            </div>
            <span class="spacer"></span>
            <span class="count" data-count></span>
+           <span data-sort></span>
          </div>
          <div class="char-grid" data-grid></div>
        </main>`;
 
     bindTopbar(root);
+
+    const sortDD = createDropdown({
+      options: CARD_SORTS,
+      value: sort,
+      allowEmpty: false,
+      className: 'sort-dd',
+      onChange: (v) => {
+        sort = v;
+        paintGrid();
+      },
+    });
+    root.querySelector('[data-sort]').replaceWith(sortDD.el);
     paintMeta();
     paintGrid();
 
@@ -255,7 +295,7 @@ export async function ResourcesView(root, shelfId) {
 
   function paintGrid() {
     const grid = root.querySelector('[data-grid]');
-    const list = cat ? items.filter((x) => (x.category || '') === cat) : items;
+    const list = visibleItems();
     root.querySelector('[data-count]').textContent = list.length === items.length ? '' : `${list.length} 个`;
     if (!list.length) {
       grid.innerHTML = `<div class="empty" style="grid-column:1/-1">

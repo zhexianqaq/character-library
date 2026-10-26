@@ -52,6 +52,9 @@ export async function EmojiView(root, shelfId) {
   let tagDD = null;
   let packDD = null;
   let sortDD = null;
+  // 图包卡片的排序（只在「图包」分区显示；未分类 / 全部素材用的是筛选条里那个排序）
+  let packSort = 'count';
+  let packSortDD = null;
 
   root.innerHTML =
     topbarHtml({
@@ -95,6 +98,7 @@ export async function EmojiView(root, shelfId) {
          </div>
          <span class="spacer"></span>
          <span class="count" data-count></span>
+         <span data-pack-sort></span>
        </div>
        <div data-body></div>
        <div class="sel-bar" data-selbar hidden></div>
@@ -104,6 +108,24 @@ export async function EmojiView(root, shelfId) {
 
   const bodyEl = root.querySelector('[data-body]');
   const selBar = () => root.querySelector('[data-selbar]');
+
+  // 图包卡片排序（默认素材数量从多到少）
+  packSortDD = createDropdown({
+    options: [
+      { value: 'count', label: '素材数量' },
+      { value: 'name', label: '名称' },
+      { value: 'recent', label: '最新创建' },
+    ],
+    value: packSort,
+    allowEmpty: false,
+    className: 'sort-dd',
+    onChange: (v) => {
+      packSort = v;
+      if (mode === 'packs') renderPacks();
+    },
+  });
+  root.querySelector('[data-pack-sort]').replaceWith(packSortDD.el);
+  packSortDD.el.hidden = mode !== 'packs';
 
   // ---------- 顶部信息 ----------
   function paintHead() {
@@ -161,6 +183,21 @@ export async function EmojiView(root, shelfId) {
     </div>`;
   }
 
+  /** 图包按当前排序排好（不修改 packs 本身） */
+  function sortedPacks() {
+    const list = packs.slice();
+    if (packSort === 'name') {
+      list.sort((a, b) => a.title.localeCompare(b.title, 'zh-Hans-CN'));
+    } else if (packSort === 'recent') {
+      list.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    } else {
+      list.sort(
+        (a, b) => (b.mediaCount || 0) - (a.mediaCount || 0) || a.title.localeCompare(b.title, 'zh-Hans-CN')
+      );
+    }
+    return list;
+  }
+
   function renderPacks() {
     mediaItems = [];
     syncCount();
@@ -170,7 +207,7 @@ export async function EmojiView(root, shelfId) {
       </div>`;
       return;
     }
-    bodyEl.innerHTML = `<div class="pack-grid emoji-grid" data-packs>${packs.map(packCardHtml).join('')}</div>`;
+    bodyEl.innerHTML = `<div class="pack-grid emoji-grid" data-packs>${sortedPacks().map(packCardHtml).join('')}</div>`;
     bodyEl.querySelectorAll('img').forEach(fadeIn);
 
     const holder = bodyEl.querySelector('[data-packs]');
@@ -372,6 +409,7 @@ export async function EmojiView(root, shelfId) {
     paintTabs();
     const bar = root.querySelector('[data-filter-bar]');
     if (bar) bar.hidden = mode === 'packs';
+    if (packSortDD) packSortDD.el.hidden = mode !== 'packs';
     if (packDD) packDD.el.hidden = mode !== 'all';
     if (mode === 'packs') {
       renderPacks();

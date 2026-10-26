@@ -3,12 +3,21 @@ import { esc, fmtNum, fmtBytes, fadeIn, toast } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openContextMenu } from '../components/context-menu.js';
+import { createDropdown } from '../components/dropdown.js';
 
 /** 没有条目层级的库，直接有自己的页面 */
 const FLAT_HOME = { emoji: '/e/', resource: '/rs/' };
 
+/** 卡片排序：默认按素材数量（卡片右上角那个数）从多到少 */
+const CARD_SORTS = [
+  { value: 'media', label: '素材数量' },
+  { value: 'packs', label: '图包数量' },
+  { value: 'recent', label: '最新添加' },
+  { value: 'name', label: '名称' },
+];
+
 export async function LibraryView(root, shelfId) {
-  const state = { q: '', shelfId: Number(shelfId) || null, sort: 'recent' };
+  const state = { q: '', shelfId: Number(shelfId) || null, sort: 'media' };
   // 列表数据放在视图层：搜索时只重画列表，不重建顶栏 —— 顶栏一重建，输入框就失焦了
   let chars = { items: [], total: 0 };
   let activeShelf = null;
@@ -52,6 +61,15 @@ export async function LibraryView(root, shelfId) {
       })
       .join('');
     grid.querySelectorAll('img').forEach(fadeIn);
+  }
+
+  /** 搜索 / 换排序都只重画列表区，不动顶栏和工具栏（否则输入框和下拉会重建） */
+  async function refreshList() {
+    if (!state.shelfId) return;
+    chars = await api.shelfCharacters(state.shelfId, { q: state.q.trim(), sort: state.sort });
+    if (!root.isConnected) return;
+    paintCount();
+    paintGrid();
   }
 
   async function render({ push = false } = {}) {
@@ -106,11 +124,29 @@ export async function LibraryView(root, shelfId) {
            <span class="count" data-count>${chars.total} 个角色 · ${fmtNum(active ? active.mediaCount : 0)} 个媒体 · ${fmtBytes(
              active ? active.bytes || 0 : 0
            )}</span>
+           <span data-sort></span>
          </div>
          <div class="char-grid" data-grid></div>
        </main>`;
 
     bindTopbar(root);
+
+    // 排序切换（紧贴计数右边）
+    const sortDD = createDropdown({
+      options: CARD_SORTS,
+      value: state.sort,
+      allowEmpty: false,
+      className: 'sort-dd',
+      onChange: async (v) => {
+        state.sort = v;
+        try {
+          await refreshList();
+        } catch {
+          toast('排序失败');
+        }
+      },
+    });
+    root.querySelector('[data-sort]').replaceWith(sortDD.el);
     paintGrid();
 
     const grid = root.querySelector('[data-grid]');
@@ -294,13 +330,8 @@ export async function LibraryView(root, shelfId) {
         state.q = input.value;
         clearTimeout(timer);
         timer = setTimeout(async () => {
-          if (!state.shelfId) return;
           try {
-            const next = await api.shelfCharacters(state.shelfId, { q: state.q.trim(), sort: state.sort });
-            if (!root.isConnected) return;
-            chars = next;
-            paintCount();
-            paintGrid();
+            await refreshList();
           } catch {
             /* 搜索失败就保持上一次结果 */
           }
