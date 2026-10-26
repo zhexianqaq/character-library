@@ -137,6 +137,35 @@ function migrate(d) {
  * 媒体标签本来就按「自有标签 + 条目名 + 库类型」算出来，这里只是把这层关系
  * 固化到 character_tags，让条目自己的标签行里也能看到它。
  */
+/**
+ * 清掉没人用的标签。
+ * 条目被删之后它的名字标签会留在标签池里，越积越多，
+ * 打标签时的「相似校验」会被这些幽灵标签误伤。
+ * 判断依据：character_tags 里没有引用、也不是「人物 / 角色」，
+ * 并且 packs / media 的 JSON 标签里都找不到。
+ */
+export function pruneOrphanTags(d = getDb()) {
+  const rows = d
+    .prepare(
+      `SELECT t.id, t.name FROM tags t
+        WHERE NOT EXISTS (SELECT 1 FROM character_tags ct WHERE ct.tag_id = t.id)
+          AND t.name NOT IN ('人物', '角色')`
+    )
+    .all();
+  if (!rows.length) return 0;
+  const inPacks = d.prepare('SELECT 1 FROM packs WHERE tags LIKE ? LIMIT 1');
+  const inMedia = d.prepare('SELECT 1 FROM media WHERE tags LIKE ? LIMIT 1');
+  const del = d.prepare('DELETE FROM tags WHERE id = ?');
+  let n = 0;
+  for (const r of rows) {
+    const pat = `%"${r.name}"%`;
+    if (inPacks.get(pat) || inMedia.get(pat)) continue;
+    del.run(r.id);
+    n += 1;
+  }
+  return n;
+}
+
 export function ensureSelfTags(d = getDb()) {
   // 容器条目不是用户建的条目，给它打名字标签会污染整个标签池
   const chars = d.prepare('SELECT id, name FROM characters WHERE is_container = 0').all();

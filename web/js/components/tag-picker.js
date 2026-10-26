@@ -1,5 +1,6 @@
 import { api } from '../api.js';
 import { esc, toast } from '../util.js';
+import { pushEsc } from '../esc.js';
 
 /** 归一化：全角转半角、小写、去掉空格和分隔符 */
 function norm(s) {
@@ -36,7 +37,7 @@ const SIMILAR = 0.5;
  * 输入时会做查重与相似校验，避免加出「水淼 / 水淼cos」这种重复项。
  * 返回 Promise<string[]|null>（null = 取消）
  */
-export async function openTagPicker({ title = '编辑标签', selected = [] } = {}) {
+export async function openTagPicker({ title = '编辑标签', selected = [], note = '' } = {}) {
   let pool = [];
   try {
     pool = (await api.tags()).items || [];
@@ -53,6 +54,7 @@ export async function openTagPicker({ title = '编辑标签', selected = [] } = 
     root.innerHTML = `
       <div class="modal tag-modal" role="dialog" aria-modal="true">
         <h3>${esc(title)}</h3>
+        ${note ? `<p class="tag-note">${esc(note)}</p>` : ''}
         <div class="tag-input-row">
           <input class="tag-input" type="text" placeholder="输入新标签，回车添加" autocomplete="off" maxlength="40" />
           <button class="tb-btn" data-add>添加</button>
@@ -154,14 +156,14 @@ export async function openTagPicker({ title = '编辑标签', selected = [] } = 
       input.focus();
     };
 
+    let offEsc = null;
     const close = (val) => {
       root.remove();
-      document.removeEventListener('keydown', onKey);
+      if (offEsc) {
+        offEsc();
+        offEsc = null;
+      }
       resolve(val);
-    };
-
-    const onKey = (e) => {
-      if (e.key === 'Escape') close(null);
     };
 
     input.addEventListener('keydown', (e) => {
@@ -183,7 +185,7 @@ export async function openTagPicker({ title = '编辑标签', selected = [] } = 
     root.addEventListener('mousedown', (e) => {
       if (e.target === root) close(null);
     });
-    document.addEventListener('keydown', onKey);
+    offEsc = pushEsc(() => close(null), () => root.isConnected);
 
     renderPool();
     // 已有标签里跟当前输入无关，先给个总数提示

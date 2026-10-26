@@ -1,4 +1,5 @@
 import { esc } from '../util.js';
+import { pushEsc } from '../esc.js';
 
 let root = null;
 let cleanup = null;
@@ -77,16 +78,14 @@ function openMenuAt(clientX, clientY, items) {
   const onDown = (e) => {
     if (!root || !root.contains(e.target)) closeContextMenu();
   };
-  const onKey = (e) => {
-    if (e.key === 'Escape') closeContextMenu();
-  };
   document.addEventListener('mousedown', onDown, true);
-  document.addEventListener('keydown', onKey, true);
+  // Esc 交给 esc 栈：菜单在最上层时只关菜单，不会连带关掉下面的弹窗
+  const offEsc = pushEsc(() => closeContextMenu(), () => !!root);
   window.addEventListener('scroll', closeContextMenu, true);
   window.addEventListener('resize', closeContextMenu);
   cleanup = () => {
     document.removeEventListener('mousedown', onDown, true);
-    document.removeEventListener('keydown', onKey, true);
+    offEsc();
     window.removeEventListener('scroll', closeContextMenu, true);
     window.removeEventListener('resize', closeContextMenu);
   };

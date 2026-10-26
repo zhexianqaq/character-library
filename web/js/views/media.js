@@ -3,6 +3,7 @@ import { esc, fmtBytes, fmtDur, toast, fadeIn } from '../util.js';
 import { openLightbox } from '../components/lightbox.js';
 import { openTagPicker } from '../components/tag-picker.js';
 import { openModal, confirmDialog } from '../components/modal.js';
+import { escDepth } from '../esc.js';
 
 /** 2026-10-22 */
 function fmtDate(iso) {
@@ -277,6 +278,8 @@ export async function MediaView(root, id) {
       if (ev.key === 'Escape') {
         ta.value = item.intro || '';
         ta.blur();
+        // 有些环境 blur() 不派发事件，这里直接重绘兜底（不写库）
+        renderInfo();
       }
       if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) ta.blur();
     });
@@ -351,8 +354,8 @@ export async function MediaView(root, id) {
 
   const onKey = (e) => {
     if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
-    // 灯箱开着的时候键盘归灯箱管，否则 ← → / Esc 会被两边各处理一次
-    if (document.querySelector('.lightbox')) return;
+    // 上面还叠着弹窗 / 灯箱 / 下拉时，键盘归它们管（Esc 已被 esc 栈吃掉）
+    if (escDepth() > 0) return;
     if (e.key === 'ArrowLeft') {
       e.preventDefault();
       step(-1);

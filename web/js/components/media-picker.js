@@ -1,5 +1,6 @@
 import { api } from '../api.js';
 import { esc, fmtBytes, toast, fadeIn, debounce } from '../util.js';
+import { pushEsc } from '../esc.js';
 
 // 范围都是相对的：人物库叫「本角色」，表情库这种扁平库叫「本库」
 const scopesFor = (selfLabel) => [
@@ -89,8 +90,13 @@ export function openMediaPicker({
     const countEl = root.querySelector('[data-count]');
     const okBtn = root.querySelector('[data-ok]');
 
+    let offEsc = null;
     function close(payload) {
       document.removeEventListener('keydown', onKey);
+      if (offEsc) {
+        offEsc();
+        offEsc = null;
+      }
       root.remove();
       resolve(payload);
     }
@@ -246,13 +252,11 @@ export function openMediaPicker({
     });
 
     const onKey = (e) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        close(null);
-      }
+      // Esc 交给 esc 栈；这里只留 ⌘/Ctrl + Enter 直接加入
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && selected.size) okBtn.click();
     };
     document.addEventListener('keydown', onKey);
+    offEsc = pushEsc(() => close(null), () => root.isConnected);
 
     syncFoot();
     load(true);

@@ -1,4 +1,5 @@
 import { esc } from '../util.js';
+import { pushEsc } from '../esc.js';
 
 /**
  * 自定义下拉。
@@ -23,6 +24,7 @@ export function createDropdown({
   let current = value === '' && !allowEmpty && items.length ? items[0].value : value;
   let view = items.slice();
   let active = -1;
+  let offEsc = null;
 
   const el = document.createElement('div');
   el.className = `dd${className ? ` ${className}` : ''}`;
@@ -75,6 +77,7 @@ export function createDropdown({
     el.classList.toggle('drop-up', window.innerHeight - box.bottom < 300 && box.top > 300);
     document.addEventListener('mousedown', onDoc, true);
     document.addEventListener('keydown', onKey, true);
+    offEsc = pushEsc(() => close(), () => el.isConnected && !panel.hidden);
   }
 
   function close() {
@@ -83,6 +86,10 @@ export function createDropdown({
     el.classList.remove('is-open', 'drop-up');
     document.removeEventListener('mousedown', onDoc, true);
     document.removeEventListener('keydown', onKey, true);
+    if (offEsc) {
+      offEsc();
+      offEsc = null;
+    }
   }
 
   function pick(v) {
@@ -98,11 +105,7 @@ export function createDropdown({
   }
 
   function onKey(e) {
-    if (e.key === 'Escape') {
-      e.stopPropagation();
-      close();
-      return;
-    }
+    // Esc 交给 esc 栈（面板开着时它就在最上层）
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       if (panel.hidden) {

@@ -831,6 +831,82 @@ try {
   const newName = await evaluate(`document.querySelector('.hero-name')?.textContent?.trim() || ''`);
   check('新角色名正确', newName === 'E2E 测试角色', newName);
 
+  // 7.1 Esc：只关最上面一层
+  const escModal = await evaluate(`(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const esc = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    document.querySelector('[data-edit]').click();
+    await sleep(520);
+    const opened = !!document.querySelector('.modal');
+    esc();
+    await sleep(420);
+    return { opened, closed: !document.querySelector('.modal'), path: location.pathname };
+  })()`);
+  check('Esc 关闭弹窗', escModal.opened && escModal.closed, JSON.stringify(escModal));
+
+  const escLayer = await evaluate(`(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const esc = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    document.querySelector('[data-add-platform]').click();
+    await sleep(620);
+    const dd = document.querySelector('.modal .dd');
+    dd.querySelector('.dd-input').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    await sleep(380);
+    esc();
+    await sleep(380);
+    const afterFirst = { panel: !dd.querySelector('.dd-panel').hidden, modal: !!document.querySelector('.modal') };
+    esc();
+    await sleep(420);
+    return { afterFirst, modalAfter: !!document.querySelector('.modal'), path: location.pathname };
+  })()`);
+  check(
+    'Esc 只关最上面一层（先下拉、后弹窗）',
+    escLayer.afterFirst.panel === false && escLayer.afterFirst.modal === true && escLayer.modalAfter === false,
+    JSON.stringify(escLayer)
+  );
+
+  const escSelect = await evaluate(`(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    document.querySelector('[data-select-toggle]').click();
+    await sleep(900);
+    const on = !!document.querySelector('.sel-bar:not([hidden])');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await sleep(700);
+    return {
+      on,
+      off: !document.querySelector('.sel-bar:not([hidden])'),
+      btn: document.querySelector('[data-select-toggle]').textContent.trim(),
+    };
+  })()`);
+  check(
+    'Esc 退出选取模式',
+    escSelect.on && escSelect.off && escSelect.btn === '选取',
+    JSON.stringify(escSelect)
+  );
+
+  const escIntro = await evaluate(`(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const el = document.querySelector('[data-intro]');
+    const before = el.textContent;
+    el.click();
+    await sleep(260);
+    const ta = el.querySelector('textarea');
+    if (!ta) return { ok: false };
+    ta.value = 'E2E 不该保存的文字';
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await sleep(650);
+    return {
+      ok: true,
+      same: document.querySelector('[data-intro]').textContent === before,
+      hasTa: !!document.querySelector('[data-intro] textarea'),
+    };
+  })()`);
+  check(
+    'Esc 取消简介编辑（还原原值）',
+    escIntro.ok && escIntro.same && escIntro.hasTa === false,
+    JSON.stringify(escIntro)
+  );
+
   // 7. 上传（内存生成图片，文件名带日期 -> 应自动归月包）
   await evaluate(`
     (async () => {
@@ -869,6 +945,32 @@ try {
 
   const statWait = await waitFor(`document.querySelector('.stat b')?.textContent || ''`, (v) => v === '1');
   check('角色统计已刷新', statWait.ok, `图片数 = ${statWait.value}（${statWait.ms}ms）`);
+
+  // 7.2 标签继承：条目上的通用标签不下发，只下发条目名 + 库标签
+  const tagRule = await evaluate(`(async () => {
+    const id = location.pathname.split('/').pop();
+    const c = await (await fetch('/api/characters/' + id)).json();
+    await fetch('/api/characters/' + id, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags: [...c.tags, 'ZzGenericTag'] }),
+    });
+    const m = await (await fetch('/api/characters/' + id + '/media')).json();
+    const first = m.items[0] || { tags: [], ownTags: [] };
+    const after = await (await fetch('/api/characters/' + id)).json();
+    return { charTags: after.tags, mediaTags: first.tags || [] };
+  })()`);
+  check(
+    '条目上的通用标签不再下发到媒体',
+    (tagRule.charTags || []).includes('ZzGenericTag') && !(tagRule.mediaTags || []).includes('ZzGenericTag'),
+    JSON.stringify(tagRule.mediaTags)
+  );
+  check(
+    '媒体仍继承条目名 + 库标签',
+    (tagRule.mediaTags || []).includes('E2E 测试角色') &&
+      ((tagRule.mediaTags || []).includes('人物') || (tagRule.mediaTags || []).includes('角色')),
+    JSON.stringify(tagRule.mediaTags)
+  );
 
   // 7.5 新建图包：日期非必填，只填名称也能建
   await evaluate(`document.querySelector('[data-new-pack]').click()`);

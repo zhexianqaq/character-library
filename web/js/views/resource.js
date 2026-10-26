@@ -100,9 +100,15 @@ export async function ResourceView(root, id) {
     el.appendChild(ta);
     ta.focus();
     ta.setSelectionRange(ta.value.length, ta.value.length);
+    // Esc = 放弃这次修改（点空白处才是保存）
+    let cancelled = false;
     ta.addEventListener(
       'blur',
       async () => {
+        if (cancelled) {
+          paintIntro();
+          return;
+        }
         const val = ta.value.trim();
         r.intro = val;
         paintIntro();
@@ -115,7 +121,13 @@ export async function ResourceView(root, id) {
       { once: true }
     );
     ta.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Escape') ta.blur();
+      if (ev.key !== 'Escape') return;
+      ev.preventDefault();
+      cancelled = true;
+      ta.value = r.intro || '';
+      ta.blur();
+      // 有些环境 blur() 不派发事件，这里直接重绘兜底
+      paintIntro();
     });
   });
 

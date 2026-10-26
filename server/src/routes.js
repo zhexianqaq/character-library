@@ -14,6 +14,7 @@ import {
   refreshCharacterPacks,
   ensureSelfTags,
   ensureShelfContainer,
+  pruneOrphanTags,
 } from './db.js';
 import { getDerivative, warmAll, warmState } from './thumbs.js';
 import { WEB_DIR, INBOX_DIR, DATA_DIR, slugify } from './config.js';
@@ -98,17 +99,20 @@ function isFlatChar(db, charId) {
   return !!(c && (c.is_container || c.kind === 'emoji'));
 }
 
-/** 媒体继承的标签：角色自己的标签 + 库类型（人物/角色）+ 角色名本身 */
+/**
+ * 媒体继承的标签 = 条目「自身」的身份（条目名）+ 库类型（人物 / 角色）。
+ *
+ * 条目上手动加的通用标签（原神、米哈游、写真…）**不再下发**：
+ * 一个人物可能只有一两个图包跟某个作品有关，全量下发会把上千张图一起染色，
+ * 既不准也没法撤。要标就给图包标 / 给单张图标。
+ */
 function mediaTagSet(db, charId) {
   const c = db
     .prepare(`SELECT c.name, c.is_container, sh.kind FROM characters c LEFT JOIN shelves sh ON sh.id = c.shelf_id WHERE c.id = ?`)
     .get(charId);
   if (!c) return [];
   if (c.is_container || c.kind === 'emoji') return [];
-  const set = new Set(tagsOf(db, charId));
-  set.add(c.name);
-  set.add(c.kind === 'work' ? '角色' : '人物');
-  return [...set];
+  return mergeTags([c.name, c.kind === 'work' ? '角色' : '人物']);
 }
 
 /** 表情库里图包标签会下发给包内每张图，标一次全包生效 */
@@ -900,6 +904,7 @@ export function createApp() {
     db.prepare('DELETE FROM characters WHERE id = ?').run(row.id);
     for (const p of paths) await removeLibraryFile(p.rel_path);
     await removeDir(row.dir_slug);
+    pruneOrphanTags(db); // 名字标签别留在池里变成幽灵
     res.json({ ok: true });
   });
 

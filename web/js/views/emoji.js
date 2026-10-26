@@ -755,6 +755,16 @@ export async function EmojiView(root, shelfId) {
   bindContextMenus();
   paintHead();
 
+  /** Esc 退出选取。弹窗 / 右键菜单 / 下拉开着时，esc 栈会先把事件吃掉，轮不到这里 */
+  const onPageKey = (e) => {
+    if (e.key !== 'Escape') return;
+    if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+    if (!selecting) return;
+    e.preventDefault();
+    exitSelect();
+  };
+  document.addEventListener('keydown', onPageKey);
+
   const wanted = new URLSearchParams(location.search).get('tab');
   mode = wanted === 'loose' || wanted === 'all' ? wanted : 'packs';
   const filterBar = root.querySelector('[data-filter-bar]');
@@ -771,4 +781,6 @@ export async function EmojiView(root, shelfId) {
     refreshFilterOptions();
     renderMedia();
   }
+
+  return () => document.removeEventListener('keydown', onPageKey);
 }

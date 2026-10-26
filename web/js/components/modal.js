@@ -1,5 +1,6 @@
 import { esc } from '../util.js';
 import { createDropdown } from './dropdown.js';
+import { pushEsc } from '../esc.js';
 
 /**
  * 通用表单弹窗。
@@ -133,9 +134,14 @@ export function openModal({
       if (first.select && first.tagName === 'INPUT') first.select();
     }
 
+    let offEsc = null;
     const close = (val) => {
       root.remove();
       document.removeEventListener('keydown', onKey);
+      if (offEsc) {
+        offEsc();
+        offEsc = null;
+      }
       resolve(val);
     };
 
@@ -162,7 +168,7 @@ export function openModal({
     };
 
     const onKey = (e) => {
-      if (e.key === 'Escape') close(null);
+      // Esc 交给 esc 栈统一派发，这里只处理 Enter
       // 单行输入框里按 Enter 直接提交，文本框里保留换行
       if (e.key === 'Enter' && !e.shiftKey && e.target && e.target.tagName === 'INPUT') {
         e.preventDefault();
@@ -178,6 +184,7 @@ export function openModal({
       if (e.target === root) close(null);
     });
     document.addEventListener('keydown', onKey);
+    offEsc = pushEsc(() => close(null), () => root.isConnected);
   });
 }
 

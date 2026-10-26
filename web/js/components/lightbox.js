@@ -1,5 +1,6 @@
 import { api } from '../api.js';
 import { esc, fmtDur } from '../util.js';
+import { pushEsc } from '../esc.js';
 
 let active = null;
 
@@ -8,6 +9,7 @@ export function closeLightbox() {
   active.root.remove();
   document.body.style.overflow = '';
   document.removeEventListener('keydown', active.onKey);
+  if (active.offEsc) active.offEsc();
   active = null;
 }
 
@@ -98,10 +100,8 @@ export function openLightbox(items, startIndex = 0, opts = {}) {
   };
 
   const onKey = (e) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      closeLightbox();
-    } else if (e.key === 'ArrowLeft') {
+    // Esc 交给 esc 栈；这里只留左右翻页
+    if (e.key === 'ArrowLeft') {
       e.preventDefault();
       go(-1);
     } else if (e.key === 'ArrowRight') {
@@ -121,7 +121,7 @@ export function openLightbox(items, startIndex = 0, opts = {}) {
   document.body.style.overflow = 'hidden';
   document.body.appendChild(root);
 
-  active = { root, onKey };
+  active = { root, onKey, offEsc: pushEsc(() => closeLightbox(), () => !!active) };
   render();
   if (opts.onChange) opts.onChange(idx);
 }

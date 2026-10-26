@@ -475,7 +475,11 @@ export async function CharacterView(root, id) {
       });
     });
     el.querySelector('[data-add-tag]').addEventListener('click', async () => {
-      const next = await openTagPicker({ title: '编辑标签', selected: c.tags });
+      const next = await openTagPicker({
+        title: '编辑标签',
+        selected: c.tags,
+        note: `标签只用来检索和关联，不会再批量加到${noun()}名下的所有图片上；要标某一批图，给图包打标签。`,
+      });
       if (!next) return;
       if (next.join('\n') === c.tags.join('\n')) {
         toast('标签没有变化');
@@ -517,9 +521,15 @@ export async function CharacterView(root, id) {
       el.appendChild(ta);
       ta.focus();
       ta.setSelectionRange(ta.value.length, ta.value.length);
+      // Esc = 放弃这次修改（点空白处才是保存）
+      let cancelled = false;
       ta.addEventListener(
         'blur',
         async () => {
+          if (cancelled) {
+            paintIntro();
+            return;
+          }
           const val = ta.value.trim();
           c.intro = val;
           paintIntro();
@@ -532,7 +542,13 @@ export async function CharacterView(root, id) {
         { once: true }
       );
       ta.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Escape') ta.blur();
+        if (ev.key !== 'Escape') return;
+        ev.preventDefault();
+        cancelled = true;
+        ta.value = c.intro || '';
+        ta.blur();
+        // 有些环境（无头、失焦窗口）blur() 不派发事件，这里直接重绘兜底
+        paintIntro();
       });
     });
   }
@@ -1288,6 +1304,16 @@ export async function CharacterView(root, id) {
     });
   }
 
+  /** Esc 退出选取。弹窗 / 右键菜单 / 下拉开着时，esc 栈会先把事件吃掉，轮不到这里 */
+  const onPageKey = (e) => {
+    if (e.key !== 'Escape') return;
+    if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+    if (!selecting) return;
+    e.preventDefault();
+    exitSelect();
+  };
+  document.addEventListener('keydown', onPageKey);
+
   await resourceIndex(); // 先拿索引：标签要据此决定「能不能点进去」
   root.innerHTML = shellHtml();
   bindTopbar(root);
@@ -1313,4 +1339,6 @@ export async function CharacterView(root, id) {
     history.replaceState({}, '', `/c/${id}`);
     pickFiles();
   }
+
+  return () => document.removeEventListener('keydown', onPageKey);
 }

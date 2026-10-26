@@ -412,7 +412,19 @@ export async function PackView(root, id) {
     toast(next.length ? `已保存 ${next.length} 个标签` : '已清空标签');
   }
 
+  /** Esc 退出选取。弹窗 / 右键菜单 / 下拉开着时，esc 栈会先把事件吃掉，轮不到这里 */
+  const onPageKey = (e) => {
+    if (e.key !== 'Escape') return;
+    if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+    if (!selecting) return;
+    e.preventDefault();
+    exitSelect();
+  };
+  document.addEventListener('keydown', onPageKey);
+
   paintMedia();
   paintPackTags();
   document.title = `${pack.title} · 资料库`;
+
+  return () => document.removeEventListener('keydown', onPageKey);
 }
