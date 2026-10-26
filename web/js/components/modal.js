@@ -1,4 +1,5 @@
 import { esc } from '../util.js';
+import { createDropdown } from './dropdown.js';
 
 /**
  * 通用表单弹窗。
@@ -23,6 +24,9 @@ export function openModal({
     const root = document.createElement('div');
     root.className = 'modal-mask';
 
+    // datalist 字段改成自定义下拉：原生 datalist 会多画一个三角，面板也不跟输入框对齐
+    const combos = [];
+
     const fieldHtml = (f) => {
       let control;
       if (f.type === 'textarea') {
@@ -30,15 +34,13 @@ export function openModal({
           f.placeholder || ''
         )}">${esc(f.value || '')}</textarea>`;
       } else if (f.type === 'datalist') {
-        const listId = `dl-${f.name}-${Math.random().toString(36).slice(2, 7)}`;
-        control = `<input name="${esc(f.name)}" type="text" list="${listId}" value="${esc(
-          f.value || ''
-        )}" placeholder="${esc(f.placeholder || '')}" autocomplete="off" ${
-          f.required ? 'required' : ''
-        } /><datalist id="${listId}">${(f.options || [])
-          .map((o) => (typeof o === 'string' ? o : o.value))
-          .map((v) => `<option value="${esc(v)}"></option>`)
-          .join('')}</datalist>`;
+        const idx = combos.push({
+          name: f.name,
+          options: f.options || [],
+          value: f.value || '',
+          placeholder: f.placeholder || '',
+        }) - 1;
+        control = `<div class="dd-slot" data-dd-slot="${idx}"></div>`;
       } else if (f.type === 'select') {
         const opts = (f.options || []).map((o) =>
           typeof o === 'string' ? { value: o, label: o } : o
@@ -97,6 +99,21 @@ export function openModal({
       </div>`;
 
     document.body.appendChild(root);
+
+    for (const [idx, cfg] of combos.entries()) {
+      const slot = root.querySelector(`[data-dd-slot="${idx}"]`);
+      if (!slot) continue;
+      const dd = createDropdown({
+        name: cfg.name,
+        options: cfg.options,
+        value: cfg.value,
+        placeholder: cfg.placeholder,
+        editable: true,
+        allowEmpty: false,
+        className: 'dd-field',
+      });
+      slot.replaceWith(dd.el);
+    }
 
     const body = root.querySelector('.modal-body');
     if (typeof onMount === 'function') {

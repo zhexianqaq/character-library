@@ -928,7 +928,8 @@ img { display: block; }
 /* 相邻两个 half 字段并成一排 */
 .field-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* 左边这类字段（平台 / 出处类型 / 名称）本身短，给它窄一点 */
+  grid-template-columns: 0.85fr 1.15fr;
   gap: 12px;
 }
 .field-row .field { margin-bottom: 13px; min-width: 0; }
@@ -1956,3 +1957,114 @@ img { display: block; }
   .sel-bar button { height: 30px; padding: 0 11px; font-size: 12px; }
   .sel-n { font-size: 11.5px; margin-right: 2px; }
 }
+
+/* ============ 自定义下拉（替代原生 datalist） ============ */
+.dd { position: relative; width: 100%; min-width: 0; }
+.dd-slot { display: none; }
+.field .dd .dd-input { padding-right: 34px; }
+.dd-arrow {
+  position: absolute;
+  right: 15px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-right: 1.6px solid var(--text-3);
+  border-bottom: 1.6px solid var(--text-3);
+  transform: translateY(-72%) rotate(45deg);
+  transition: transform 0.2s var(--ease), border-color 0.2s var(--ease);
+  cursor: pointer;
+}
+.dd:hover .dd-arrow { border-color: var(--text-2); }
+.dd.is-open .dd-arrow { transform: translateY(-28%) rotate(-135deg); border-color: var(--text); }
+
+.dd-panel {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 100%;
+  max-height: 268px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 5px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.97);
+  backdrop-filter: blur(20px) saturate(1.7);
+  -webkit-backdrop-filter: blur(20px) saturate(1.7);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.16), 0 2px 8px rgba(0, 0, 0, 0.07),
+    0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  animation: dd-in 0.14s var(--ease);
+  scrollbar-width: none;
+}
+.dd-panel::-webkit-scrollbar { display: none; }
+.dd.drop-up .dd-panel { top: auto; bottom: calc(100% + 6px); }
+@keyframes dd-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+.dd-opt {
+  display: block;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.1s var(--ease), color 0.1s var(--ease);
+}
+.dd-opt:hover,
+.dd-opt.is-active { background: var(--accent); color: var(--on-accent); }
+.dd-opt.is-on { font-weight: 600; }
+.dd-opt.is-on:hover,
+.dd-opt.is-on.is-active { color: var(--on-accent); }
+.dd-empty {
+  padding: 12px 10px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* ============ 全部媒体的筛选条 ============ */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.filter-bar[hidden] { display: none; }
+.filter-bar .segmented { padding: 2px; }
+.filter-bar .segmented button { height: 26px; padding: 0 11px; font-size: 11.5px; }
+.filter-bar .dd { width: auto; flex: 0 0 auto; }
+.filter-bar .dd-input {
+  width: auto;
+  min-width: 84px;
+  max-width: 152px;
+  height: 30px;
+  padding: 0 26px 0 12px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--fill);
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+.filter-bar .dd-input:hover { background: var(--fill-2); }
+.filter-bar .dd-input::placeholder { color: var(--text-3); }
+.filter-bar .dd.is-open .dd-input { background: var(--fill-2); color: var(--text); }
+.filter-bar .dd-arrow { right: 12px; width: 7px; height: 7px; }
+.filter-bar .dd-panel { min-width: 140px; width: max-content; max-width: 260px; }
+.filter-bar .dd-opt { height: 30px; }
+
+.filter-search {
+  flex: 0 1 168px;
+  height: 30px;
+  min-width: 120px;
+  padding: 0 12px;
+}
+.filter-search input { font-size: 12px; }

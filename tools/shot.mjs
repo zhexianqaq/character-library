@@ -141,6 +141,16 @@ if (evalIdx > 0 && process.argv[evalIdx + 1]) {
   }
 }
 
+// --mouse x,y：把鼠标停到某个坐标上，用来截 :hover 状态
+const mouseIdx = process.argv.indexOf('--mouse');
+if (mouseIdx > 0 && process.argv[mouseIdx + 1]) {
+  const [mx, my] = String(process.argv[mouseIdx + 1]).split(',').map(Number);
+  if (Number.isFinite(mx) && Number.isFinite(my)) {
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: mx, y: my });
+    await sleep(350);
+  }
+}
+
 const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
 await fs.mkdir(path.dirname(path.resolve(out)), { recursive: true });
 await fs.writeFile(out, Buffer.from(shot.data, 'base64'));

@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fmtBytes, fadeIn, toast } from '../util.js';
+import { esc, fmtNum, fmtBytes, fadeIn, toast, debounce } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { openModal, confirmDialog } from '../components/modal.js';
@@ -7,6 +7,7 @@ import { openTagPicker } from '../components/tag-picker.js';
 import { openContextMenu, openMenuAtPoint } from '../components/context-menu.js';
 import { mediaMenu } from '../components/media-actions.js';
 import { addMediaMenuItems } from '../components/media-picker.js';
+import { createDropdown } from '../components/dropdown.js';
 import { bindDropUpload } from '../components/dropzone.js';
 import { queue } from '../upload-queue.js';
 
@@ -87,6 +88,23 @@ export async function CharacterView(root, id) {
            <div class="segmented" data-view>
              <button class="on" data-v="packs">图包</button>
              <button data-v="media">全部媒体</button>
+           </div>
+           <div class="filter-bar" data-filter-bar hidden>
+             <div class="segmented" data-f-kind>
+               <button class="on" data-k="">全部</button>
+               <button data-k="image">图片</button>
+               <button data-k="video">视频</button>
+             </div>
+             <span data-f-tag></span>
+             <span data-f-pack></span>
+             <span data-f-cat></span>
+             <label class="search filter-search">
+               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                 <circle cx="7" cy="7" r="4.6"/><path d="M10.6 10.6L14 14"/>
+               </svg>
+               <input type="search" placeholder="搜索名称或标签" autocomplete="off" spellcheck="false" />
+             </label>
+             <span data-f-sort></span>
            </div>
            <span class="spacer"></span>
            <button class="tb-btn" data-select-toggle>选取</button>
@@ -534,7 +552,7 @@ export async function CharacterView(root, id) {
         return loadPacks();
       })
       .then(() => {
-        if (mode === 'media') return loadMedia();
+        if (mode === 'media') return loadMedia(true);
         return null;
       })
       .catch((err) => toast(err.message || '刷新失败'));
@@ -715,7 +733,7 @@ export async function CharacterView(root, id) {
       resetSelection();
       c = await api.character(id);
       paint();
-      if (mode === 'media') await loadMedia();
+      if (mode === 'media') await loadMedia(true);
       else await loadPacks();
     } catch (err) {
       toast(err.message || '删除失败');
@@ -756,7 +774,7 @@ export async function CharacterView(root, id) {
       const res = await api.bulkMedia([...picked], 'move', Number(v.packId));
       toast(res.skipped ? `已移动 ${res.done} 个，跳过 ${res.skipped} 个` : `已移动 ${res.done} 个`);
       resetSelection();
-      if (mode === 'media') await loadMedia();
+      if (mode === 'media') await loadMedia(true);
       else await loadPacks();
     } catch (err) {
       toast(err.message || '移动失败');
@@ -899,36 +917,189 @@ export async function CharacterView(root, id) {
     });
   }
 
-  async function loadMedia() {
-    const body = root.querySelector('[data-body]');
-    body.innerHTML = '<div class="masonry" data-masonry></div>';
-    const holder = body.querySelector('[data-masonry]');
-    const data = await api.characterMedia(c.id);
-    mediaItems = data.items;
+  // ---------- 全部媒体的筛选 ----------
+  const filters = { kind: '', tag: '', pack: '', cat: '', q: '', sort: 'new' };
+  let mediaAll = [];
+  let tagDD = null;
+  let packDD = null;
+  let sortDD = null;
+
+  function buildFilterBar() {
+    const bar = root.querySelector('[data-filter-bar]');
+    if (!bar) return;
+
+    tagDD = createDropdown({
+      allowEmpty: true,
+      emptyLabel: '全部标签',
+      onChange: (v) => {
+        filters.tag = v;
+        renderMedia();
+      },
+    });
+    bar.querySelector('[data-f-tag]').replaceWith(tagDD.el);
+
+    packDD = createDropdown({
+      allowEmpty: true,
+      emptyLabel: '全部图包',
+      onChange: (v) => {
+        filters.pack = v;
+        renderMedia();
+      },
+    });
+    bar.querySelector('[data-f-pack]').replaceWith(packDD.el);
+
+    if (isWorkShelf()) {
+      const catDD = createDropdown({
+        options: CATEGORIES.map((k) => ({ value: k, label: k })),
+        allowEmpty: true,
+        emptyLabel: '全部小库',
+        onChange: (v) => {
+          filters.cat = v;
+          renderMedia();
+        },
+      });
+      bar.querySelector('[data-f-cat]').replaceWith(catDD.el);
+    } else {
+      bar.querySelector('[data-f-cat]')?.remove();
+    }
+
+    sortDD = createDropdown({
+      options: [
+        { value: 'new', label: '最新添加' },
+        { value: 'old', label: '最早添加' },
+        { value: 'name', label: '按名称' },
+        { value: 'size', label: '文件最大' },
+        { value: 'sizeAsc', label: '文件最小' },
+      ],
+      value: 'new',
+      allowEmpty: false,
+      onChange: (v) => {
+        filters.sort = v;
+        renderMedia();
+      },
+    });
+    bar.querySelector('[data-f-sort]').replaceWith(sortDD.el);
+
+    bar.querySelector('[data-f-kind]').addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-k]');
+      if (!btn) return;
+      filters.kind = btn.dataset.k;
+      bar.querySelectorAll('[data-f-kind] button').forEach((b) => b.classList.toggle('on', b === btn));
+      renderMedia();
+    });
+
+    const search = bar.querySelector('.filter-search input');
+    search.addEventListener(
+      'input',
+      debounce(() => {
+        filters.q = search.value.trim();
+        renderMedia();
+      }, 220)
+    );
+  }
+
+  /** 标签 / 图包下拉的候选值跟着当前条目的媒体走 */
+  function refreshFilterOptions() {
+    if (!tagDD) return;
+    const counts = new Map();
+    for (const m of mediaAll) {
+      for (const t of m.tags || []) counts.set(t, (counts.get(t) || 0) + 1);
+    }
+    tagDD.setOptions(
+      [...counts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([t, n]) => ({ value: t, label: `${t}（${n}）` }))
+    );
+    packDD.setOptions([
+      { value: '__none__', label: '未归包' },
+      ...packsCache.map((p) => ({
+        value: String(p.id),
+        label: `${p.category ? `${p.category} / ` : ''}${p.title}（${p.mediaCount}）`,
+      })),
+    ]);
+  }
+
+  function packCategoryOf(packId) {
+    const p = packsCache.find((x) => x.id === Number(packId));
+    return p ? p.category || '' : '';
+  }
+
+  function applyFilters(list) {
+    let out = list;
+    if (filters.kind) out = out.filter((m) => m.kind === filters.kind);
+    if (filters.tag) out = out.filter((m) => (m.tags || []).includes(filters.tag));
+    if (filters.pack) {
+      out =
+        filters.pack === '__none__'
+          ? out.filter((m) => !m.packId)
+          : out.filter((m) => String(m.packId) === filters.pack);
+    }
+    if (filters.cat) out = out.filter((m) => packCategoryOf(m.packId) === filters.cat);
+    if (filters.q) {
+      const q = filters.q.toLowerCase();
+      out = out.filter(
+        (m) =>
+          (m.fileName || '').toLowerCase().includes(q) ||
+          (m.tags || []).some((t) => t.toLowerCase().includes(q))
+      );
+    }
+    const sorted = out.slice();
+    if (filters.sort === 'old') sorted.sort((a, b) => a.id - b.id);
+    else if (filters.sort === 'name') sorted.sort((a, b) => (a.fileName || '').localeCompare(b.fileName || '', 'zh-Hans-CN'));
+    else if (filters.sort === 'size') sorted.sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+    else if (filters.sort === 'sizeAsc') sorted.sort((a, b) => (a.bytes || 0) - (b.bytes || 0));
+    else sorted.sort((a, b) => b.id - a.id);
+    return sorted;
+  }
+
+  function renderMedia() {
+    const holder = root.querySelector('[data-body] [data-masonry]');
+    if (!holder) return;
+    mediaItems = applyFilters(mediaAll);
+    holder.innerHTML = '';
     if (!mediaItems.length) {
-      holder.innerHTML = '<div class="empty" style="flex:1"><b>还没有媒体</b>点右上角上传图片或视频</div>';
+      holder.innerHTML = mediaAll.length
+        ? '<div class="empty" style="flex:1"><b>没有符合条件的媒体</b>换个筛选条件试试</div>'
+        : '<div class="empty" style="flex:1"><b>还没有媒体</b>点右上角上传图片或视频</div>';
       return;
     }
     requestAnimationFrame(() => {
-      renderMasonry(holder, mediaItems, (i) => {
-        if (selecting) {
-          togglePick(mediaItems[i].id);
-          return;
+      renderMasonry(
+        holder,
+        mediaItems,
+        (i) => {
+          if (selecting) {
+            togglePick(mediaItems[i].id);
+            return;
+          }
+          gotoMedia(mediaItems[i].id);
+        },
+        {
+          selectable: selecting,
+          isPicked: (it) => picked.has(it.id),
+          onContext: selecting
+            ? null
+            : (e, item) =>
+                mediaMenu(e, item, {
+                  characterId: c.id,
+                  onOpen: () => gotoMedia(item.id),
+                  onChange: () => loadMedia(true),
+                }),
         }
-        gotoMedia(mediaItems[i].id);
-      }, {
-        selectable: selecting,
-        isPicked: (it) => picked.has(it.id),
-        onContext: selecting
-          ? null
-          : (e, item) =>
-              mediaMenu(e, item, {
-                characterId: c.id,
-                onOpen: () => gotoMedia(item.id),
-                onChange: loadMedia,
-              }),
-      });
+      );
     });
+  }
+
+  async function loadMedia(force = false) {
+    const body = root.querySelector('[data-body]');
+    body.innerHTML = '<div class="masonry" data-masonry></div>';
+    if (force || !mediaAll.length) {
+      const [mediaRes, packsRes] = await Promise.all([api.characterMedia(c.id), api.packs(c.id)]);
+      mediaAll = mediaRes.items;
+      packsCache = packsRes.items;
+      refreshFilterOptions();
+    }
+    renderMedia();
   }
 
   /**
@@ -966,7 +1137,7 @@ export async function CharacterView(root, id) {
         c = await api.character(id);
         paint();
         await loadPacks();
-        if (mode === 'media') await loadMedia();
+        if (mode === 'media') await loadMedia(true);
       } catch {
         /* 页面可能已经被切走了 */
       }
@@ -980,6 +1151,8 @@ export async function CharacterView(root, id) {
       root.querySelectorAll('[data-view] button').forEach((b) => b.classList.toggle('on', b === btn));
       resetSelection();
       mode = btn.dataset.v;
+      const bar = root.querySelector('[data-filter-bar]');
+      if (bar) bar.hidden = mode !== 'media';
       if (mode === 'packs') await loadPacks();
       else await loadMedia();
     });
@@ -1050,6 +1223,7 @@ export async function CharacterView(root, id) {
   paint();
   bindIntro();
   bindToolbar();
+  buildFilterBar();
   root.querySelector('[data-upload]').addEventListener('click', () => pickFiles());
   bindContextMenus();
   watchUploads();

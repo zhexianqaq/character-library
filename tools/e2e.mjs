@@ -281,23 +281,43 @@ try {
 
     await evaluate(`document.querySelector('[data-add-platform]').click()`);
     await sleep(400);
-    const shape = await evaluate(`(() => {
+    const shape = await evaluate(`(async () => {
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       const m = document.querySelector('.modal');
       if (!m) return null;
       const plat = m.querySelector('[name=platform]');
-      const dl = plat && plat.getAttribute('list');
-      return {
+      const dd = m.querySelector('.dd');
+      if (plat) {
+        plat.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        await sleep(280);
+      }
+      const panel = m.querySelector('.dd-panel');
+      const out = {
         platform: !!plat,
-        options: dl ? document.querySelectorAll('#' + dl + ' option').length : 0,
+        options: m.querySelectorAll('.dd-panel .dd-opt').length,
         handle: !!m.querySelector('[name=handle]'),
         url: !!m.querySelector('[name=url]'),
         rows: m.querySelectorAll('.field-row').length,
+        inputW: dd ? Math.round(dd.getBoundingClientRect().width) : 0,
+        panelW: panel ? Math.round(panel.getBoundingClientRect().width) : 0,
       };
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await sleep(150);
+      return out;
     })()`);
     check(
-      '添加平台弹窗 = 下拉 + ID + 网址',
+      '添加平台弹窗 = 自定义下拉 + ID + 网址',
       !!shape && shape.platform && shape.handle && shape.url && shape.options > 5 && shape.rows === 1,
       JSON.stringify(shape)
+    );
+    check(
+      '下拉面板与输入框同宽',
+      !!shape && shape.inputW > 0 && shape.inputW === shape.panelW,
+      shape ? `${shape.inputW} / ${shape.panelW}` : ''
+    );
+    check(
+      '原生 datalist 已移除（只剩一个三角）',
+      (await evaluate(`document.querySelectorAll('.modal datalist').length`)) === 0
     );
     await evaluate(`document.querySelector('.modal [data-cancel]').click()`);
     await sleep(300);
@@ -630,16 +650,23 @@ try {
 
     await evaluate(`document.querySelector('[data-add-platform]').click()`);
     await sleep(400);
-    const workModal = await evaluate(`(() => {
+    const workModal = await evaluate(`(async () => {
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       const m = document.querySelector('.modal');
       if (!m) return null;
       const plat = m.querySelector('[name=platform]');
-      const dl = plat && plat.getAttribute('list');
-      return {
+      if (plat) {
+        plat.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        await sleep(280);
+      }
+      const out = {
         title: m.querySelector('h3').textContent,
         label: m.querySelector('.field > span').textContent.trim(),
-        options: dl ? [...document.querySelectorAll('#' + dl + ' option')].map((o) => o.value) : [],
+        options: [...m.querySelectorAll('.dd-panel .dd-opt')].map((o) => o.textContent.trim()),
       };
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await sleep(150);
+      return out;
     })()`);
     check(
       '出处弹窗是「类型 + 作品名」',
