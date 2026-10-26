@@ -133,6 +133,32 @@ async function realClick(selector) {
   return true;
 }
 
+/** 真实右键（合成事件不会触发浏览器 contextmenu 的默认派发路径） */
+async function realRightClick(selector) {
+  const p = await evaluate(`(() => {
+    const e = document.querySelector(${JSON.stringify(selector)});
+    if (!e) return null;
+    const b = e.getBoundingClientRect();
+    return { x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2) };
+  })()`);
+  if (!p) return false;
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y, button: 'none' });
+  await sleep(80);
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'right', clickCount: 1 });
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'right', clickCount: 1 });
+  await send('Page.captureScreenshot', { format: 'png' });
+  await sleep(350);
+  return true;
+}
+
+/** 右键后读出菜单文字，然后关掉 */
+async function readMenuAndClose() {
+  const labels = await evaluate(`[...document.querySelectorAll('.ctx-menu .ctx-item')].map((b) => b.querySelector('span').textContent.trim())`);
+  await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+  await sleep(250);
+  return labels;
+}
+
 async function goto(url2, wait = 1400) {
   await send('Page.navigate', { url: url2 });
   await sleep(wait);
@@ -149,6 +175,16 @@ try {
   await goto(`${BASE}/`);
   const cardCount = await evaluate(`document.querySelectorAll('.char-card').length`);
   check('首页渲染角色卡片', cardCount >= 1, `${cardCount} 张`);
+
+  // 1.4 右键角色卡
+  if (await realRightClick('.char-card')) {
+    const labels = await readMenuAndClose();
+    check(
+      '右键角色卡出现条目菜单',
+      labels.includes('编辑名称') && labels.includes('删除') && labels.includes('打开本地文件夹'),
+      labels.join(' / ')
+    );
+  }
 
   // 1.5 多库：每个库独立统计，切换会改 URL
   const shelves = await evaluate(`(() => fetch('/api/overview')
@@ -321,6 +357,16 @@ try {
   // 3. 图包网格
   const packCount = await evaluate(`document.querySelectorAll('.pack-card').length`);
   check('图包按月渲染', packCount > 0, `${packCount} 个`);
+
+  // 2.7 右键图包
+  if (await realRightClick('.pack-card')) {
+    const labels = await readMenuAndClose();
+    check(
+      '右键图包出现图包菜单',
+      labels.includes('编辑标签') && labels.includes('解散图包') && labels.includes('添加素材'),
+      labels.join(' / ')
+    );
+  }
 
   // 4. 切到全部媒体
   await evaluate(`document.querySelector('[data-view] button[data-v="media"]').click()`);
@@ -526,7 +572,11 @@ try {
       ctx.fillText('E2E', 48, 96);
       const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
       const file = new File([blob], 'e2e-20250315-sample.png', { type: 'image/png' });
+      // 上传输入框是按需创建的：先点「上传」，再取它
+      document.querySelector('[data-upload]').click();
+      await new Promise((r) => setTimeout(r, 250));
       const input = document.querySelector('input[type=file]');
+      if (!input) return 'no-input';
       const dt = new DataTransfer();
       dt.items.add(file);
       input.files = dt.files;
@@ -586,6 +636,15 @@ try {
   check('进入图包页', /^\/p\/\d+$/.test(await evaluate('location.pathname')));
   const packTiles = await evaluate(`document.querySelectorAll('.tile').length`);
   check('图包内瀑布流有内容', packTiles === 1, `${packTiles} 个`);
+
+  if (await realRightClick('.tile')) {
+    const labels = await readMenuAndClose();
+    check(
+      '右键图片出现图片菜单',
+      labels.includes('重命名') && labels.includes('移动到其他图包') && labels.includes('删除'),
+      labels.join(' / ')
+    );
+  }
 
   // 标题右侧必须有日期（拍摄月份或创建日期），格式 YYYY-MM / YYYY-MM-DD
   const packDate = await evaluate(`document.querySelector('.pack-date')?.textContent?.trim() || ''`);

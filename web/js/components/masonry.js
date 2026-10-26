@@ -15,7 +15,7 @@ function tileHtml(it) {
  * 渲染瀑布流。列数按容器宽度决定；图片用各自宽高比占位，不裁剪。
  * onOpen(indexInItems) 回调由调用方决定灯箱范围。
  */
-export function renderMasonry(container, items, onOpen) {
+export function renderMasonry(container, items, onOpen, opts = {}) {
   const cols = columnCount(container.clientWidth);
   const buckets = splitColumns(items, cols);
   container.innerHTML = buckets
@@ -30,18 +30,25 @@ export function renderMasonry(container, items, onOpen) {
       const index = items.findIndex((x) => x.id === id);
       if (onOpen) onOpen(index >= 0 ? index : 0);
     });
+    if (opts.onContext) {
+      el.addEventListener('contextmenu', (e) => {
+        const id = Number(el.dataset.id);
+        const index = items.findIndex((x) => x.id === id);
+        opts.onContext(e, items[index >= 0 ? index : 0], index >= 0 ? index : 0);
+      });
+    }
   });
 }
 
 /** 窗口宽度变化导致列数改变时重排 */
-export function watchMasonryLayout(container, getItems, getOnOpen) {
+export function watchMasonryLayout(container, getItems, getOnOpen, getOpts) {
   let lastCols = columnCount(container.clientWidth);
   const onResize = () => {
     const next = columnCount(container.clientWidth);
     if (next !== lastCols) {
       lastCols = next;
       const items = getItems();
-      if (items && items.length) renderMasonry(container, items, getOnOpen());
+      if (items && items.length) renderMasonry(container, items, getOnOpen(), getOpts ? getOpts() : {});
     }
   };
   window.addEventListener('resize', onResize);

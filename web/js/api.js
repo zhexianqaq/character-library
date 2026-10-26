@@ -53,11 +53,13 @@ export const api = {
   deleteCharacter: (id) => req(`/api/characters/${id}`, { method: 'DELETE' }),
 
   tags: () => req('/api/tags'),
+  reveal: (kind, id) => json('POST')('/api/reveal', { kind, id }),
   packs: (charId) => req(`/api/characters/${charId}/packs`),
   createPack: (charId, data) => json('POST')(`/api/characters/${charId}/packs`, data),
   pack: (id) => req(`/api/packs/${id}`),
   updatePack: (id, patch) => json('PATCH')(`/api/packs/${id}`, patch),
-  deletePack: (id) => req(`/api/packs/${id}`, { method: 'DELETE' }),
+  deletePack: (id, { withMedia = false } = {}) =>
+    req(`/api/packs/${id}${withMedia ? '?withMedia=1' : ''}`, { method: 'DELETE' }),
   packMedia: (id) => req(`/api/packs/${id}/media`),
   characterMedia: (id, params) => req(`/api/characters/${id}/media${qs(params)}`),
 

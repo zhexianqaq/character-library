@@ -5,6 +5,8 @@ import { renderMasonry } from '../components/masonry.js';
 import { openLightbox } from '../components/lightbox.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openTagPicker } from '../components/tag-picker.js';
+import { openContextMenu } from '../components/context-menu.js';
+import { mediaMenu } from '../components/media-actions.js';
 
 /** 复制文本：优先 Clipboard API，失败降级到 execCommand（无手势环境也能用） */
 async function copyText(text) {
@@ -432,6 +434,105 @@ export async function CharacterView(root, id) {
     });
   }
 
+  /** 打开图包页 */
+  function gotoPack(packId) {
+    history.pushState({}, '', `/p/${packId}`);
+    window.dispatchEvent(new CustomEvent('app:route'));
+  }
+
+  async function renamePack(pack) {
+    const v = await openModal({
+      title: '重命名图包',
+      fields: [{ name: 'title', label: '名称', value: pack.title, required: true }],
+      submitText: '保存',
+    });
+    if (!v) return;
+    await api.updatePack(pack.id, { title: v.title });
+    toast('已重命名');
+    loadPacks();
+  }
+
+  async function editPackTags(pack) {
+    const next = await openTagPicker({ title: '编辑图包标签', selected: pack.tags || [] });
+    if (!next) return;
+    await api.updatePack(pack.id, { tags: next });
+    toast(next.length ? `已保存 ${next.length} 个标签` : '已清空标签');
+    loadPacks();
+  }
+
+  async function dissolvePack(pack) {
+    const ok = await confirmDialog(
+      '解散这个图包？',
+      `「${pack.title}」里的 ${pack.mediaCount} 个媒体会变成未归包，不会被删除。`
+    );
+    if (!ok) return;
+    await api.deletePack(pack.id);
+    toast('图包已解散');
+    c = await api.character(id);
+    paint();
+    loadPacks();
+  }
+
+  async function removePack(pack) {
+    const ok = await confirmDialog(
+      '删除图包和它的媒体？',
+      `「${pack.title}」里的 ${pack.mediaCount} 个媒体会一起删除，磁盘文件也会删掉，不可恢复。`
+    );
+    if (!ok) return;
+    await api.deletePack(pack.id, { withMedia: true });
+    toast('图包已删除');
+    c = await api.character(id);
+    paint();
+    loadPacks();
+  }
+
+  /** 图包 / 平台 / 空白处的右键 */
+  function bindContextMenus() {
+    const page = root.querySelector('.page');
+    page.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('.tile')) return;  // 瀑布流自己处理
+
+      const pf = e.target.closest('.pf-card');
+      if (pf) {
+        const i = Number(pf.dataset.i);
+        const entry = (c.platforms || [])[i];
+        if (!entry) return;
+        openContextMenu(e, [
+          { label: '编辑', onClick: () => openPlatformModal(i) },
+          { label: '复制', onClick: () => copyAndFlash(pf, entry.handle) },
+          { separator: true },
+          { label: '删除', danger: true, onClick: () => deletePlatform(i) },
+        ]);
+        return;
+      }
+
+      const card = e.target.closest('.pack-card');
+      if (card) {
+        const packId = Number(card.dataset.pack);
+        const pack = packsCache.find((p) => p.id === packId);
+        if (!pack) return;
+        openContextMenu(e, [
+          { label: '打开', onClick: () => gotoPack(pack.id) },
+          { label: '编辑名称', onClick: () => renamePack(pack) },
+          { label: '编辑标签', onClick: () => editPackTags(pack) },
+          { label: '添加素材', hint: '传进这个图包', onClick: () => pickFiles({ packId: pack.id }) },
+          { label: '打开本地文件夹', onClick: () => api.reveal('pack', pack.id).catch(() => toast('目录已丢失')) },
+          { separator: true },
+          { label: '解散图包', hint: '保留媒体', onClick: () => dissolvePack(pack) },
+          { label: '删除', danger: true, hint: '连媒体', onClick: () => removePack(pack) },
+        ]);
+        return;
+      }
+
+      openContextMenu(e, [
+        { label: '上传素材', onClick: () => pickFiles() },
+        { label: '新建图包', onClick: () => root.querySelector('[data-new-pack]').click() },
+        { separator: true },
+        { label: `编辑${noun()}资料`, onClick: () => root.querySelector('[data-edit]').click() },
+      ]);
+    });
+  }
+
   /** 当前小库；人物库或「未分类」时返回 null */
   function packCategory() {
     return isWorkShelf() && CATEGORIES.includes(cat) ? cat : null;
@@ -549,54 +650,65 @@ export async function CharacterView(root, id) {
       return;
     }
     requestAnimationFrame(() => {
-      renderMasonry(holder, mediaItems, (i) => openLightbox(mediaItems, i));
+      renderMasonry(holder, mediaItems, (i) => openLightbox(mediaItems, i), {
+        onContext: (e, item) =>
+          mediaMenu(e, item, {
+            characterId: c.id,
+            onOpen: () => openLightbox(mediaItems, mediaItems.findIndex((x) => x.id === item.id)),
+            onChange: loadMedia,
+          }),
+      });
     });
   }
 
   const progress = () => root.querySelector('[data-progress]');
 
-  function bindUpload() {
+  /** 选文件并上传；packId 指定传进哪个图包 */
+  function pickFiles({ packId = null } = {}) {
     const input = document.createElement('input');
     input.type = 'file';
     input.multiple = true;
     input.accept = 'image/*,video/*';
     input.style.display = 'none';
     root.appendChild(input);
-
-    input.addEventListener('change', async () => {
+    input.addEventListener('change', () => {
       const files = Array.from(input.files || []);
-      if (!files.length) return;
-      const bar = progress();
-      bar.classList.remove('hidden');
-      bar.querySelector('i').style.width = '0%';
-      try {
-        const res = await uploadMedia(c.id, files, {
-          category: packCategory(),
-          onProgress: (loaded, total) => {
-            bar.querySelector('i').style.width = `${Math.round((loaded / total) * 100)}%`;
-          },
-        });
-        bar.querySelector('i').style.width = '100%';
-        const skipped = res.skipped || [];
-        toast(
-          skipped.length
-            ? `导入 ${res.added} 个，跳过 ${skipped.length} 个（${skipped[0].reason}）`
-            : `已导入 ${res.added} 个文件`
-        );
-        c = await api.character(id);
-        paint();
-        await loadPacks();
-        if (mode === 'media') await loadMedia();
-      } catch (err) {
-        toast(err.message || '上传失败');
-      } finally {
-        bar.classList.add('hidden');
-        input.value = '';
-      }
+      input.remove();
+      if (files.length) runUpload(files, packId);
     });
-
-    root.querySelector('[data-upload]').addEventListener('click', () => input.click());
+    input.click();
   }
+
+  async function runUpload(files, packId) {
+    const bar = progress();
+    bar.classList.remove('hidden');
+    bar.querySelector('i').style.width = '0%';
+    try {
+      const res = await uploadMedia(c.id, files, {
+        packId,
+        category: packCategory(),
+        onProgress: (loaded, total) => {
+          bar.querySelector('i').style.width = `${Math.round((loaded / total) * 100)}%`;
+        },
+      });
+      bar.querySelector('i').style.width = '100%';
+      const skipped = res.skipped || [];
+      toast(
+        skipped.length
+          ? `导入 ${res.added} 个，跳过 ${skipped.length} 个（${skipped[0].reason}）`
+          : `已导入 ${res.added} 个文件`
+      );
+      c = await api.character(id);
+      paint();
+      await loadPacks();
+      if (mode === 'media') await loadMedia();
+    } catch (err) {
+      toast(err.message || '上传失败');
+    } finally {
+      bar.classList.add('hidden');
+    }
+  }
+
 
   function bindToolbar() {
     root.querySelector('[data-view]').addEventListener('click', async (e) => {
@@ -668,7 +780,14 @@ export async function CharacterView(root, id) {
   bindTopbar(root);
   paint();
   bindIntro();
-  bindUpload();
   bindToolbar();
+  root.querySelector('[data-upload]').addEventListener('click', () => pickFiles());
+  bindContextMenus();
   await loadPacks();
+
+  // 从右键菜单「添加素材」跳过来时，直接弹选择框
+  if (new URLSearchParams(location.search).get('upload')) {
+    history.replaceState({}, '', `/c/${id}`);
+    pickFiles();
+  }
 }

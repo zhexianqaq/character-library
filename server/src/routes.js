@@ -1,5 +1,6 @@
 import express from 'express';
 import fs from 'node:fs';
+import { execFile } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import multer from 'multer';
@@ -13,7 +14,7 @@ import {
   refreshCharacterPacks,
 } from './db.js';
 import { getDerivative, warmAll, warmState } from './thumbs.js';
-import { WEB_DIR, INBOX_DIR, slugify } from './config.js';
+import { WEB_DIR, INBOX_DIR, DATA_DIR, slugify } from './config.js';
 import {
   absPathOf,
   adoptFile,
@@ -51,6 +52,35 @@ function tagsOf(db, charId) {
     .prepare(`SELECT t.name FROM tags t JOIN character_tags ct ON ct.tag_id = t.id WHERE ct.character_id = ? ORDER BY t.name`)
     .all(charId)
     .map((r) => r.name);
+}
+
+/** 标签清洗：去空白、去重、限长、最多 30 个 */
+function cleanTags(list) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of list || []) {
+    const n = String(raw || '').trim().slice(0, 40);
+    if (!n || seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+    if (out.length >= 30) break;
+  }
+  return out;
+}
+
+/** 去重合并若干标签数组 */
+function mergeTags(...lists) {
+  const out = [];
+  const seen = new Set();
+  for (const list of lists) {
+    for (const raw of list || []) {
+      const n = String(raw || '').trim();
+      if (!n || seen.has(n)) continue;
+      seen.add(n);
+      out.push(n);
+    }
+  }
+  return out;
 }
 
 /** 媒体继承的标签：角色自己的标签 + 库类型（人物/角色）+ 角色名本身 */
@@ -134,6 +164,7 @@ function mapMedia(r) {
     durationMs: r.duration_ms,
     bytes: r.bytes,
     sortOrder: r.sort_order,
+    tags: safeJson(r.tags),
   };
 }
 
@@ -348,17 +379,70 @@ export function createApp() {
     res.json({ ok: true });
   });
 
+  // 在资源管理器里打开（媒体=选中文件，图包/角色=打开目录）
+  app.post('/api/reveal', (req, res) => {
+    const db = getDb();
+    const { kind, id } = req.body || {};
+    const numId = Number(id);
+    let target = null;
+    if (kind === 'media') {
+      const row = db.prepare('SELECT rel_path FROM media WHERE id = ?').get(numId);
+      if (row) target = absPathOf(row.rel_path);
+    } else if (kind === 'pack') {
+      const first = db.prepare('SELECT rel_path FROM media WHERE pack_id = ? LIMIT 1').get(numId);
+      if (first) {
+        target = path.dirname(absPathOf(first.rel_path));
+      } else {
+        const row = db
+          .prepare('SELECT c.dir_slug FROM packs p JOIN characters c ON c.id = p.character_id WHERE p.id = ?')
+          .get(numId);
+        if (row) target = absPathOf(row.dir_slug);
+      }
+    } else if (kind === 'character') {
+      const row = db.prepare('SELECT dir_slug FROM characters WHERE id = ?').get(numId);
+      if (row) target = absPathOf(row.dir_slug);
+    }
+    if (!target) return res.status(404).json({ error: '找不到对应的磁盘路径' });
+
+    const root = path.resolve(DATA_DIR);
+    const abs = path.resolve(target);
+    if (abs !== root && !abs.startsWith(root + path.sep)) {
+      return res.status(400).json({ error: '路径越界' });
+    }
+    try {
+      const isDir = fs.statSync(abs).isDirectory();
+      // explorer 成功也可能返回 1，忽略退出码
+      execFile('explorer.exe', [isDir ? abs : `/select,${abs}`], () => {});
+      res.json({ ok: true, path: abs });
+    } catch {
+      res.status(404).json({ error: '文件已丢失', path: abs });
+    }
+  });
+
   // 全部标签 + 每个标签被多少条目使用
   app.get('/api/tags', (req, res) => {
     const db = getDb();
-    const rows = db
+    const pool = new Map();
+    const bump = (name, n) => pool.set(name, (pool.get(name) || 0) + n);
+    for (const r of db
       .prepare(
-        `SELECT t.id, t.name, COUNT(ct.character_id) AS count
+        `SELECT t.name, COUNT(ct.character_id) AS c
          FROM tags t LEFT JOIN character_tags ct ON ct.tag_id = t.id
-         GROUP BY t.id ORDER BY count DESC, t.name`
+         GROUP BY t.id`
       )
-      .all();
-    res.json({ items: rows.map((r) => ({ name: r.name, count: r.count })) });
+      .all()) {
+      bump(r.name, r.c);
+    }
+    for (const r of db.prepare('SELECT tags FROM packs').all()) {
+      for (const n of safeJson(r.tags)) bump(n, 1);
+    }
+    for (const r of db.prepare('SELECT tags FROM media WHERE tags <> ?').all('[]')) {
+      for (const n of safeJson(r.tags)) bump(n, 1);
+    }
+    const items = [...pool.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh'));
+    res.json({ items });
   });
 
   // ---------- 角色 ----------
@@ -497,6 +581,7 @@ export function createApp() {
         title: r.title,
         month: r.month,
         category: r.category,
+        tags: safeJson(r.tags),
         mediaCount: r.media_count,
         imageCount: r.image_count,
         videoCount: r.video_count,
@@ -577,6 +662,8 @@ export function createApp() {
       id: row.id,
       title: row.title,
       month: row.month,
+      category: row.category,
+      tags: safeJson(row.tags),
       createdAt: row.created_at,
       coverMediaId: row.cover_media_id,
       character: { id: row.char_id, name: row.char_name, account: row.char_account },
@@ -613,6 +700,9 @@ export function createApp() {
           b.coverMediaId === null ? null : Number(b.coverMediaId), id
         );
       }
+      if (Array.isArray(b.tags)) {
+        db.prepare('UPDATE packs SET tags = ? WHERE id = ?').run(JSON.stringify(cleanTags(b.tags)), id);
+      }
     } catch (err) {
       return res.status(400).json({ error: String(err.message || '保存失败') });
     }
@@ -620,15 +710,26 @@ export function createApp() {
     res.json({ ok: true, id, title: fresh.title, month: fresh.month, createdAt: fresh.created_at });
   });
 
-  app.delete('/api/packs/:id', (req, res) => {
+  // 默认「解散」：只删图包，里面的媒体变成未归包；
+  // ?withMedia=1 是「删除」：连图包里的媒体和磁盘文件一起删掉
+  app.delete('/api/packs/:id', async (req, res) => {
     const db = getDb();
     const id = Number(req.params.id);
     const row = db.prepare('SELECT * FROM packs WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ error: '图包不存在' });
-    db.prepare('UPDATE media SET pack_id = NULL WHERE pack_id = ?').run(id);
+    const withMedia = String(req.query.withMedia || '') === '1';
+    let removed = 0;
+    if (withMedia) {
+      const items = db.prepare('SELECT id, rel_path FROM media WHERE pack_id = ?').all(id);
+      db.prepare('DELETE FROM media WHERE pack_id = ?').run(id);
+      for (const m of items) await removeLibraryFile(m.rel_path);
+      removed = items.length;
+    } else {
+      db.prepare('UPDATE media SET pack_id = NULL WHERE pack_id = ?').run(id);
+    }
     db.prepare('DELETE FROM packs WHERE id = ?').run(id);
     refreshCharacter(row.character_id);
-    res.json({ ok: true });
+    res.json({ ok: true, removed });
   });
 
   app.get('/api/packs/:id/media', (req, res) => {
@@ -638,8 +739,11 @@ export function createApp() {
     const rows = db
       .prepare('SELECT * FROM media WHERE pack_id = ? ORDER BY sort_order, file_name')
       .all(packId);
-    const tags = pack ? mediaTagSet(db, pack.character_id) : [];
-    res.json({ items: rows.map((r) => ({ ...mapMedia(r), tags })), total: rows.length });
+    const base = pack ? mediaTagSet(db, pack.character_id) : [];
+    res.json({
+      items: rows.map((r) => ({ ...mapMedia(r), tags: mergeTags(r.tags ? safeJson(r.tags) : [], base) })),
+      total: rows.length,
+    });
   });
 
   // ---------- 媒体 ----------
@@ -656,8 +760,11 @@ export function createApp() {
     const rows = db
       .prepare(`SELECT * FROM media WHERE ${where.join(' AND ')} ORDER BY sort_order DESC, id DESC`)
       .all(params);
-    const tags = mediaTagSet(db, charId);
-    res.json({ items: rows.map((r) => ({ ...mapMedia(r), tags })), total: rows.length });
+    const base = mediaTagSet(db, charId);
+    res.json({
+      items: rows.map((r) => ({ ...mapMedia(r), tags: mergeTags(r.tags ? safeJson(r.tags) : [], base) })),
+      total: rows.length,
+    });
   });
 
   app.post('/api/characters/:id/media', upload.array('files', 400), async (req, res) => {
@@ -743,6 +850,20 @@ export function createApp() {
     }
     if (typeof b.sortOrder === 'number') {
       db.prepare('UPDATE media SET sort_order = ? WHERE id = ?').run(b.sortOrder, id);
+    }
+    if (typeof b.fileName === 'string' && b.fileName.trim()) {
+      // 只改库里的显示名，磁盘文件名保持不动（磁盘名带 sha 前缀，是去重依据）
+      const keepExt = row.ext && !b.fileName.toLowerCase().endsWith(row.ext) ? row.ext : '';
+      db.prepare('UPDATE media SET file_name = ? WHERE id = ?').run(
+        (b.fileName.trim() + keepExt).slice(0, 160),
+        id
+      );
+    }
+    if (Array.isArray(b.tags)) {
+      db.prepare('UPDATE media SET tags = ? WHERE id = ?').run(
+        JSON.stringify(cleanTags(b.tags)),
+        id
+      );
     }
     refreshCharacter(row.character_id);
     res.json({ ok: true });

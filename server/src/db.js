@@ -116,6 +116,9 @@ function migrate(d) {
   addColumnIfMissing('characters', 'platforms', `platforms TEXT NOT NULL DEFAULT '[]'`);
   // 小库：官图 / cosplay / 同人（只对虚拟角色库有意义，人物库留空）
   addColumnIfMissing('packs', 'category', `category TEXT`);
+  // 图包 / 单个媒体自己的标签（JSON 数组），媒体最终标签还要并上角色标签与库标签
+  addColumnIfMissing('packs', 'tags', `tags TEXT NOT NULL DEFAULT '[]'`);
+  addColumnIfMissing('media', 'tags', `tags TEXT NOT NULL DEFAULT '[]'`);
 }
 
 export function nowIso() {

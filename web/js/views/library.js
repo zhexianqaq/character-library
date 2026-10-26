@@ -1,7 +1,8 @@
 import { api } from '../api.js';
 import { esc, fmtNum, fmtBytes, fadeIn, toast } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
-import { openModal } from '../components/modal.js';
+import { openModal, confirmDialog } from '../components/modal.js';
+import { openContextMenu } from '../components/context-menu.js';
 
 export async function LibraryView(root, shelfId) {
   const state = { q: '', shelfId: Number(shelfId) || null, sort: 'recent' };
@@ -76,6 +77,55 @@ export async function LibraryView(root, shelfId) {
         })
         .join('');
       grid.querySelectorAll('img').forEach(fadeIn);
+    }
+
+    // 右键：卡片 → 条目操作；空白处 → 新建
+    grid.addEventListener('contextmenu', (e) => {
+      const card = e.target.closest('.char-card');
+      if (!card) {
+        openContextMenu(e, [
+          { label: `新建${noun}`, onClick: () => root.querySelector('[data-new-char]').click() },
+          { label: '新建库', onClick: () => root.querySelector('[data-new-shelf]').click() },
+          { separator: true },
+          { label: '刷新', onClick: () => render() },
+        ]);
+        return;
+      }
+      e.preventDefault();
+      const cid = Number(card.getAttribute('href').split('/').pop());
+      const item = chars.items.find((x) => x.id === cid);
+      if (!item) return;
+      openContextMenu(e, [
+        { label: '打开', onClick: () => { history.pushState({}, '', `/c/${cid}`); window.dispatchEvent(new CustomEvent('app:route')); } },
+        { label: '编辑名称', onClick: () => renameCharacter(item) },
+        { label: `添加素材`, hint: '进入后上传', onClick: () => (location.href = `/c/${cid}?upload=1`) },
+        { label: '打开本地文件夹', onClick: () => api.reveal('character', cid).catch(() => toast('目录已丢失')) },
+        { separator: true },
+        { label: '删除', danger: true, onClick: () => removeCharacter(item) },
+      ]);
+    });
+
+    async function renameCharacter(item) {
+      const v = await openModal({
+        title: '编辑名称',
+        fields: [{ name: 'name', label: '名称', value: item.name, required: true }],
+        submitText: '保存',
+      });
+      if (!v) return;
+      await api.updateCharacter(item.id, { name: v.name });
+      toast('已重命名');
+      render();
+    }
+
+    async function removeCharacter(item) {
+      const ok = await confirmDialog(
+        '删除这个条目？',
+        `「${item.name}」下的 ${item.packCount} 个图包、${item.mediaCount} 个媒体会一并删除，磁盘文件也会删掉。`
+      );
+      if (!ok) return;
+      await api.deleteCharacter(item.id);
+      toast('已删除');
+      render();
     }
 
     // 角色库切换

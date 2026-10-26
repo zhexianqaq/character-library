@@ -109,6 +109,30 @@ if (hoverIdx > 0 && process.argv[hoverIdx + 1]) {
   }
 }
 
+// --rclick "<选择器>"：真实右键（Chrome 会在 mousePressed 时派发 contextmenu）
+const rclickIdx = process.argv.indexOf('--rclick');
+if (rclickIdx > 0 && process.argv[rclickIdx + 1]) {
+  const sel = process.argv[rclickIdx + 1];
+  const pos = await send('Runtime.evaluate', {
+    expression: `(() => {
+      const e = document.querySelector(${JSON.stringify(sel)});
+      if (!e) return null;
+      const b = e.getBoundingClientRect();
+      return { x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2) };
+    })()`,
+    returnByValue: true,
+  });
+  const p = pos.result.value;
+  if (p) {
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y, button: 'none' });
+    await sleep(80);
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'right', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'right', clickCount: 1 });
+    await send('Page.captureScreenshot', { format: 'png' });
+    await sleep(400);
+  }
+}
+
 // --click "<选择器>"：用真实鼠标事件点一下（合成 click 不会移动焦点/触发 :hover）
 const clickIdx = process.argv.indexOf('--click');
 if (clickIdx > 0 && process.argv[clickIdx + 1]) {
