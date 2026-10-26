@@ -1,0 +1,21 @@
+{
+  "name": "character-library",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "资料库 · 角色库 — 本地媒体索引与浏览服务",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "e2e": "node ../tools/e2e.mjs",
+    "backup": "node ../tools/backup.mjs",
+    "shot": "node ../tools/shot.mjs"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "express": "^5.3.0",
+    "multer": "^2.5.0",
+    "sharp": "^0.35.5"
+  }
+}

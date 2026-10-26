@@ -1,0 +1,21 @@
+# 依赖
+server/node_modules/
+
+# 运行时数据：媒体原件、索引库、缩略图缓存
+# 这些是本机私人资料，不进版本库
+.cache/
+data/
+library/
+*.db
+*.db-wal
+*.db-shm
+
+# 生成物 / 开发产物
+shots/
+tools/survey.json
+*.log
+
+# 系统
+.DS_Store
+Thumbs.db
+desktop.ini
