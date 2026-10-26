@@ -201,6 +201,7 @@ export async function ResourcesView(root, shelfId) {
       { label: '编辑资源', onClick: () => editOne(item) },
       { label: '编辑标签', hint: '关联靠标签', onClick: () => editTags(item) },
       { label: '复制名称', hint: '给条目打标签用', onClick: () => copyName(item) },
+      { label: '打开本地文件夹', onClick: () => api.reveal('character', item.id).catch(() => toast('目录已丢失')) },
       { separator: true },
       { label: '删除', danger: true, hint: '只删卡片', onClick: () => removeOne(item) },
     ];

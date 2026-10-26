@@ -1274,6 +1274,17 @@ try {
     }
     check('资源库按分类分组展示卡片', resList.cards > 0 && resList.tabs.some((t) => t.startsWith('游戏')), resList.tabs.join(' / '));
 
+    // 资源库也要在资料库根目录里有自己的文件夹（否则资源管理器里少一个库）
+    const resDirInfo = await (async () => {
+      const ov = await fetch(`${BASE}/api/overview`).then((r) => r.json());
+      const list = await fetch(`${BASE}/api/shelves/${resShelf.id}/resources`).then((r) => r.json());
+      const first = (list.items || [])[0];
+      if (!first || !first.dirSlug) return { ok: false, prefix: '(库里还没有资源)' };
+      const prefix = String(first.dirSlug).split('/')[0];
+      return { ok: fs.existsSync(path.join(ov.library.rootPath, prefix)), prefix };
+    })();
+    check('资源库在磁盘上有专属目录', resDirInfo.ok, resDirInfo.prefix);
+
     // 关联靠标签：造一个带同名标签 + 同名出处的条目，跑完删掉
     const workShelf = shelves.find((s) => s.kind === 'work');
     const link = workShelf

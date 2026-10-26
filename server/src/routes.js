@@ -247,14 +247,28 @@ async function resolvePackDir(db, charRelDir, pack, kind, category = null) {
  * 角色库那一段必须复用已有角色用过的名字，不能每次 slugify 一遍，
  * 否则同一个库会裂成「角色库」「角色库-2」。
  */
-async function uniqueCharRelDir(db, shelfId, name) {
+/** 库在磁盘上的目录名：优先复用已有条目用过的前缀，避免同一个库裂成「角色库」「角色库-2」 */
+function shelfSlugOf(db, shelfId) {
   const shelf = db.prepare('SELECT * FROM shelves WHERE id = ?').get(shelfId);
   const sample = db
     .prepare(`SELECT dir_slug FROM characters WHERE shelf_id = ? AND dir_slug LIKE '%/%' LIMIT 1`)
     .get(shelfId);
-  const shelfSlug = sample ? sample.dir_slug.split('/')[0] : slugify(shelf ? shelf.name : '角色库');
+  return sample ? sample.dir_slug.split('/')[0] : slugify(shelf ? shelf.name : '角色库');
+}
+
+async function uniqueCharRelDir(db, shelfId, name) {
+  const shelfSlug = shelfSlugOf(db, shelfId);
   const charSlug = await uniqueDirName(shelfSlug, name);
   return `${shelfSlug}/${charSlug}`;
+}
+
+async function mkdirRel(relDir) {
+  if (!relDir) return;
+  try {
+    await fsp.mkdir(absPathOf(relDir), { recursive: true });
+  } catch {
+    /* 权限 / 占用之类的问题留给第一次上传时重试 */
+  }
 }
 
 /**
@@ -262,17 +276,12 @@ async function uniqueCharRelDir(db, shelfId, name) {
  *
  * 以前只在第一次上传时才 mkdir，结果前端建完人物、磁盘上什么都没有，
  * 「打开本地文件夹」还会报目录已丢失。建目录失败不拦建条目（上传时会再建一次）。
- * 资源库不建：出处里随手输入的作品名会造出一堆空目录；表情库的目录在包这一层。
  */
 async function ensureCharDirs(relDir) {
   if (!relDir) return;
-  for (const sub of ['', '未分类/图片', '未分类/视频']) {
-    try {
-      await fsp.mkdir(absPathOf(sub ? `${relDir}/${sub}` : relDir), { recursive: true });
-    } catch {
-      /* 权限 / 占用之类的问题留给第一次上传时重试 */
-    }
-  }
+  await mkdirRel(relDir);
+  await mkdirRel(`${relDir}/未分类/图片`);
+  await mkdirRel(`${relDir}/未分类/视频`);
 }
 
 /**
@@ -391,7 +400,7 @@ export function createApp() {
   });
 
   // ---------- 角色库 ----------
-  app.post('/api/shelves', (req, res) => {
+  app.post('/api/shelves', async (req, res) => {
     const db = getDb();
     const name = String((req.body && req.body.name) || '').trim();
     if (!name) return res.status(400).json({ error: '角色库名称不能为空' });
@@ -415,6 +424,8 @@ export function createApp() {
     );
     const kind = normalizeShelfKind(req.body.kind);
     if (kind === 'emoji') ensureShelfContainer(id);
+    // 库根目录建出来：否则资源管理器里少一个库，用户会以为数据没落盘
+    await mkdirRel(shelfSlugOf(db, id));
     res.json({ id, name, kind });
   });
 
@@ -446,7 +457,14 @@ export function createApp() {
       .prepare('SELECT COUNT(*) n FROM media m JOIN characters c ON c.id = m.character_id WHERE c.shelf_id = ?')
       .get(id).n;
     if (media > 0) return res.status(400).json({ error: `该库下还有 ${media} 个媒体，请先清空` });
+    const slug = shelfSlugOf(db, id); // 删之前算，删完就查不到 shelf 了
     db.prepare('DELETE FROM shelves WHERE id = ?').run(id);
+    // 只删空目录：非递归 rmdir 撞到用户自己的文件会抛错，正好保留下来
+    try {
+      fs.rmdirSync(absPathOf(slug));
+    } catch {
+      /* 非空 / 不存在都留着 */
+    }
     res.json({ ok: true });
   });
 
@@ -482,6 +500,9 @@ export function createApp() {
       return res.status(400).json({ error: '路径越界' });
     }
     try {
+      // 条目目录可能还没建（资源库的卡片本身不存媒体，不做预热 mkdir），
+      // 用户点「打开本地文件夹」时补一个，比报「目录已丢失」合理
+      if (kind === 'character' && !fs.existsSync(abs)) fs.mkdirSync(abs, { recursive: true });
       const isDir = fs.statSync(abs).isDirectory();
       // 引号只能加在路径本身外面，也就是 /select,"路径" 这种形态；
       // 交给 Node 自动加引号会变成 "/select,路径"，explorer 解析不了
@@ -687,6 +708,7 @@ export function createApp() {
         name: r.name,
         category: r.category || '',
         intro: r.intro || '',
+        dirSlug: r.dir_slug,
         tags: tagsOf(db, r.id).filter((t) => t !== r.name),
         coverMediaId: r.cover || null,
         linked: r.linked || 0,
