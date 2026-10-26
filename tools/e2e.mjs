@@ -1629,6 +1629,69 @@ try {
     `${kb.dialog} · ${kb.beforeDel} → ${kb.afterDel}`
   );
 
+  // 8.95 顶栏搜索不失焦 + 批量新建中途切库不串库
+  const libInfo = await fetch(`${BASE}/api/overview`).then((r) => r.json());
+  const peopleShelf =
+    (libInfo.shelves || []).find((s) => s.kind === 'people') || (libInfo.shelves || [])[0];
+  const workShelf = (libInfo.shelves || []).find((s) => s.kind === 'work');
+  await goto(`${BASE}/s/${peopleShelf.id}`, 1800);
+  const searchFocus = await evaluate(`(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const box = () => document.querySelector('.search input');
+    box().focus();
+    const steps = [];
+    for (const ch of 'zz焦点') {
+      const el = box();
+      el.value += ch;
+      el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      await sleep(320); // 超过 240ms 防抖，每敲一个字都真的触发一次搜索
+      steps.push({ ch, focused: document.activeElement === box(), value: box() && box().value });
+    }
+    return { steps, empty: !!document.querySelector('.grid .empty, .char-grid .empty') };
+  })()`);
+  check(
+    '顶栏搜索连续输入不丢焦点',
+    searchFocus.steps.length === 4 &&
+      searchFocus.steps.every((s) => s.focused) &&
+      searchFocus.steps[3].value === 'zz焦点' &&
+      searchFocus.empty,
+    JSON.stringify(searchFocus.steps)
+  );
+
+  const shelfLock = workShelf
+    ? await evaluate(`(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const names = ['E2E 库锁甲', 'E2E 库锁乙', 'E2E 库锁丙'];
+        document.querySelector('.search input').value = '';
+        document.querySelector('.search input').dispatchEvent(new InputEvent('input', { bubbles: true }));
+        await sleep(500);
+        document.querySelector('[data-new-char]').click();
+        await sleep(520);
+        const m = document.querySelector('.modal');
+        m.querySelector('[name=name]').value = names.join('，');
+        m.querySelector('[data-ok]').click();
+        // 批量还在跑的时候切到角色库：以前循环里读的是可变的 state.shelfId，剩下的会被丢进新库
+        setTimeout(() => document.querySelector('[data-shelf="${workShelf.id}"]').click(), 160);
+        await sleep(4200);
+        const rows = [];
+        for (const sid of [${peopleShelf.id}, ${workShelf.id}]) {
+          const d = await (await fetch('/api/shelves/' + sid + '/characters')).json();
+          for (const c of d.items || []) if (names.includes(c.name)) rows.push({ name: c.name, shelf: sid, id: c.id });
+        }
+        return { rows, names, path: location.pathname };
+      })()`)
+    : { rows: [], names: [], skipped: true };
+  check(
+    '批量新建中途切库也不串库',
+    workShelf &&
+      shelfLock.rows.length === 3 &&
+      shelfLock.rows.every((r) => r.shelf === peopleShelf.id),
+    workShelf ? JSON.stringify(shelfLock.rows.map((r) => `${r.name}@${r.shelf}`)) : '没有 work 类型的库，跳过'
+  );
+  for (const r of shelfLock.rows || []) {
+    await fetch(`${BASE}/api/characters/${r.id}`, { method: 'DELETE' });
+  }
+
   // 8.9 超宽素材跨两列：宽/高 > 2 的占两列（248 = 2×120 + 间隙），其余仍是 120
   const spanCharId = Number(newPath.split('/').pop());
   const spanUpload = await evaluate(`(async () => {

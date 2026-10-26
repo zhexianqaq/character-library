@@ -9,6 +9,50 @@ const FLAT_HOME = { emoji: '/e/', resource: '/rs/' };
 
 export async function LibraryView(root, shelfId) {
   const state = { q: '', shelfId: Number(shelfId) || null, sort: 'recent' };
+  // 列表数据放在视图层：搜索时只重画列表，不重建顶栏 —— 顶栏一重建，输入框就失焦了
+  let chars = { items: [], total: 0 };
+  let activeShelf = null;
+  let noun = '人物';
+
+  function paintCount() {
+    const el = root.querySelector('[data-count]');
+    if (!el) return;
+    el.textContent = `${chars.total} 个角色 · ${fmtNum(activeShelf ? activeShelf.mediaCount : 0)} 个媒体 · ${fmtBytes(
+      activeShelf ? activeShelf.bytes || 0 : 0
+    )}`;
+  }
+
+  function paintGrid() {
+    const grid = root.querySelector('[data-grid]');
+    if (!grid) return;
+    if (!chars.items.length) {
+      grid.innerHTML = `<div class="empty" style="grid-column:1/-1">
+        <b>${state.q ? '没有匹配的条目' : '这个库还是空的'}</b>
+        ${state.q ? '换个关键词试试' : `点右上角「新建${noun}」开始，建好之后可以把图片和视频传进去`}
+      </div>`;
+      return;
+    }
+    grid.innerHTML = chars.items
+      .map((c) => {
+        const img = c.coverMediaId ? api.thumb(c.coverMediaId) : '';
+        return `<a class="char-card" href="/c/${c.id}" data-link>
+            <div class="cover">
+              ${img ? `<img src="${img}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : '<div class="cover-empty">待添加</div>'}
+              <span class="badge">${fmtNum(c.mediaCount)}</span>
+            </div>
+            <div class="info">
+              <div class="name">${esc(c.name)}</div>
+              <div class="sub">${(() => {
+                const first = Array.isArray(c.platforms) && c.platforms.length ? c.platforms[0] : null;
+                const tag = first ? first.handle || first.platform : '';
+                return `${c.packCount} 个图包${tag ? ' · ' + esc(tag) : ''}`;
+              })()}</div>
+            </div>
+          </a>`;
+      })
+      .join('');
+    grid.querySelectorAll('img').forEach(fadeIn);
+  }
 
   async function render({ push = false } = {}) {
     const ov = await api.overview();
@@ -31,8 +75,9 @@ export async function LibraryView(root, shelfId) {
       return;
     }
     const isWork = active ? active.kind === 'work' : false;
-    const noun = isWork ? '角色' : '人物';
-    const chars = state.shelfId
+    noun = isWork ? '角色' : '人物';
+    activeShelf = active || null;
+    chars = state.shelfId
       ? await api.shelfCharacters(state.shelfId, { q: state.q, sort: state.sort })
       : { items: [], total: 0 };
 
@@ -58,7 +103,7 @@ export async function LibraryView(root, shelfId) {
              <button class="seg-add" data-new-shelf title="新建库">＋</button>
            </div>
            <span class="spacer"></span>
-           <span class="count">${chars.total} 个角色 · ${fmtNum(active ? active.mediaCount : 0)} 个媒体 · ${fmtBytes(
+           <span class="count" data-count>${chars.total} 个角色 · ${fmtNum(active ? active.mediaCount : 0)} 个媒体 · ${fmtBytes(
              active ? active.bytes || 0 : 0
            )}</span>
          </div>
@@ -66,35 +111,9 @@ export async function LibraryView(root, shelfId) {
        </main>`;
 
     bindTopbar(root);
+    paintGrid();
 
     const grid = root.querySelector('[data-grid]');
-    if (!chars.items.length) {
-      grid.innerHTML = `<div class="empty" style="grid-column:1/-1">
-        <b>${state.q ? '没有匹配的条目' : '这个库还是空的'}</b>
-        ${state.q ? '换个关键词试试' : `点右上角「新建${noun}」开始，建好之后可以把图片和视频传进去`}
-      </div>`;
-    } else {
-      grid.innerHTML = chars.items
-        .map((c) => {
-          const img = c.coverMediaId ? api.thumb(c.coverMediaId) : '';
-          return `<a class="char-card" href="/c/${c.id}" data-link>
-            <div class="cover">
-              ${img ? `<img src="${img}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : '<div class="cover-empty">待添加</div>'}
-              <span class="badge">${fmtNum(c.mediaCount)}</span>
-            </div>
-            <div class="info">
-              <div class="name">${esc(c.name)}</div>
-              <div class="sub">${(() => {
-                const first = Array.isArray(c.platforms) && c.platforms.length ? c.platforms[0] : null;
-                const tag = first ? first.handle || first.platform : '';
-                return `${c.packCount} 个图包${tag ? ' · ' + esc(tag) : ''}`;
-              })()}</div>
-            </div>
-          </a>`;
-        })
-        .join('');
-      grid.querySelectorAll('img').forEach(fadeIn);
-    }
 
     // 右键：卡片 → 条目操作；空白处 → 新建
     grid.addEventListener('contextmenu', (e) => {
@@ -242,10 +261,13 @@ export async function LibraryView(root, shelfId) {
           return;
         }
 
+        // 批量建的时候先把目标库定下来：循环里每轮都读 state.shelfId 的话，
+        // 中途切一次库（tab 点击）剩下的条目就会被丢进另一个库里
+        const targetShelf = state.shelfId;
         const failed = [];
         for (const name of names) {
           try {
-            await api.createCharacter({ shelfId: state.shelfId, name, intro: v.intro });
+            await api.createCharacter({ shelfId: targetShelf, name, intro: v.intro });
           } catch {
             failed.push(name);
           }
@@ -262,16 +284,26 @@ export async function LibraryView(root, shelfId) {
       }
     });
 
-    // 搜索
+    // 搜索：只重画列表和计数，顶栏保持不动。
+    // 以前这里是整页 render()，顶栏跟着重建 → 输入框被换掉、焦点丢失，只能打进去两三个字母。
     const input = root.querySelector('.search input');
     if (input) {
       input.value = state.q;
       let timer = null;
       input.addEventListener('input', () => {
+        state.q = input.value;
         clearTimeout(timer);
-        timer = setTimeout(() => {
-          state.q = input.value.trim();
-          render();
+        timer = setTimeout(async () => {
+          if (!state.shelfId) return;
+          try {
+            const next = await api.shelfCharacters(state.shelfId, { q: state.q.trim(), sort: state.sort });
+            if (!root.isConnected) return;
+            chars = next;
+            paintCount();
+            paintGrid();
+          } catch {
+            /* 搜索失败就保持上一次结果 */
+          }
         }, 240);
       });
     }
