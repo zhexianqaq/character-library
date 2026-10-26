@@ -3,6 +3,7 @@ import { CharacterView } from './views/character.js';
 import { PackView } from './views/pack.js';
 import { UploadsView } from './views/uploads.js';
 import { MediaView } from './views/media.js';
+import { EmojiView } from './views/emoji.js';
 import { initUploadHud } from './components/upload-hud.js';
 
 const app = document.getElementById('app');
@@ -11,6 +12,7 @@ const routes = [
   [/^\/$/, () => LibraryView(app, null)],
   [/^\/s\/(\d+)$/, (m) => LibraryView(app, Number(m[1]))],
   [/^\/c\/(\d+)$/, (m) => CharacterView(app, Number(m[1]))],
+  [/^\/e\/(\d+)$/, (m) => EmojiView(app, Number(m[1]))],
   [/^\/p\/(\d+)$/, (m) => PackView(app, Number(m[1]))],
   [/^\/i\/(\d+)$/, (m) => MediaView(app, Number(m[1]))],
   [/^\/uploads$/, () => UploadsView(app)],
@@ -39,7 +41,7 @@ export async function renderRoute() {
       app.innerHTML = '';
       const ret = await fn(m);
       if (typeof ret === 'function') cleanup = ret;
-      if (!/^\/(c|p|i)\/|^\/uploads/.test(path)) document.title = '资料库';
+      if (!/^\/(c|p|i|e)\/|^\/uploads/.test(path)) document.title = '资料库';
       window.scrollTo(0, 0);
     } catch (err) {
       console.error(err);

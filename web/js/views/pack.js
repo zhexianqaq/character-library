@@ -27,13 +27,17 @@ function gotoMedia(mediaId) {
 export async function PackView(root, id) {
   const [pack, media] = await Promise.all([api.pack(id), api.packMedia(id)]);
   let items = media.items;
+  // 表情库的图包挂在容器条目下，面包屑要回到库页而不是条目页
+  const emoji = !!(pack.shelf && pack.shelf.kind === 'emoji');
+  const crumbHref = emoji ? `/e/${pack.shelf.id}` : `/c/${pack.character.id}`;
+  const crumbName = emoji ? pack.shelf.name : pack.character.name;
 
   root.innerHTML =
     topbarHtml({ back: true, sub: '', actions: `<button class="tb-btn" data-rename>编辑</button>` }) +
     `<main class="page">
        <div class="toolbar">
          <div style="min-width:0">
-           <div class="crumb"><a href="/c/${pack.character.id}" data-link>${esc(pack.character.name)}</a></div>
+           <div class="crumb"><a href="${crumbHref}" data-link>${esc(crumbName)}</a></div>
            <div class="title-row">
              <h1 class="page-title" data-title>${esc(pack.title)}</h1>
              <span class="pack-date" data-date>${esc(packDateLabel(pack))}</span>
@@ -293,9 +297,11 @@ export async function PackView(root, id) {
   function addMediaItems() {
     return addMediaMenuItems({
       charId: pack.character.id,
-      charName: pack.character.name,
+      charName: emoji ? pack.shelf.name : pack.character.name,
       packId: pack.id,
       packTitle: pack.title,
+      // 表情库没有条目，菜单里不能写「从本角色素材添加」
+      selfLabel: emoji ? '本库' : '本角色',
       onUpload: () => pickFiles(),
       onDone: reload,
     });
@@ -364,21 +370,26 @@ export async function PackView(root, id) {
   root.querySelector('[data-rename]').addEventListener('click', async () => {
     const v = await openModal({
       title: '编辑图包',
-      fields: [
-        { name: 'title', label: '名称', value: pack.title, required: true },
-        {
-          name: 'month',
-          label: '拍摄日期（可选）',
-          type: 'month',
-          value: pack.month || '',
-          hint: '留空则显示创建日期',
-        },
-      ],
+      fields: emoji
+        ? [{ name: 'title', label: '名称', value: pack.title, required: true }]
+        : [
+            { name: 'title', label: '名称', value: pack.title, required: true },
+            {
+              name: 'month',
+              label: '拍摄日期（可选）',
+              type: 'month',
+              value: pack.month || '',
+              hint: '留空则显示创建日期',
+            },
+          ],
       submitText: '保存',
     });
     if (!v) return;
     try {
-      const saved = await api.updatePack(id, { title: v.title, month: v.month || null });
+      const saved = await api.updatePack(
+        id,
+        emoji ? { title: v.title } : { title: v.title, month: v.month || null }
+      );
       pack.title = saved.title;
       pack.month = saved.month;
       pack.createdAt = saved.createdAt;

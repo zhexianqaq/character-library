@@ -19,6 +19,14 @@ export async function LibraryView(root, shelfId) {
     }
 
     const active = shelves.find((s) => s.id === state.shelfId);
+    // 表情库没有条目层级，直接进自己的页面（图包 / 未分类 / 全部素材）
+    if (active && active.kind === 'emoji') {
+      history.replaceState({}, '', `/e/${active.id}`);
+      root.innerHTML = '';
+      // 当前这一轮 renderRoute 还占着 busy，下一帧再切
+      setTimeout(() => window.dispatchEvent(new CustomEvent('app:route')), 0);
+      return;
+    }
     const isWork = active ? active.kind === 'work' : false;
     const noun = isWork ? '角色' : '人物';
     const chars = state.shelfId
@@ -39,7 +47,9 @@ export async function LibraryView(root, shelfId) {
              ${shelves
                .map(
                  (s) =>
-                   `<button data-shelf="${s.id}" class="${s.id === state.shelfId ? 'on' : ''}">${esc(s.name)}<i>${s.characterCount}</i></button>`
+                   `<button data-shelf="${s.id}" class="${s.id === state.shelfId ? 'on' : ''}">${esc(s.name)}<i>${
+                     s.kind === 'emoji' ? s.packCount : s.characterCount
+                   }</i></button>`
                )
                .join('')}
              <button class="seg-add" data-new-shelf title="新建库">＋</button>
@@ -132,14 +142,21 @@ export async function LibraryView(root, shelfId) {
     root.querySelector('[data-tabs]').addEventListener('click', (e) => {
       const tab = e.target.closest('button[data-shelf]');
       if (!tab) return;
-      state.shelfId = Number(tab.dataset.shelf);
+      const nextId = Number(tab.dataset.shelf);
+      const nextShelf = shelves.find((s) => s.id === nextId);
+      if (nextShelf && nextShelf.kind === 'emoji') {
+        history.pushState({}, '', `/e/${nextId}`);
+        window.dispatchEvent(new CustomEvent('app:route'));
+        return;
+      }
+      state.shelfId = nextId;
       render({ push: true });
     });
 
     root.querySelector('[data-new-shelf]').addEventListener('click', async () => {
       const v = await openModal({
         title: '新建库',
-        description: '两种库结构完全一样，区别只在条目上那一栏：真人放社交账号，虚拟角色标出处。',
+        description: '人物库 / 角色库按「条目 → 图包 → 素材」组织；表情库没有条目，库里直接是图包。',
         fields: [
           { name: 'name', label: '名称', required: true, placeholder: '比如：人物库、角色库' },
           {
@@ -147,8 +164,9 @@ export async function LibraryView(root, shelfId) {
             label: '类型',
             type: 'select',
             options: [
-              { value: 'people', label: '真人 · 填平台账号（推特 / 微博 / B站…）' },
-              { value: 'work', label: '虚拟角色 · 标出处（游戏 / 动画 / 小说…）' },
+              { value: 'people', label: '人物库 · 真人，填平台账号' },
+              { value: 'work', label: '角色库 · 虚拟角色，标出处' },
+              { value: 'emoji', label: '表情库 · 没有条目，直接放图包（gif / 表情包）' },
             ],
             value: 'people',
             hint: '建好之后也能改，只影响条目那一栏的字段。',
@@ -158,8 +176,13 @@ export async function LibraryView(root, shelfId) {
       });
       if (!v) return;
       try {
-        await api.createShelf(v.name, v.kind);
+        const created = await api.createShelf(v.name, v.kind);
         toast('库已创建');
+        if (v.kind === 'emoji') {
+          history.pushState({}, '', `/e/${created.id}`);
+          window.dispatchEvent(new CustomEvent('app:route'));
+          return;
+        }
         render();
       } catch (err) {
         toast(err.message || '创建失败');

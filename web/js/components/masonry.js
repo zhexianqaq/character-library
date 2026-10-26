@@ -8,6 +8,7 @@ function tileHtml(it, opts = {}) {
   return `<button class="tile ratio${picked ? ' is-sel' : ''}" style="${aspectStyle(it.width, it.height, fallback)}" data-id="${it.id}">
     <img src="${api.thumb(it.id)}" alt="${esc(it.fileName)}" loading="lazy" decoding="async">
     ${isVideo ? '<span class="play"><i></i></span>' : ''}
+    ${!isVideo && it.ext === 'gif' ? '<span class="gif">GIF</span>' : ''}
     ${isVideo && it.durationMs ? `<span class="dur">${fmtDur(it.durationMs)}</span>` : ''}
     ${opts.selectable ? '<span class="tick" aria-hidden="true"></span>' : ''}
   </button>`;

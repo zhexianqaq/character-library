@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { DB_FILE, DATA_DIR, ensureDirs } from './config.js';
+import { DB_FILE, DATA_DIR, ensureDirs, slugify } from './config.js';
 
 /**
  * 层级：资料库 → 角色库 → 角色 → 图包 → 媒体
@@ -121,6 +121,10 @@ function migrate(d) {
   addColumnIfMissing('media', 'tags', `tags TEXT NOT NULL DEFAULT '[]'`);
   // 单个媒体的内容介绍（详情页可编辑，空着就用自动文案）
   addColumnIfMissing('media', 'intro', `intro TEXT NOT NULL DEFAULT ''`);
+  // 库类型：people 真人 / work 虚拟角色 / emoji 表情包（没有条目层级）
+  addColumnIfMissing('shelves', 'kind', `kind TEXT NOT NULL DEFAULT 'people'`);
+  // 表情库这类「扁平库」用一个隐藏条目承载图包和媒体，不当作真实条目展示
+  addColumnIfMissing('characters', 'is_container', `is_container INTEGER NOT NULL DEFAULT 0`);
   ensureSelfTags(d);
 }
 
@@ -130,7 +134,8 @@ function migrate(d) {
  * 固化到 character_tags，让条目自己的标签行里也能看到它。
  */
 export function ensureSelfTags(d = getDb()) {
-  const chars = d.prepare('SELECT id, name FROM characters').all();
+  // 容器条目不是用户建的条目，给它打名字标签会污染整个标签池
+  const chars = d.prepare('SELECT id, name FROM characters WHERE is_container = 0').all();
   if (!chars.length) return 0;
   const insTag = d.prepare('INSERT OR IGNORE INTO tags(name) VALUES(?)');
   const getTag = d.prepare('SELECT id FROM tags WHERE name = ?');
@@ -145,6 +150,40 @@ export function ensureSelfTags(d = getDb()) {
     n += link.run(c.id, t.id).changes;
   }
   return n;
+}
+
+/**
+ * 扁平库（表情库）的容器条目：一个库一条，不出现在条目列表里。
+ * 图包挂在它下面，媒体再挂在图包下面，这样目录层级简化为
+ * <库名>/<图包>/<图片|视频>，不用为它单写一套表。
+ */
+export function ensureShelfContainer(shelfId) {
+  const d = getDb();
+  const shelf = d.prepare('SELECT * FROM shelves WHERE id = ?').get(shelfId);
+  if (!shelf) return null;
+  const found = d
+    .prepare('SELECT * FROM characters WHERE shelf_id = ? AND is_container = 1 ORDER BY id LIMIT 1')
+    .get(shelfId);
+  if (found) return found;
+
+  // 库目录名直接用库名；万一撞了已有目录就加序号
+  const base = slugify(shelf.name) || '表情库';
+  let dirSlug = base;
+  let n = 2;
+  while (d.prepare('SELECT 1 FROM characters WHERE dir_slug = ?').get(dirSlug)) {
+    dirSlug = `${base}-${n}`;
+    n += 1;
+  }
+  const ts = nowIso();
+  const id = Number(
+    d
+      .prepare(
+        `INSERT INTO characters(shelf_id, name, account, intro, dir_slug, sort_order, created_at, updated_at, is_container)
+         VALUES(?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM characters WHERE shelf_id=?),?,?,1)`
+      )
+      .run(shelfId, shelf.name, null, '', dirSlug, shelfId, ts, ts).lastInsertRowid
+  );
+  return d.prepare('SELECT * FROM characters WHERE id = ?').get(id);
 }
 
 export function nowIso() {

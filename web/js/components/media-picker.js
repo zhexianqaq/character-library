@@ -1,9 +1,10 @@
 import { api } from '../api.js';
 import { esc, fmtBytes, toast, fadeIn, debounce } from '../util.js';
 
-const SCOPES = [
+// 范围都是相对的：人物库叫「本角色」，表情库这种扁平库叫「本库」
+const scopesFor = (selfLabel) => [
   { key: 'all', label: '全部素材' },
-  { key: 'character', label: '本角色' },
+  { key: 'character', label: selfLabel },
   { key: 'loose', label: '未分类' },
   { key: 'filed', label: '已归包' },
 ];
@@ -15,8 +16,16 @@ const PAGE = 36;
  * scope 决定初始范围（全部 / 本角色 / 未分类 / 已归包），弹窗里还能再切。
  * 返回 { moved, skipped } 或 null（取消）。
  */
-export function openMediaPicker({ charId, charName = '', packId, packTitle = '', scope = 'all' }) {
+export function openMediaPicker({
+  charId,
+  charName = '',
+  packId,
+  packTitle = '',
+  scope = 'all',
+  selfLabel = '本角色',
+}) {
   return new Promise((resolve) => {
+    const SCOPES = scopesFor(selfLabel);
     let curScope = SCOPES.some((s) => s.key === scope) ? scope : 'all';
     let curKind = '';
     let keyword = '';
@@ -251,14 +260,14 @@ export function openMediaPicker({ charId, charName = '', packId, packTitle = '',
 }
 
 /** 图包「添加素材」的四个来源，右键菜单和按钮都复用这一份 */
-export function addMediaMenuItems({ charId, charName, packId, packTitle, onUpload, onDone }) {
+export function addMediaMenuItems({ charId, charName, packId, packTitle, onUpload, onDone, selfLabel = '本角色' }) {
   const open = (scope) => () =>
-    openMediaPicker({ charId, charName, packId, packTitle, scope }).then((res) => {
+    openMediaPicker({ charId, charName, packId, packTitle, scope, selfLabel }).then((res) => {
       if (res && res.moved && onDone) onDone(res);
     });
   return [
     { label: '从全部素材添加', hint: '整个资料库', onClick: open('all') },
-    { label: '从本角色素材添加', hint: charName || '', onClick: open('character') },
+    { label: `从${selfLabel}素材添加`, hint: charName || '', onClick: open('character') },
     { label: '从未分类素材添加', hint: '还没归包', onClick: open('loose') },
     { separator: true },
     { label: '从本地文件上传', hint: '拖拽也可以', onClick: onUpload },

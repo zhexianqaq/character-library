@@ -1609,6 +1609,17 @@ img { display: block; }
   transition: opacity 0.35s var(--ease);
 }
 .mp-canvas img.loaded { opacity: 1; }
+/* 原始尺寸不足 360px 的小图（表情包）按原生大小居中，不放大 */
+.mp-canvas img.is-small {
+  inset: auto;
+  left: 50%;
+  top: 50%;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  transform: translate(-50%, -50%);
+}
 /* 视频画布由 JS 按视频比例定尺寸，所以这里直接铺满自己那格 */
 .mp-canvas video {
   display: block;
@@ -2069,3 +2080,101 @@ img { display: block; }
   padding: 0 12px;
 }
 .filter-search input { font-size: 12px; }
+
+/* ============ 表情库（扁平库：图包 / 未分类 / 全部素材） ============ */
+.shelf-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 22px 12px 14px;
+}
+.shelf-head .spacer { flex: 1; }
+.sh-main { min-width: 0; }
+.sh-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.6px;
+  line-height: 1.2;
+}
+.sh-meta {
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 图包封面：前 9 张拼成一张 */
+.emoji-grid { grid-template-columns: repeat(auto-fill, minmax(184px, 1fr)); }
+.emoji-card .mosaic {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  display: grid;
+  grid-auto-rows: 1fr;
+  gap: 2px;
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--fill);
+}
+.emoji-card .mosaic.c1 { grid-template-columns: 1fr; }
+.emoji-card .mosaic.c2 { grid-template-columns: 1fr 1fr; }
+.emoji-card .mosaic.c3 { grid-template-columns: repeat(3, 1fr); }
+.emoji-card .mosaic img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.35s var(--ease);
+}
+.emoji-card .mosaic img.loaded { opacity: 1; }
+.emoji-card .mosaic .ph { background: var(--fill-2); }
+.emoji-card .mosaic.is-empty {
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.emoji-card .ptags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+.emoji-card .ptags span {
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--r-pill);
+  background: var(--fill);
+  font-size: 10px;
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 动图角标：瓦片左上角一个极小的 GIF */
+.tile .gif {
+  position: absolute;
+  right: 5px;
+  top: 5px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  display: flex;
+  align-items: center;
+}
+
+@media (max-width: 760px) {
+  .shelf-head { padding: 16px 8px 10px; flex-wrap: wrap; }
+  .sh-title { font-size: 22px; }
+  .emoji-grid { grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); }
+}

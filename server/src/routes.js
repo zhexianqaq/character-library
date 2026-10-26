@@ -13,6 +13,7 @@ import {
   refreshPack,
   refreshCharacterPacks,
   ensureSelfTags,
+  ensureShelfContainer,
 } from './db.js';
 import { getDerivative, warmAll, warmState } from './thumbs.js';
 import { WEB_DIR, INBOX_DIR, DATA_DIR, slugify } from './config.js';
@@ -86,16 +87,37 @@ function mergeTags(...lists) {
   return out;
 }
 
+/**
+ * 扁平库（表情库）：没有条目层级，图包才是真正的分类。
+ * 这类库的媒体只带自己的标签 + 所属图包的标签，不加条目名 / 人物角色。
+ */
+function isFlatChar(db, charId) {
+  const c = db
+    .prepare(`SELECT c.is_container, sh.kind FROM characters c LEFT JOIN shelves sh ON sh.id = c.shelf_id WHERE c.id = ?`)
+    .get(charId);
+  return !!(c && (c.is_container || c.kind === 'emoji'));
+}
+
 /** 媒体继承的标签：角色自己的标签 + 库类型（人物/角色）+ 角色名本身 */
 function mediaTagSet(db, charId) {
   const c = db
-    .prepare(`SELECT c.name, sh.kind FROM characters c LEFT JOIN shelves sh ON sh.id = c.shelf_id WHERE c.id = ?`)
+    .prepare(`SELECT c.name, c.is_container, sh.kind FROM characters c LEFT JOIN shelves sh ON sh.id = c.shelf_id WHERE c.id = ?`)
     .get(charId);
   if (!c) return [];
+  if (c.is_container || c.kind === 'emoji') return [];
   const set = new Set(tagsOf(db, charId));
   set.add(c.name);
   set.add(c.kind === 'work' ? '角色' : '人物');
   return [...set];
+}
+
+/** 表情库里图包标签会下发给包内每张图，标一次全包生效 */
+function packTagMap(db, charId) {
+  const map = new Map();
+  for (const r of db.prepare('SELECT id, tags FROM packs WHERE character_id = ?').all(charId)) {
+    map.set(r.id, safeJson(r.tags));
+  }
+  return map;
 }
 
 function mapChar(row, tags) {
@@ -129,9 +151,16 @@ function safeJson(raw) {
   }
 }
 
-/** 库的类型：people=真人（有社交账号）/ work=虚拟角色（标注出处） */
+/**
+ * 库的类型：
+ * people 真人（有社交账号）/ work 虚拟角色（标注出处）
+ * emoji 表情包（没有条目层级，库里直接是图包 + 未分类 + 全部素材）
+ */
 function normalizeShelfKind(v) {
-  return String(v || '').toLowerCase() === 'work' ? 'work' : 'people';
+  const k = String(v || '').toLowerCase();
+  if (k === 'work') return 'work';
+  if (k === 'emoji') return 'emoji';
+  return 'people';
 }
 
 /** 平台主页网址：只收 http/https；没写协议就补 https；非法值直接丢弃 */
@@ -162,6 +191,8 @@ function mapMedia(r) {
     id: r.id,
     packId: r.pack_id,
     kind: r.kind,
+    // 库里存的是带点的 .gif，前端只认 gif
+    ext: String(r.ext || '').toLowerCase().replace(/^\./, ''),
     fileName: r.file_name,
     width: r.width,
     height: r.height,
@@ -305,8 +336,11 @@ export function createApp() {
     const shelves = db
       .prepare(
         `SELECT s.*,
-           (SELECT COUNT(*) FROM characters c WHERE c.shelf_id = s.id) AS character_count,
+           (SELECT COUNT(*) FROM characters c WHERE c.shelf_id = s.id AND c.is_container = 0) AS character_count,
            (SELECT COUNT(*) FROM media m JOIN characters c ON c.id = m.character_id WHERE c.shelf_id = s.id) AS media_count,
+           (SELECT COUNT(*) FROM packs p JOIN characters c ON c.id = p.character_id WHERE c.shelf_id = s.id) AS pack_count,
+           (SELECT COUNT(*) FROM media m JOIN characters c ON c.id = m.character_id
+              WHERE c.shelf_id = s.id AND (LOWER(m.ext) = '.gif' OR m.kind = 'video')) AS anim_count,
            (SELECT COALESCE(SUM(m.bytes),0) FROM media m JOIN characters c ON c.id = m.character_id WHERE c.shelf_id = s.id) AS bytes,
            (SELECT m.id FROM media m JOIN characters c ON c.id = m.character_id
               WHERE c.shelf_id = s.id AND m.kind IN ('image','video')
@@ -317,7 +351,7 @@ export function createApp() {
     const totals = db
       .prepare(
         `SELECT
-           (SELECT COUNT(*) FROM characters) characters,
+           (SELECT COUNT(*) FROM characters WHERE is_container = 0) characters,
            (SELECT COUNT(*) FROM media) media,
            (SELECT COUNT(*) FROM packs) packs,
            (SELECT COALESCE(SUM(bytes),0) FROM media) bytes`
@@ -331,7 +365,9 @@ export function createApp() {
         note: s.note,
         kind: s.kind || 'people',
         characterCount: s.character_count,
+        packCount: s.pack_count,
         mediaCount: s.media_count,
+        animCount: s.anim_count,
         bytes: s.bytes,
         coverMediaId: s.cover_media_id,
       })),
@@ -362,7 +398,9 @@ export function createApp() {
         )
         .lastInsertRowid
     );
-    res.json({ id, name, kind: normalizeShelfKind(req.body.kind) });
+    const kind = normalizeShelfKind(req.body.kind);
+    if (kind === 'emoji') ensureShelfContainer(id);
+    res.json({ id, name, kind });
   });
 
   app.patch('/api/shelves/:id', (req, res) => {
@@ -371,21 +409,28 @@ export function createApp() {
     const { name, note, kind } = req.body || {};
     const row = db.prepare('SELECT * FROM shelves WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ error: '库不存在' });
+    const nextKind = kind === undefined ? row.kind : normalizeShelfKind(kind);
     db.prepare('UPDATE shelves SET name = ?, note = ?, kind = ?, updated_at = ? WHERE id = ?').run(
       typeof name === 'string' && name.trim() ? name.trim().slice(0, 60) : row.name,
       typeof note === 'string' ? note.slice(0, 500) : row.note,
-      kind === undefined ? row.kind : normalizeShelfKind(kind),
+      nextKind,
       nowIso(),
       id
     );
-    res.json({ ok: true });
+    // 改成表情库时补一个容器条目，否则前端没有地方挂图包
+    if (nextKind === 'emoji') ensureShelfContainer(id);
+    res.json({ ok: true, kind: nextKind });
   });
 
   app.delete('/api/shelves/:id', (req, res) => {
     const db = getDb();
     const id = Number(req.params.id);
-    const n = db.prepare('SELECT COUNT(*) n FROM characters WHERE shelf_id = ?').get(id).n;
-    if (n > 0) return res.status(400).json({ error: `该角色库下还有 ${n} 个角色，请先移走或删除` });
+    const n = db.prepare('SELECT COUNT(*) n FROM characters WHERE shelf_id = ? AND is_container = 0').get(id).n;
+    if (n > 0) return res.status(400).json({ error: `该库下还有 ${n} 个条目，请先移走或删除` });
+    const media = db
+      .prepare('SELECT COUNT(*) n FROM media m JOIN characters c ON c.id = m.character_id WHERE c.shelf_id = ?')
+      .get(id).n;
+    if (media > 0) return res.status(400).json({ error: `该库下还有 ${media} 个媒体，请先清空` });
     db.prepare('DELETE FROM shelves WHERE id = ?').run(id);
     res.json({ ok: true });
   });
@@ -465,7 +510,7 @@ export function createApp() {
     const shelfId = Number(req.params.id);
     const q = String(req.query.q || '').trim();
     const sort = String(req.query.sort || 'recent');
-    const where = ['c.shelf_id = @shelfId'];
+    const where = ['c.shelf_id = @shelfId', 'c.is_container = 0'];
     const params = { shelfId };
     if (q) {
       where.push('(c.name LIKE @q OR c.account LIKE @q)');
@@ -479,6 +524,82 @@ export function createApp() {
       .prepare(`${CHAR_SELECT} WHERE ${where.join(' AND ')} ${order}`)
       .all(params);
     res.json({ items: rows.map((r) => mapChar(r, tagsOf(db, r.id))), total: rows.length });
+  });
+
+  /**
+   * 表情库首页：库里没有条目层级，直接给「图包 + 未分类 + 全部素材」三类。
+   * 图包带上前 9 张图，前端拼成 3×3 封面。
+   */
+  app.get('/api/shelves/:id/emoji', (req, res) => {
+    const db = getDb();
+    const shelfId = Number(req.params.id);
+    const shelf = db.prepare('SELECT * FROM shelves WHERE id = ?').get(shelfId);
+    if (!shelf) return res.status(404).json({ error: '库不存在' });
+    const container = ensureShelfContainer(shelfId);
+    if (!container) return res.status(404).json({ error: '表情库没有准备好' });
+
+    const packs = db
+      .prepare(
+        `SELECT p.id, p.title, p.month, p.category, p.tags, p.created_at,
+           (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id) AS media_count,
+           (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id AND (LOWER(m.ext) = '.gif' OR m.kind = 'video')) AS anim_count
+         FROM packs p WHERE p.character_id = ?
+         ORDER BY p.sort_order, p.id`
+      )
+      .all(container.id);
+
+    // 一次取完按包分组，避免 30 个图包发 30 条查询
+    const rows = db
+      .prepare(
+        `SELECT id, pack_id FROM media
+         WHERE character_id = ? AND pack_id IS NOT NULL AND kind = 'image'
+         ORDER BY pack_id, sort_order, id`
+      )
+      .all(container.id);
+    const byPack = new Map();
+    for (const r of rows) {
+      const arr = byPack.get(r.pack_id) || [];
+      if (arr.length < 9) arr.push(r.id);
+      byPack.set(r.pack_id, arr);
+    }
+
+    const stat = db
+      .prepare(
+        `SELECT COUNT(*) total,
+           SUM(CASE WHEN pack_id IS NULL THEN 1 ELSE 0 END) loose,
+           SUM(CASE WHEN LOWER(ext) = '.gif' OR kind = 'video' THEN 1 ELSE 0 END) anim,
+           SUM(CASE WHEN LOWER(ext) = '.gif' THEN 1 ELSE 0 END) gifs,
+           SUM(CASE WHEN kind = 'video' THEN 1 ELSE 0 END) videos,
+           COALESCE(SUM(bytes),0) bytes
+         FROM media WHERE character_id = ?`
+      )
+      .get(container.id);
+
+    res.json({
+      shelf: { id: shelf.id, name: shelf.name, note: shelf.note, kind: shelf.kind || 'emoji' },
+      containerId: container.id,
+      stats: {
+        total: stat.total || 0,
+        loose: stat.loose || 0,
+        anim: stat.anim || 0,
+        gifs: stat.gifs || 0,
+        videos: stat.videos || 0,
+        still: (stat.total || 0) - (stat.anim || 0),
+        bytes: stat.bytes || 0,
+        packs: packs.length,
+      },
+      packs: packs.map((p) => ({
+        id: p.id,
+        title: p.title,
+        month: p.month,
+        category: p.category,
+        tags: safeJson(p.tags),
+        createdAt: p.created_at,
+        mediaCount: p.media_count,
+        animCount: p.anim_count,
+        thumbs: byPack.get(p.id) || [],
+      })),
+    });
   });
 
   app.post('/api/characters', async (req, res) => {
@@ -670,8 +791,11 @@ export function createApp() {
     const db = getDb();
     const row = db
       .prepare(
-        `SELECT p.*, c.name AS char_name, c.id AS char_id, c.account AS char_account
-         FROM packs p JOIN characters c ON c.id = p.character_id WHERE p.id = ?`
+        `SELECT p.*, c.name AS char_name, c.id AS char_id, c.account AS char_account, c.is_container,
+                sh.id AS shelf_id, sh.name AS shelf_name, sh.kind AS shelf_kind
+         FROM packs p JOIN characters c ON c.id = p.character_id
+         LEFT JOIN shelves sh ON sh.id = c.shelf_id
+         WHERE p.id = ?`
       )
       .get(Number(req.params.id));
     if (!row) return res.status(404).json({ error: '图包不存在' });
@@ -683,7 +807,8 @@ export function createApp() {
       tags: safeJson(row.tags),
       createdAt: row.created_at,
       coverMediaId: row.cover_media_id,
-      character: { id: row.char_id, name: row.char_name, account: row.char_account },
+      character: { id: row.char_id, name: row.char_name, account: row.char_account, container: !!row.is_container },
+      shelf: { id: row.shelf_id, name: row.shelf_name || '', kind: row.shelf_kind || 'people' },
       counts: db
         .prepare(`SELECT kind, COUNT(*) n FROM media WHERE pack_id = ? GROUP BY kind`)
         .all(row.id)
@@ -849,13 +974,18 @@ export function createApp() {
   app.get('/api/packs/:id/media', (req, res) => {
     const db = getDb();
     const packId = Number(req.params.id);
-    const pack = db.prepare('SELECT character_id FROM packs WHERE id = ?').get(packId);
+    const pack = db.prepare('SELECT character_id, tags FROM packs WHERE id = ?').get(packId);
     const rows = db
       .prepare('SELECT * FROM media WHERE pack_id = ? ORDER BY sort_order, file_name')
       .all(packId);
     const base = pack ? mediaTagSet(db, pack.character_id) : [];
+    // 表情库：图包标签下发给包内每张图，标一次全包生效
+    const packTags = pack && isFlatChar(db, pack.character_id) ? safeJson(pack.tags) : [];
     res.json({
-      items: rows.map((r) => ({ ...mapMedia(r), tags: mergeTags(r.tags ? safeJson(r.tags) : [], base) })),
+      items: rows.map((r) => ({
+        ...mapMedia(r),
+        tags: mergeTags(r.tags ? safeJson(r.tags) : [], base, packTags),
+      })),
       total: rows.length,
     });
   });
@@ -1025,8 +1155,16 @@ export function createApp() {
       .prepare(`SELECT * FROM media WHERE ${where.join(' AND ')} ORDER BY sort_order DESC, id DESC`)
       .all(params);
     const base = mediaTagSet(db, charId);
+    const packTags = isFlatChar(db, charId) ? packTagMap(db, charId) : null;
     res.json({
-      items: rows.map((r) => ({ ...mapMedia(r), tags: mergeTags(r.tags ? safeJson(r.tags) : [], base) })),
+      items: rows.map((r) => ({
+        ...mapMedia(r),
+        tags: mergeTags(
+          r.tags ? safeJson(r.tags) : [],
+          base,
+          packTags ? packTags.get(r.pack_id) : []
+        ),
+      })),
       total: rows.length,
     });
   });
@@ -1071,16 +1209,21 @@ export function createApp() {
 
       // 先定图包，才知道文件该进哪个目录
       const month = monthOfFileName(originalName);
+      // 表情库没有「按日期归包」：不指定图包就直接落到未分类
       const pack = forcedPackId
         ? db.prepare('SELECT id, title, category FROM packs WHERE id = ?').get(forcedPackId)
-        : ensurePackFor(db, charId, month, category);
-      if (!pack) {
+        : char.is_container
+          ? null
+          : ensurePackFor(db, charId, month, category);
+      if (forcedPackId && !pack) {
         await drop();
         skipped.push({ name: originalName, reason: '图包不存在' });
         continue;
       }
 
-      const relDir = await resolvePackDir(db, char.dir_slug, pack, kind, pack.category || category);
+      const relDir = pack
+        ? await resolvePackDir(db, char.dir_slug, pack, kind, pack.category || category)
+        : `${char.dir_slug}/未分类/${kind === 'image' ? '图片' : '视频'}`;
 
       let saved;
       try {
@@ -1101,7 +1244,20 @@ export function createApp() {
            VALUES(?,?,?,?,?,?,?,?,?,?,
              (SELECT COALESCE(MAX(sort_order),-1)+1 FROM media WHERE pack_id IS ?),?)`
         )
-        .run(charId, pack.id, kind, saved.relPath, originalName, saved.ext, saved.bytes, saved.sha256, saved.width, saved.height, pack.id, nowIso());
+        .run(
+          charId,
+          pack ? pack.id : null,
+          kind,
+          saved.relPath,
+          originalName,
+          saved.ext,
+          saved.bytes,
+          saved.sha256,
+          saved.width,
+          saved.height,
+          pack ? pack.id : null,
+          nowIso()
+        );
       const newId = Number(info.lastInsertRowid);
       added.push(newId);
       getDerivative(newId, 'thumb').catch(() => {});
@@ -1117,7 +1273,7 @@ export function createApp() {
     const db = getDb();
     const row = db
       .prepare(
-        `SELECT m.*, c.name AS char_name, sh.name AS shelf_name, sh.kind AS shelf_kind,
+        `SELECT m.*, c.name AS char_name, c.is_container, sh.id AS shelf_id, sh.name AS shelf_name, sh.kind AS shelf_kind,
                 p.title AS pack_title, p.month AS pack_month, p.category AS pack_category
          FROM media m
          JOIN characters c ON c.id = m.character_id
@@ -1130,9 +1286,12 @@ export function createApp() {
 
     const base = mediaTagSet(db, row.character_id);
     const own = safeJson(row.tags);
+    // 表情库：图包标签算继承标签，详情页要能看到
+    const packRow = row.pack_id ? db.prepare('SELECT tags FROM packs WHERE id = ?').get(row.pack_id) : null;
+    const inheritedPackTags = packRow && isFlatChar(db, row.character_id) ? safeJson(packRow.tags) : [];
     res.json({
       ...mapMedia(row),
-      tags: mergeTags(own, base),
+      tags: mergeTags(own, base, inheritedPackTags),
       ownTags: own,
       intro: row.intro || '',
       createdAt: row.created_at,
@@ -1142,8 +1301,8 @@ export function createApp() {
       pack: row.pack_id
         ? { id: row.pack_id, title: row.pack_title, month: row.pack_month, category: row.pack_category }
         : null,
-      character: { id: row.character_id, name: row.char_name },
-      shelf: { name: row.shelf_name || '', kind: row.shelf_kind || 'people' },
+      character: { id: row.character_id, name: row.char_name, container: !!row.is_container },
+      shelf: { id: row.shelf_id, name: row.shelf_name || '', kind: row.shelf_kind || 'people' },
     });
   });
 

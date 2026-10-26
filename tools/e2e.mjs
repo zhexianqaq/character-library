@@ -189,7 +189,7 @@ try {
   // 1.5 多库：每个库独立统计，切换会改 URL
   const shelves = await evaluate(`(() => fetch('/api/overview')
     .then((r) => r.json())
-    .then((o) => o.shelves.map((s) => ({ id: s.id, name: s.name, bytes: s.bytes, chars: s.characterCount }))))()`);
+    .then((o) => o.shelves.map((s) => ({ id: s.id, name: s.name, kind: s.kind, bytes: s.bytes, chars: s.characterCount }))))()`);
   check(
     '每个库都有独立的角色数与占用',
     shelves.length > 0 && shelves.every((x) => typeof x.bytes === 'number' && typeof x.chars === 'number'),
@@ -198,7 +198,9 @@ try {
   if (shelves.length > 1) {
     const tabCount = await evaluate(`document.querySelectorAll('[data-shelf]').length`);
     check('库标签数量与接口一致', tabCount === shelves.length, `${tabCount} 个标签`);
-    const last = shelves[shelves.length - 1];
+    // 表情库没有条目层，切它不会停在 /s/:id，所以这里挑一个普通库来验 URL
+    const regular = shelves.filter((s) => s.kind !== 'emoji');
+    const last = regular[regular.length - 1] || shelves[0];
     await evaluate(`document.querySelector('[data-shelf="${last.id}"]').click()`);
     await sleep(1200);
     const after = await evaluate(`({
@@ -210,6 +212,17 @@ try {
       after.path === `/s/${last.id}` && after.active === String(last.id),
       JSON.stringify(after)
     );
+
+    // 表情库标签直接进自己的页面
+    const emojiTab = shelves.find((s) => s.kind === 'emoji');
+    if (emojiTab) {
+      await evaluate(`document.querySelector('[data-shelf="${emojiTab.id}"]').click()`);
+      await sleep(1600);
+      const p = await evaluate(`location.pathname`);
+      check('表情库标签跳到 /e/:id', p === `/e/${emojiTab.id}`, p);
+      await goto(`${BASE}/`, 1600);
+    }
+
     // 切回第一个库，后面的用例依赖角色列表
     await evaluate(`document.querySelector('[data-shelf="${shelves[0].id}"]').click()`);
     await sleep(1200);
@@ -846,6 +859,120 @@ try {
   check('编辑弹窗含可编辑的拍摄日期', editFields && editFields.hasMonth === true, editFields ? editFields.monthValue : '');
   await evaluate(`document.querySelector('.modal [data-cancel]').click()`);
   await sleep(300);
+
+  // 9. 表情库：扁平库 = 图包 / 未分类 / 全部素材
+  const emojiShelf = shelves.find((s) => s.kind === 'emoji');
+  if (emojiShelf) {
+    await goto(`${BASE}/e/${emojiShelf.id}`, 2600);
+    const emo = await evaluate(`(() => {
+      const cards = [...document.querySelectorAll('.emoji-card')];
+      return {
+        cards: cards.length,
+        mosaics: cards.map((c) => c.querySelectorAll('.mosaic img').length),
+        tabs: [...document.querySelectorAll('[data-view] button')].map((b) => b.dataset.v),
+        meta: document.querySelector('[data-shelf-meta]')?.textContent || '',
+        entryRows: document.querySelectorAll('.hero, .char-grid').length,
+      };
+    })()`);
+    check(
+      '表情库直接展示图包（没有条目层）',
+      emo.cards > 0 && emo.meta.includes('个图包') && emo.entryRows === 0,
+      `${emo.cards} 个图包 · ${emo.meta}`
+    );
+    check(
+      '图包封面是前 9 张拼图',
+      emo.mosaics.every((n) => n > 0 && n <= 9) && emo.mosaics.some((n) => n === 9),
+      emo.mosaics.join(' / ')
+    );
+    check(
+      '三个分区：图包 / 未分类 / 全部素材',
+      JSON.stringify(emo.tabs) === JSON.stringify(['packs', 'loose', 'all']),
+      emo.tabs.join(' / ')
+    );
+
+    const emoFilter = await evaluate(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      document.querySelector('[data-view] button[data-v="all"]').click();
+      await sleep(2600);
+      const bar = document.querySelector('[data-filter-bar]');
+      const out = {
+        all: document.querySelectorAll('.tile').length,
+        barShown: !bar.hidden,
+        packDD: bar.querySelectorAll('.dd').length,
+      };
+      bar.querySelector('[data-k="anim"]').click();
+      await sleep(900);
+      out.anim = document.querySelectorAll('.tile').length;
+      out.badges = document.querySelectorAll('.tile .gif').length;
+      bar.querySelector('[data-k="still"]').click();
+      await sleep(900);
+      out.still = document.querySelectorAll('.tile').length;
+      bar.querySelector('[data-k=""]').click();
+      await sleep(700);
+      return out;
+    })()`);
+    check('全部素材有筛选条（类型 + 标签 + 图包 + 排序）', emoFilter.barShown && emoFilter.packDD === 3, JSON.stringify({ dds: emoFilter.packDD }));
+    check(
+      '动图 / 表情 能分开筛',
+      emoFilter.anim > 0 && emoFilter.still > 0 && emoFilter.anim + emoFilter.still === emoFilter.all,
+      `${emoFilter.all} = ${emoFilter.anim} 动图 + ${emoFilter.still} 表情`
+    );
+    check('gif 瓦片带 GIF 角标', emoFilter.badges === emoFilter.anim, `${emoFilter.badges} 个角标`);
+
+    // 选取图包
+    const emoSel = await evaluate(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      document.querySelector('[data-view] button[data-v="packs"]').click();
+      await sleep(1200);
+      document.querySelector('[data-select-toggle]').click();
+      await sleep(1000);
+      const cards = [...document.querySelectorAll('.emoji-card')];
+      cards[0].click();
+      cards[1].click();
+      await sleep(300);
+      const out = {
+        n: document.querySelector('.sel-n b')?.textContent,
+        acts: [...document.querySelectorAll('.sel-bar button')].map((b) => b.textContent.trim()),
+        path: location.pathname,
+      };
+      document.querySelector('[data-sel="exit"]').click();
+      await sleep(700);
+      return out;
+    })()`);
+    check(
+      '表情库图包能多选 / 解散 / 删除',
+      emoSel.n === '2' && emoSel.acts.includes('解散') && emoSel.acts.includes('删除'),
+      `${emoSel.n} 个 · ${emoSel.acts.join(' ')}`
+    );
+
+    // 详情页：gif 走原件才动得起来
+    const gifId = await evaluate(`(async () => {
+      const d = await (await fetch('/api/shelves/${emojiShelf.id}/emoji')).json();
+      const p = d.packs.find((x) => x.animCount > 0) || d.packs[0];
+      const m = await (await fetch('/api/packs/' + p.id + '/media')).json();
+      const hit = m.items.find((x) => x.ext === 'gif') || m.items[0];
+      return hit ? hit.id : 0;
+    })()`);
+    if (gifId) {
+      await goto(`${BASE}/i/${gifId}`, 2600);
+      const gif = await evaluate(`(() => {
+        const img = document.querySelector('.mp-canvas img');
+        return {
+          src: img?.getAttribute('src') || '',
+          chip: document.querySelector('.mp-chip-name')?.textContent || '',
+          rows: [...document.querySelectorAll('.mp-row > span')].map((s) => s.textContent),
+          kicker: document.querySelector('.mp-kicker')?.textContent || '',
+        };
+      })()`);
+      check('gif 详情页用原件（能动）', gif.src === `/m/${gifId}`, gif.src);
+      check(
+        '表情库详情页只显示库 / 图包，不显示条目',
+        gif.chip.startsWith(emojiShelf.name) && !gif.rows.includes('关联'),
+        `${gif.chip} · ${gif.rows.join('/')}`
+      );
+      check('gif 详情页标题是 GIF DETAILS', gif.kicker === 'GIF DETAILS', gif.kicker);
+    }
+  }
 
   // 9. 删除角色（走接口，顺带验证级联清理）
   const charId = Number(newPath.split('/').pop());

@@ -43,7 +43,7 @@ export async function MediaView(root, id) {
   const entryFrom = (() => {
     const st = history.state;
     const f = st && typeof st.from === 'string' ? st.from : '';
-    return /^\/(c|p|s)\//.test(f) ? f : '';
+    return /^\/(c|p|s|e)\//.test(f) ? f : '';
   })();
 
   root.innerHTML = `
@@ -59,6 +59,10 @@ export async function MediaView(root, id) {
       </section>
       <aside class="mp-info" data-info></aside>
     </main>`;
+
+  /** 表情库：没有条目层级，标签 / 位置都按「库 + 图包」算 */
+  const isFlat = () => !!(item.shelf && item.shelf.kind === 'emoji');
+  const groupName = () => (item.pack ? item.pack.title : isFlat() ? '未分类' : item.character.name);
 
   const stage = root.querySelector('.mp-stage');
   const canvas = root.querySelector('.mp-canvas');
@@ -88,8 +92,10 @@ export async function MediaView(root, id) {
 
   function renderStage() {
     const isVideo = item.kind === 'video';
-    // 胶囊写「条目 · 图包」，比整条文件名好认
-    chipName.textContent = [item.character.name, item.pack ? item.pack.title : ''].filter(Boolean).join(' · ');
+    // 胶囊写「条目 · 图包」，比整条文件名好认；表情库只写库 + 图包
+    chipName.textContent = isFlat()
+      ? [item.shelf.name, groupName()].filter(Boolean).join(' · ')
+      : [item.character.name, item.pack ? item.pack.title : ''].filter(Boolean).join(' · ');
     chipName.title = item.fileName;
     canvas.style.width = '';
     canvas.style.height = '';
@@ -101,9 +107,23 @@ export async function MediaView(root, id) {
       v.addEventListener('loadedmetadata', fitVideo, { once: true });
       if (v.videoWidth) fitVideo(); // 元数据已在缓存里的话事件不会再发
     } else {
-      canvas.innerHTML = `<img data-img src="${api.preview(item.id)}" alt="${esc(item.fileName)}" />`;
+      // gif 用原件，预览图是静态首帧，动图动不起来
+      const src = item.ext === 'gif' ? api.original(item.id) : api.preview(item.id);
+      canvas.innerHTML = `<img data-img src="${src}" alt="${esc(item.fileName)}" />`;
       const img = canvas.querySelector('[data-img]');
       fadeIn(img);
+      // 小图（表情包多为 200~300px）最多放大 2 倍并居中，硬拉满整块会糊
+      const markSmall = () => {
+        const nw = img.naturalWidth;
+        if (!nw || nw >= 360) return;
+        const box = canvas.getBoundingClientRect();
+        const scale = Math.min(2, (box.width - 16) / nw, (box.height - 16) / img.naturalHeight);
+        img.classList.add('is-small');
+        img.style.width = `${Math.round(nw * Math.max(1, scale))}px`;
+        img.style.height = `${Math.round(img.naturalHeight * Math.max(1, scale))}px`;
+      };
+      if (img.complete) markSmall();
+      else img.addEventListener('load', markSmall, { once: true });
       img.addEventListener('click', () => openLightbox(siblings, indexOf(item.id)));
     }
     stage.classList.toggle('is-video', isVideo);
@@ -112,15 +132,20 @@ export async function MediaView(root, id) {
   function renderInfo() {
     const isVideo = item.kind === 'video';
     const res = item.width && item.height ? `${item.width} × ${item.height}` : '未知';
-    const place = [item.shelf.name, item.character.name, item.pack ? item.pack.title : '未归包']
-      .filter(Boolean)
-      .join(' / ');
-    const intro = item.intro || `与「${item.character.name}」相关的${isVideo ? '视频素材' : '图片素材'}。`;
+    const animated = !isVideo && item.ext === 'gif';
+    const place = isFlat()
+      ? [item.shelf.name, groupName()].filter(Boolean).join(' / ')
+      : [item.shelf.name, item.character.name, item.pack ? item.pack.title : '未归包']
+          .filter(Boolean)
+          .join(' / ');
+    const intro =
+      item.intro ||
+      `与「${isFlat() ? groupName() : item.character.name}」相关的${isVideo ? '视频素材' : '图片素材'}。`;
     const prev = indexOf(item.id) > 0;
     const next = indexOf(item.id) < siblings.length - 1;
 
     info.innerHTML = `
-      <div class="mp-kicker">${isVideo ? 'VIDEO DETAILS' : 'IMAGE DETAILS'}</div>
+      <div class="mp-kicker">${isVideo ? 'VIDEO DETAILS' : animated ? 'GIF DETAILS' : 'IMAGE DETAILS'}</div>
       <h1 class="mp-title" title="${esc(item.fileName)}">${esc(titleOf(item.fileName))}</h1>
       <div class="mp-rows">
         <div class="mp-row"><span>分辨率</span><b>${esc(res)}</b></div>
@@ -133,12 +158,16 @@ export async function MediaView(root, id) {
           <span>内容介绍</span>
           <p class="mp-intro${item.intro ? '' : ' is-auto'}" data-intro>${esc(intro)}</p>
         </div>
-        <div class="mp-row">
-          <span>关联</span>
-          <div class="mp-pills">
-            <a class="mp-pill" href="/c/${item.character.id}" data-link>${esc(item.character.name)}</a>
-          </div>
-        </div>
+        ${
+          isFlat()
+            ? ''
+            : `<div class="mp-row">
+                 <span>关联</span>
+                 <div class="mp-pills">
+                   <a class="mp-pill" href="/c/${item.character.id}" data-link>${esc(item.character.name)}</a>
+                 </div>
+               </div>`
+        }
         <div class="mp-row"><span>存储位置</span><b class="mp-wrap">${esc(place)}</b></div>
         <div class="mp-row"><span>存储大小</span><b>${fmtBytes(item.bytes)}</b></div>
         <div class="mp-row"><span>存储时间</span><b>${esc(fmtDate(item.createdAt))}</b></div>
@@ -177,7 +206,7 @@ export async function MediaView(root, id) {
           const mine = own.has(t);
           return `<button class="mp-pill${mine ? ' is-own' : ''}" data-tag="${esc(t)}" data-mine="${
             mine ? 1 : 0
-          }" title="${mine ? '点一下移除' : `来自条目「${esc(item.character.name)}」`}">${esc(t)}${
+          }" title="${mine ? '点一下移除' : `来自${isFlat() ? '图包' : '条目'}「${esc(isFlat() ? groupName() : item.character.name)}」`}">${esc(t)}${
             mine ? '<i>×</i>' : ''
           }</button>`;
         })
@@ -187,7 +216,7 @@ export async function MediaView(root, id) {
       btn.addEventListener('click', async () => {
         const t = btn.dataset.tag;
         if (btn.dataset.mine !== '1') {
-          toast(`「${t}」是从条目继承的，去条目上改`);
+          toast(`「${t}」是从${isFlat() ? '图包' : '条目'}继承的，去${isFlat() ? '图包' : '条目'}上改`);
           return;
         }
         await saveOwnTags((item.ownTags || []).filter((x) => x !== t));
@@ -304,7 +333,11 @@ export async function MediaView(root, id) {
       return;
     }
     // 直接打开链接 / 从外部进来：没有可退的，就回到它所属的图包或条目
-    history.pushState({}, '', item.pack ? `/p/${item.pack.id}` : `/c/${item.character.id}`);
+    history.pushState(
+      {},
+      '',
+      item.pack ? `/p/${item.pack.id}` : isFlat() ? `/e/${item.shelf.id}` : `/c/${item.character.id}`
+    );
     window.dispatchEvent(new CustomEvent('app:route'));
   });
 
