@@ -35,6 +35,17 @@ export async function MediaView(root, id) {
 
   const indexOf = (mid) => siblings.findIndex((x) => x.id === mid);
 
+  /**
+   * 从哪个页面点进来的（角色页 / 图包页）。
+   * 翻页只 replace 当前历史项，历史里始终只有一条 /i/:id，
+   * 所以 ✕ 一次就能退出查看界面，而不是退回上一张。
+   */
+  const entryFrom = (() => {
+    const st = history.state;
+    const f = st && typeof st.from === 'string' ? st.from : '';
+    return /^\/(c|p|s)\//.test(f) ? f : '';
+  })();
+
   root.innerHTML = `
     <main class="media-page">
       <section class="mp-stage">
@@ -265,16 +276,15 @@ export async function MediaView(root, id) {
     if (siblings.length > 1) {
       const at = indexOf(item.id);
       const next = siblings[at + 1] || siblings[at - 1];
-      go(next.id, true);
+      go(next.id);
     } else {
       history.pushState({}, '', `/c/${item.character.id}`);
       window.dispatchEvent(new CustomEvent('app:route'));
     }
   }
 
-  function go(mid, replace) {
-    if (replace) history.replaceState({}, '', `/i/${mid}`);
-    else history.pushState({}, '', `/i/${mid}`);
+  function go(mid) {
+    history.replaceState({ from: entryFrom }, '', `/i/${mid}`);
     window.dispatchEvent(new CustomEvent('app:route'));
   }
 
@@ -287,11 +297,14 @@ export async function MediaView(root, id) {
   root.querySelector('[data-prev]').addEventListener('click', () => step(-1));
   root.querySelector('[data-next]').addEventListener('click', () => step(1));
   root.querySelector('[data-close]').addEventListener('click', () => {
-    if (history.length > 1) history.back();
-    else {
-      history.pushState({}, '', item.pack ? `/p/${item.pack.id}` : `/c/${item.character.id}`);
-      window.dispatchEvent(new CustomEvent('app:route'));
+    // 有来源就正常后退（翻页没往历史里叠加，所以一定是退到来源页）
+    if (entryFrom) {
+      history.back();
+      return;
     }
+    // 直接打开链接 / 从外部进来：没有可退的，就回到它所属的图包或条目
+    history.pushState({}, '', item.pack ? `/p/${item.pack.id}` : `/c/${item.character.id}`);
+    window.dispatchEvent(new CustomEvent('app:route'));
   });
 
   let resizeTimer = 0;

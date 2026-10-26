@@ -20,7 +20,7 @@ function packDateLabel(pack) {
 
 /** 打开媒体详情页 */
 function gotoMedia(mediaId) {
-  history.pushState({}, '', `/i/${mediaId}`);
+  history.pushState({ from: location.pathname }, {}, `/i/${mediaId}`);
   window.dispatchEvent(new CustomEvent('app:route'));
 }
 

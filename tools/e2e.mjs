@@ -441,7 +441,13 @@ try {
   `);
   check('缩略图实际加载出像素', imgOk > 0, `${imgOk}/${tiles} 张有内容`);
 
-  // 5. 媒体详情页
+  // 5. 媒体详情页：先进一个多图图包，保证有「下一张」可翻
+  const richPack = await evaluate(`(async () => {
+    const r = await fetch('/api/characters/2/packs');
+    const d = await r.json();
+    return (d.items.find((p) => p.mediaCount > 3) || d.items[0]).id;
+  })()`);
+  await goto(`${BASE}/p/${richPack}`, 2400);
   await evaluate(`document.querySelector('.tile').click()`);
   let detailPath = '';
   for (let i = 0; i < 24; i += 1) {
@@ -484,11 +490,24 @@ try {
   check('Esc 关灯箱后仍停在详情页', (await evaluate(`!!document.querySelector('.lightbox')`)) === false
     && /^\/i\//.test(await evaluate(`location.pathname`)));
 
-  await evaluate(`document.querySelector('[data-close]').click()`);
-  await sleep(700);
-  check('关闭详情页回到角色页', /^\/c\//.test(await evaluate(`location.pathname`)), await evaluate(`location.pathname`));
-  await evaluate(`document.querySelector('[data-view] button[data-v="packs"]').click()`);
-  await sleep(1200);
+  // 翻页不应该往历史里叠加，点 ✕ 要一次退出来源页
+  const nav = await evaluate(`(async () => {
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const before = location.pathname;
+    const h0 = history.length;
+    document.querySelector('[data-next]').click();
+    await sleep(1300);
+    const after = location.pathname;
+    const h1 = history.length;
+    document.querySelector('[data-close]').click();
+    await sleep(1000);
+    return { before, after, h0, h1, end: location.pathname };
+  })()`);
+  check('→ 翻到下一张', nav.after !== nav.before, `${nav.before} → ${nav.after}`);
+  check('翻页不增加历史记录', nav.h1 === nav.h0, `${nav.h0} → ${nav.h1}`);
+  check('翻页后 ✕ 一次退出到图包页', nav.end === `/p/${richPack}`, nav.end);
+  // 回到角色页继续后面的用例
+  await goto(`${BASE}/c/2`, 2200);
 
   // 6. 平台栏：超过 4 条时不拉高、内部滚动、底部有阴影、ID 左对齐
   const tmpId = await evaluate(`
