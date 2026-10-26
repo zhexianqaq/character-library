@@ -8,6 +8,8 @@ import { mediaMenu } from '../components/media-actions.js';
 import { addMediaMenuItems } from '../components/media-picker.js';
 import { bindDropUpload } from '../components/dropzone.js';
 import { queue } from '../upload-queue.js';
+import { applyPickClick } from '../selection.js';
+import { escDepth } from '../esc.js';
 
 /** 有拍摄月份就显示月份；没有就用创建日期 */
 function packDateLabel(pack) {
@@ -29,6 +31,7 @@ export async function PackView(root, id) {
   let items = media.items;
   // 表情库的图包挂在容器条目下，面包屑要回到库页而不是条目页
   const emoji = !!(pack.shelf && pack.shelf.kind === 'emoji');
+  const ownerNoun = pack.shelf && pack.shelf.kind === 'work' ? '角色' : '人物';
   const crumbHref = emoji ? `/e/${pack.shelf.id}` : `/c/${pack.character.id}`;
   const crumbName = emoji ? pack.shelf.name : pack.character.name;
 
@@ -86,9 +89,9 @@ export async function PackView(root, id) {
       return;
     }
     requestAnimationFrame(() => {
-      renderMasonry(holder, items, (i) => {
+      renderMasonry(holder, items, (i, ev) => {
         if (selecting) {
-          togglePick(items[i].id);
+          pickByClick(items[i].id, ev);
           return;
         }
         gotoMedia(items[i].id);
@@ -102,6 +105,14 @@ export async function PackView(root, id) {
                 characterId: pack.character.id,
                 onOpen: () => gotoMedia(item.id),
                 onChange: reload,
+                pack: { id: pack.id, title: pack.title },
+                // 表情库挂在容器条目上，没有「人物 / 角色」可设
+                owner: emoji ? null : { id: pack.character.id, name: pack.character.name, noun: ownerNoun },
+                onCover: async (kind) => {
+                  if (kind !== 'pack') return;
+                  const next = await api.pack(id);
+                  pack.coverMediaId = next.coverMediaId;
+                },
               }),
       });
     });
@@ -130,6 +141,7 @@ export async function PackView(root, id) {
   function resetSelection() {
     selecting = false;
     picked.clear();
+    anchorId = null;
     const bar = selBar();
     if (bar) {
       bar.hidden = true;
@@ -180,12 +192,20 @@ export async function PackView(root, id) {
     paintMedia();
   }
 
-  function togglePick(id) {
-    if (picked.has(id)) picked.delete(id);
-    else picked.add(id);
-    const el = root.querySelector(`.tile[data-id="${id}"]`);
-    if (el) el.classList.toggle('is-sel', picked.has(id));
+  /** 勾选锚点：Shift 连选从它算起 */
+  let anchorId = null;
+
+  function syncPickMarks() {
+    root.querySelectorAll('.tile[data-id]').forEach((el) => {
+      el.classList.toggle('is-sel', picked.has(Number(el.dataset.id)));
+    });
     syncSelCount();
+  }
+
+  function pickByClick(id, ev) {
+    const r = applyPickClick({ picked, ordered: items.map((m) => m.id), id, ev, anchorId });
+    anchorId = r.anchorId;
+    syncPickMarks();
   }
 
   function selectAllShown() {
@@ -193,6 +213,7 @@ export async function PackView(root, id) {
     const allOn = ids.length > 0 && ids.every((id) => picked.has(id));
     if (allOn) picked.clear();
     else ids.forEach((id) => picked.add(id));
+    anchorId = ids.length ? ids[ids.length - 1] : null;
     root.querySelectorAll('.tile').forEach((el) => {
       el.classList.toggle('is-sel', picked.has(Number(el.dataset.id)));
     });
@@ -414,11 +435,24 @@ export async function PackView(root, id) {
 
   /** Esc 退出选取。弹窗 / 右键菜单 / 下拉开着时，esc 栈会先把事件吃掉，轮不到这里 */
   const onPageKey = (e) => {
-    if (e.key !== 'Escape') return;
     if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+    if (escDepth() > 0) return;
     if (!selecting) return;
-    e.preventDefault();
-    exitSelect();
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      exitSelect();
+      return;
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (!picked.size) return;
+      e.preventDefault();
+      onSelAction('del');
+      return;
+    }
+    if (e.key === 'Enter' && picked.size === 1) {
+      e.preventDefault();
+      gotoMedia([...picked][0]);
+    }
   };
   document.addEventListener('keydown', onPageKey);
 

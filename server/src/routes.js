@@ -548,7 +548,7 @@ export function createApp() {
 
     const packs = db
       .prepare(
-        `SELECT p.id, p.title, p.month, p.category, p.tags, p.created_at,
+        `SELECT p.id, p.title, p.month, p.category, p.tags, p.created_at, p.cover_media_id,
            (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id) AS media_count,
            (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id AND (m.anim = 1 OR m.kind = 'video')) AS anim_count
          FROM packs p WHERE p.character_id = ?
@@ -569,6 +569,19 @@ export function createApp() {
       const arr = byPack.get(r.pack_id) || [];
       if (arr.length < 9) arr.push(r.id);
       byPack.set(r.pack_id, arr);
+    }
+    // 手动设过封面的，拼图第一格就用它（封面可能排在很后面，不在前 9 张里）
+    for (const p of packs) {
+      const arr = byPack.get(p.id);
+      if (!arr || !p.cover_media_id) continue;
+      const i = arr.indexOf(p.cover_media_id);
+      if (i > 0) {
+        arr.splice(i, 1);
+        arr.unshift(p.cover_media_id);
+      } else if (i < 0) {
+        arr.pop();
+        arr.unshift(p.cover_media_id);
+      }
     }
 
     const stat = db
@@ -605,6 +618,7 @@ export function createApp() {
         createdAt: p.created_at,
         mediaCount: p.media_count,
         animCount: p.anim_count,
+        coverMediaId: p.cover_media_id || null,
         thumbs: byPack.get(p.id) || [],
       })),
     });
@@ -1060,7 +1074,14 @@ export function createApp() {
       return res.status(400).json({ error: String(err.message || '保存失败') });
     }
     const fresh = db.prepare('SELECT * FROM packs WHERE id = ?').get(id);
-    res.json({ ok: true, id, title: fresh.title, month: fresh.month, createdAt: fresh.created_at });
+    res.json({
+      ok: true,
+      id,
+      title: fresh.title,
+      month: fresh.month,
+      createdAt: fresh.created_at,
+      coverMediaId: fresh.cover_media_id || null,
+    });
   });
 
   // 默认「解散」：只删图包，里面的媒体变成未归包；

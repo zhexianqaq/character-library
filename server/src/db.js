@@ -286,15 +286,26 @@ export function refreshCharacter(characterId) {
   return { media: stat.n, bytes: stat.b, images: stat.imgs, videos: stat.vids, packs };
 }
 
+/**
+ * 图包封面：**手动设过就保留**，只有没设 / 设的那张已经不在包里了才回落到第一张。
+ * （以前无条件覆盖，右键「设为图包封面」会在下次上传时被悄悄改回去）
+ */
 export function refreshPack(packId) {
   const d = getDb();
-  const cover = d
-    .prepare(
-      `SELECT id FROM media WHERE pack_id = ? AND kind IN ('image','video')
-       ORDER BY CASE kind WHEN 'image' THEN 0 ELSE 1 END, sort_order, id LIMIT 1`
-    )
-    .get(packId);
-  d.prepare('UPDATE packs SET cover_media_id = ? WHERE id = ?').run(cover ? cover.id : null, packId);
+  const row = d.prepare('SELECT cover_media_id FROM packs WHERE id = ?').get(packId);
+  let cover = row ? row.cover_media_id : null;
+  const valid =
+    cover && d.prepare('SELECT 1 FROM media WHERE id = ? AND pack_id = ? AND kind IN (?,?)').get(cover, packId, 'image', 'video');
+  if (!valid) {
+    const first = d
+      .prepare(
+        `SELECT id FROM media WHERE pack_id = ? AND kind IN ('image','video')
+         ORDER BY CASE kind WHEN 'image' THEN 0 ELSE 1 END, sort_order, id LIMIT 1`
+      )
+      .get(packId);
+    cover = first ? first.id : null;
+  }
+  d.prepare('UPDATE packs SET cover_media_id = ? WHERE id = ?').run(cover, packId);
 }
 
 export function refreshCharacterPacks(characterId) {

@@ -972,6 +972,115 @@ try {
     JSON.stringify(tagRule.mediaTags)
   );
 
+  // 7.3 媒体右键的封面两项
+  const coverFlow = await evaluate(`(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const cid = location.pathname.split('/').pop();
+    document.querySelector('[data-view] button[data-v="media"]').click();
+    await sleep(2400);
+    const tile = document.querySelector('.tile');
+    const id = Number(tile.dataset.id);
+    const media = await (await fetch('/api/characters/' + cid + '/media')).json();
+    const packId = (media.items.find((m) => m.id === id) || {}).packId || null;
+
+    const openMenu = async () => {
+      const r = tile.getBoundingClientRect();
+      tile.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true,
+        clientX: Math.round(r.left + 30), clientY: Math.round(r.top + 30),
+      }));
+      await sleep(320);
+    };
+    const labelsOf = () => [...document.querySelectorAll('.ctx-menu .ctx-item > span')].map((s) => s.textContent.trim());
+    const clickItem = (txt) => {
+      const btn = [...document.querySelectorAll('.ctx-item')].find((b) => b.textContent.includes(txt));
+      if (!btn) return false;
+      btn.click();
+      return true;
+    };
+
+    await openMenu();
+    const labels = labelsOf();
+    // 人物库叫「设为人物封面」、角色库叫「设为角色封面」，别写死
+    const ownerLabel = labels.find((l) => l !== '设为图包封面' && l.startsWith('设为') && l.includes('封面')) || '';
+    clickItem(ownerLabel);
+    await sleep(1300);
+    const toastOwner = document.querySelector('#toast')?.textContent || '';
+    const heroSrc = document.querySelector('.hero-cover img')?.getAttribute('src') || '';
+
+    await openMenu();
+    clickItem('设为图包封面');
+    await sleep(1300);
+    const toastPack = document.querySelector('#toast')?.textContent || '';
+    const packs = await (await fetch('/api/characters/' + cid + '/packs')).json();
+    const packCovered = packs.items.filter((p) => p.coverMediaId === id).length;
+
+    if (document.querySelector('.ctx-menu')) {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      await sleep(200);
+    }
+    return { id, packId, labels, toastOwner, heroSrc, toastPack, packCovered };
+  })()`);
+  check(
+    '媒体右键有「设为图包封面 / 设为条目封面」',
+    coverFlow.labels.includes('设为图包封面') &&
+      coverFlow.labels.some((l) => l !== '设为图包封面' && l.startsWith('设为') && l.includes('封面')),
+    coverFlow.labels.join(' / ')
+  );
+  check(
+    '设为人物封面生效并刷新头像',
+    coverFlow.toastOwner.includes('封面') && coverFlow.heroSrc === `/t/${coverFlow.id}`,
+    `${coverFlow.toastOwner} · ${coverFlow.heroSrc}`
+  );
+  check(
+    '设为图包封面生效',
+    coverFlow.toastPack.includes('封面') && coverFlow.packCovered >= 1,
+    `${coverFlow.toastPack} · ${coverFlow.packCovered} 个包用了这张`
+  );
+
+  // 移出图包后重新进页面（列表有缓存，必须重载才是新归属）
+  await evaluate(`fetch('/api/media/${coverFlow.id}', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ packId: null }),
+  })`);
+  await goto(`${BASE}${newPath}`, 2000);
+  const looseMenu = await evaluate(`(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    document.querySelector('[data-view] button[data-v="media"]').click();
+    await sleep(2200);
+    const tile = document.querySelector('.tile[data-id="${coverFlow.id}"]') || document.querySelector('.tile');
+    const r = tile.getBoundingClientRect();
+    tile.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true, cancelable: true,
+      clientX: Math.round(r.left + 30), clientY: Math.round(r.top + 30),
+    }));
+    await sleep(320);
+    const labels = [...document.querySelectorAll('.ctx-menu .ctx-item > span')].map((s) => s.textContent.trim());
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await sleep(200);
+    return labels;
+  })()`);
+  check(
+    '不在图包里的图不显示「设为图包封面」',
+    !looseMenu.includes('设为图包封面') && looseMenu.some((l) => l.startsWith('设为') && l.includes('封面')),
+    looseMenu.join(' / ')
+  );
+
+  // 放回原图包，后面的图包页用例还要用
+  if (coverFlow.packId) {
+    await evaluate(`fetch('/api/media/${coverFlow.id}', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ packId: ${coverFlow.packId} }),
+    })`);
+  }
+  await goto(`${BASE}${newPath}`, 1800);
+
+  // 回到图包视图，7.5 要在图包视图操作
+  await evaluate(`document.querySelector('[data-view] button[data-v="packs"]').click()`);
+  await sleep(1200);
+
   // 7.5 新建图包：日期非必填，只填名称也能建
   await evaluate(`document.querySelector('[data-new-pack]').click()`);
   await sleep(500);
@@ -1345,6 +1454,80 @@ try {
     }
     return true;
   })()`);
+
+  // 8.5 多选：Shift 连选 / Ctrl 加减 / Delete 删除 / Enter 打开
+  const kbCharId = Number(newPath.split('/').pop());
+  await evaluate(`(async () => {
+    for (const t of ['E2E 键A', 'E2E 键B']) {
+      await fetch('/api/characters/${kbCharId}/packs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: t }),
+      });
+    }
+    return true;
+  })()`);
+  await goto(`${BASE}${newPath}`, 2000);
+
+  const kb = await evaluate(`(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const key = (k) => document.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+    const count = () => document.querySelectorAll('.pack-card.is-sel').length;
+    document.querySelector('[data-select-toggle]').click();
+    await sleep(1100);
+    const cards = [...document.querySelectorAll('.pack-card')];
+    const out = { total: cards.length };
+    cards[0].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    cards[2].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, shiftKey: true }));
+    await sleep(280);
+    out.range = count();
+    cards[1].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
+    await sleep(250);
+    out.ctrlOff = count();
+    cards[3].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
+    await sleep(250);
+    out.ctrlAdd = count();
+
+    // Enter 打开单个选中项
+    document.querySelector('[data-sel="exit"]').click();
+    await sleep(700);
+    document.querySelector('[data-select-toggle]').click();
+    await sleep(900);
+    document.querySelector('.pack-card').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    await sleep(250);
+    key('Enter');
+    await sleep(1600);
+    out.enterPath = location.pathname;
+    history.back();
+    await sleep(1500);
+
+    // Delete → 确认框 → Enter 确认
+    document.querySelector('[data-select-toggle]').click();
+    await sleep(900);
+    const cs = [...document.querySelectorAll('.pack-card')];
+    cs[0].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    cs[1].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, shiftKey: true }));
+    await sleep(280);
+    out.beforeDel = cs.length;
+    key('Delete');
+    await sleep(700);
+    out.dialog = document.querySelector('.modal h3')?.textContent || '';
+    key('Enter');
+    await sleep(2200);
+    out.afterDel = document.querySelectorAll('.pack-card').length;
+    return out;
+  })()`);
+  check(
+    'Shift 连选 / Ctrl 加减互不冲突',
+    kb.range === 3 && kb.ctrlOff === 2 && kb.ctrlAdd === 3,
+    `range ${kb.range} / ctrl- ${kb.ctrlOff} / ctrl+ ${kb.ctrlAdd}`
+  );
+  check('Enter 打开选中的图包', /^\/p\/\d+$/.test(kb.enterPath || ''), kb.enterPath);
+  check(
+    'Delete 触发删除、Enter 确认',
+    /删除 \d+ 个图包/.test(kb.dialog || '') && kb.afterDel === kb.beforeDel - 2,
+    `${kb.dialog} · ${kb.beforeDel} → ${kb.afterDel}`
+  );
 
   // 9. 删除角色（走接口，顺带验证级联清理）
   const charId = Number(newPath.split('/').pop());

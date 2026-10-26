@@ -81,10 +81,11 @@ export function renderMasonry(container, items, onOpen, opts = {}) {
   bindHoverPlay(container, opts);
 
   container.querySelectorAll('.tile').forEach((el) => {
-    el.addEventListener('click', () => {
+    el.addEventListener('click', (ev) => {
       const id = Number(el.dataset.id);
       const index = items.findIndex((x) => x.id === id);
-      if (onOpen) onOpen(index >= 0 ? index : 0);
+      // 把事件传出去：选取模式里要看 Shift / Ctrl
+      if (onOpen) onOpen(index >= 0 ? index : 0, ev);
     });
     if (opts.onContext) {
       el.addEventListener('contextmenu', (e) => {

@@ -169,13 +169,20 @@ export function openModal({
 
     const onKey = (e) => {
       // Esc 交给 esc 栈统一派发，这里只处理 Enter
-      // 单行输入框里按 Enter 直接提交，文本框里保留换行
-      if (e.key === 'Enter' && !e.shiftKey && e.target && e.target.tagName === 'INPUT') {
-        e.preventDefault();
+      if (e.key !== 'Enter') return;
+      // 下拉面板 / 标签输入已经处理过（它们会 preventDefault）
+      if (e.defaultPrevented) return;
+      const tag = e.target && e.target.tagName;
+      // 文本框里 Enter 是换行；按钮上 Enter 交给按钮自己的默认行为
+      if (tag === 'TEXTAREA' || tag === 'BUTTON') return;
+      if (e.metaKey || e.ctrlKey) {
         submit();
         return;
       }
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit();
+      // 焦点不在任何控件上（比如确认框）也要能用 Enter 确认
+      if (e.shiftKey) return;
+      e.preventDefault();
+      submit();
     };
 
     root.querySelector('[data-cancel]').addEventListener('click', () => close(null));

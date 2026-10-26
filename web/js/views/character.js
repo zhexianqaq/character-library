@@ -10,6 +10,8 @@ import { addMediaMenuItems } from '../components/media-picker.js';
 import { createDropdown } from '../components/dropdown.js';
 import { bindDropUpload } from '../components/dropzone.js';
 import { queue } from '../upload-queue.js';
+import { applyPickClick } from '../selection.js';
+import { escDepth } from '../esc.js';
 
 /**
  * 资源名 → 资源。出处卡片点「原神」时要跳到资源详情，
@@ -693,6 +695,7 @@ export async function CharacterView(root, id) {
   function resetSelection() {
     selecting = false;
     picked.clear();
+    anchorId = null;
     const bar = selBar();
     if (bar) {
       bar.hidden = true;
@@ -747,12 +750,23 @@ export async function CharacterView(root, id) {
     else loadMedia();
   }
 
-  function togglePick(id) {
-    if (picked.has(id)) picked.delete(id);
-    else picked.add(id);
-    const el = root.querySelector(`.tile[data-id="${id}"], .pack-card[data-pack="${id}"]`);
-    if (el) el.classList.toggle('is-sel', picked.has(id));
+  /** 勾选锚点：Shift 连选从它算起 */
+  let anchorId = null;
+
+  /** 全量重画勾选态（范围选择会一次改很多个） */
+  function syncPickMarks() {
+    root.querySelectorAll('.tile[data-id], .pack-card[data-pack]').forEach((el) => {
+      const id = Number(el.dataset.id || el.dataset.pack);
+      el.classList.toggle('is-sel', picked.has(id));
+    });
     syncSelCount();
+  }
+
+  function pickByClick(id, ev) {
+    const ordered = mode === 'packs' ? packsShown.map((p) => p.id) : mediaItems.map((m) => m.id);
+    const r = applyPickClick({ picked, ordered, id, ev, anchorId });
+    anchorId = r.anchorId;
+    syncPickMarks();
   }
 
   function selectAllShown() {
@@ -760,6 +774,7 @@ export async function CharacterView(root, id) {
     const allOn = ids.length > 0 && ids.every((id) => picked.has(id));
     if (allOn) picked.clear();
     else ids.forEach((id) => picked.add(id));
+    anchorId = ids.length ? ids[ids.length - 1] : null;
     root.querySelectorAll('.pack-card, .tile').forEach((el) => {
       const id = Number(el.dataset.pack || el.dataset.id);
       el.classList.toggle('is-sel', picked.has(id));
@@ -996,7 +1011,7 @@ export async function CharacterView(root, id) {
           if (!card) return;
           e.preventDefault();
           e.stopPropagation();
-          togglePick(Number(card.dataset.pack));
+          pickByClick(Number(card.dataset.pack), e);
         },
         true
       );
@@ -1154,9 +1169,9 @@ export async function CharacterView(root, id) {
       renderMasonry(
         holder,
         mediaItems,
-        (i) => {
+        (i, ev) => {
           if (selecting) {
-            togglePick(mediaItems[i].id);
+            pickByClick(mediaItems[i].id, ev);
             return;
           }
           gotoMedia(mediaItems[i].id);
@@ -1171,6 +1186,21 @@ export async function CharacterView(root, id) {
                   characterId: c.id,
                   onOpen: () => gotoMedia(item.id),
                   onChange: () => loadMedia(true),
+                  pack: item.packId
+                    ? {
+                        id: item.packId,
+                        title: (packsCache.find((p) => p.id === item.packId) || {}).title || '这个图包',
+                      }
+                    : null,
+                  owner: { id: c.id, name: c.name, noun: noun() },
+                  onCover: async (kind) => {
+                    if (kind === 'owner') {
+                      c = await api.character(id);
+                      paint();
+                    } else {
+                      await loadPacks();
+                    }
+                  },
                 }),
         }
       );
@@ -1306,11 +1336,27 @@ export async function CharacterView(root, id) {
 
   /** Esc 退出选取。弹窗 / 右键菜单 / 下拉开着时，esc 栈会先把事件吃掉，轮不到这里 */
   const onPageKey = (e) => {
-    if (e.key !== 'Escape') return;
     if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+    // 弹窗 / 右键菜单 / 下拉开着时，键盘归它们管
+    if (escDepth() > 0) return;
     if (!selecting) return;
-    e.preventDefault();
-    exitSelect();
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      exitSelect();
+      return;
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (!picked.size) return;
+      e.preventDefault();
+      onSelAction('del');
+      return;
+    }
+    if (e.key === 'Enter' && picked.size === 1) {
+      e.preventDefault();
+      const only = [...picked][0];
+      if (mode === 'packs') gotoPack(only);
+      else gotoMedia(only);
+    }
   };
   document.addEventListener('keydown', onPageKey);
 

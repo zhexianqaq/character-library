@@ -6,6 +6,8 @@ import { openModal, confirmDialog } from '../components/modal.js';
 import { openTagPicker } from '../components/tag-picker.js';
 import { openContextMenu } from '../components/context-menu.js';
 import { mediaMenu } from '../components/media-actions.js';
+import { applyPickClick } from '../selection.js';
+import { escDepth } from '../esc.js';
 import { addMediaMenuItems } from '../components/media-picker.js';
 import { createDropdown } from '../components/dropdown.js';
 import { bindDropUpload } from '../components/dropzone.js';
@@ -181,7 +183,7 @@ export async function EmojiView(root, shelfId) {
           if (!card) return;
           e.preventDefault();
           e.stopPropagation();
-          togglePick(Number(card.dataset.pack));
+          pickByClick(Number(card.dataset.pack), e);
         },
         true
       );
@@ -324,9 +326,9 @@ export async function EmojiView(root, shelfId) {
       renderMasonry(
         holder,
         mediaItems,
-        (i) => {
+        (i, ev) => {
           if (selecting) {
-            togglePick(mediaItems[i].id);
+            pickByClick(mediaItems[i].id, ev);
             return;
           }
           gotoMedia(mediaItems[i].id);
@@ -341,6 +343,12 @@ export async function EmojiView(root, shelfId) {
                   characterId: data.containerId,
                   onOpen: () => gotoMedia(item.id),
                   onChange: reload,
+                  pack: item.packId
+                    ? { id: item.packId, title: (packs.find((p) => p.id === item.packId) || {}).title || '这个图包' }
+                    : null,
+                  // 表情库的条目是容器，没有「人物 / 角色」这一层
+                  owner: null,
+                  onCover: () => reload(),
                 }),
         }
       );
@@ -396,6 +404,7 @@ export async function EmojiView(root, shelfId) {
   function resetSelection() {
     selecting = false;
     picked.clear();
+    anchorId = null;
     const bar = selBar();
     if (bar) {
       bar.hidden = true;
@@ -450,12 +459,22 @@ export async function EmojiView(root, shelfId) {
     else renderMedia();
   }
 
-  function togglePick(id) {
-    if (picked.has(id)) picked.delete(id);
-    else picked.add(id);
-    const el = root.querySelector(`.tile[data-id="${id}"], .emoji-card[data-pack="${id}"]`);
-    if (el) el.classList.toggle('is-sel', picked.has(id));
+  /** 勾选锚点：Shift 连选从它算起 */
+  let anchorId = null;
+
+  function syncPickMarks() {
+    root.querySelectorAll('.tile[data-id], .emoji-card[data-pack]').forEach((el) => {
+      const id = Number(el.dataset.id || el.dataset.pack);
+      el.classList.toggle('is-sel', picked.has(id));
+    });
     syncSelCount();
+  }
+
+  function pickByClick(id, ev) {
+    const ordered = mode === 'packs' ? packs.map((p) => p.id) : mediaItems.map((m) => m.id);
+    const r = applyPickClick({ picked, ordered, id, ev, anchorId });
+    anchorId = r.anchorId;
+    syncPickMarks();
   }
 
   function selectAllShown() {
@@ -463,6 +482,7 @@ export async function EmojiView(root, shelfId) {
     const allOn = ids.length > 0 && ids.every((id) => picked.has(id));
     if (allOn) picked.clear();
     else ids.forEach((id) => picked.add(id));
+    anchorId = ids.length ? ids[ids.length - 1] : null;
     root.querySelectorAll('.emoji-card, .tile').forEach((el) => {
       const id = Number(el.dataset.pack || el.dataset.id);
       el.classList.toggle('is-sel', picked.has(id));
@@ -757,11 +777,26 @@ export async function EmojiView(root, shelfId) {
 
   /** Esc 退出选取。弹窗 / 右键菜单 / 下拉开着时，esc 栈会先把事件吃掉，轮不到这里 */
   const onPageKey = (e) => {
-    if (e.key !== 'Escape') return;
     if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+    if (escDepth() > 0) return;
     if (!selecting) return;
-    e.preventDefault();
-    exitSelect();
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      exitSelect();
+      return;
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (!picked.size) return;
+      e.preventDefault();
+      onSelAction('del');
+      return;
+    }
+    if (e.key === 'Enter' && picked.size === 1) {
+      e.preventDefault();
+      const only = [...picked][0];
+      if (mode === 'packs') gotoPack(only);
+      else gotoMedia(only);
+    }
   };
   document.addEventListener('keydown', onPageKey);
 
