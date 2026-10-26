@@ -19,6 +19,18 @@ export function absPathOf(relPath) {
   return path.join(DATA_DIR, ...String(relPath).split('/'));
 }
 
+/** 只算文件 sha256，不搬文件。查重要在入库之前做，重复文件就不必跨盘复制一遍 */
+export async function hashFileOf(abs) {
+  const hash = crypto.createHash('sha256');
+  await new Promise((resolve, reject) => {
+    const rs = fs.createReadStream(abs);
+    rs.on('data', (c) => hash.update(c));
+    rs.on('error', reject);
+    rs.on('end', resolve);
+  });
+  return hash.digest('hex');
+}
+
 export function safeFileName(name) {
   const base = path.basename(String(name || 'file'));
   return base.replace(/[\x00-\x1f\\/:*?"<>|]/g, '_').slice(0, 100) || 'file';
@@ -117,7 +129,12 @@ async function moveFile(src, dst) {
 
 async function finalize(tmp, dir, fileName, ext, kind, sha, relDir) {
   const target = path.join(dir, `${sha.slice(0, 10)}_${fileName}`);
-  await moveFile(tmp, target);
+  if (fs.existsSync(target)) {
+    // 库目录里已经有同内容同名的文件（比如索引记录被删过），复用即可，别覆盖
+    await fsp.unlink(tmp).catch(() => {});
+  } else {
+    await moveFile(tmp, target);
+  }
   const stat = await fsp.stat(target);
   const relPath = path.relative(DATA_DIR, target).split(path.sep).join('/');
 
@@ -137,7 +154,7 @@ async function finalize(tmp, dir, fileName, ext, kind, sha, relDir) {
  * 采纳一个已经落在同盘的临时文件：算哈希后直接 rename 进库，
  * 不再复制一遍 —— 上传大视频时这一步差别很大。
  */
-export async function adoptFile(tmpAbs, relDir, originalName) {
+export async function adoptFile(tmpAbs, relDir, originalName, knownSha = null) {
   const fileName = safeFileName(originalName);
   const ext = extOf(fileName);
   const kind = kindOfExt(ext);
@@ -149,14 +166,7 @@ export async function adoptFile(tmpAbs, relDir, originalName) {
   const dir = absPathOf(relDir);
   await fsp.mkdir(dir, { recursive: true });
 
-  const hash = crypto.createHash('sha256');
-  await new Promise((resolve, reject) => {
-    const rs = fs.createReadStream(tmpAbs);
-    rs.on('data', (c) => hash.update(c));
-    rs.on('error', reject);
-    rs.on('end', resolve);
-  });
-  const sha = hash.digest('hex');
+  const sha = knownSha || (await hashFileOf(tmpAbs));
   return finalize(tmpAbs, dir, fileName, ext, kind, sha, relDir);
 }
 
@@ -170,6 +180,27 @@ export async function readImageDims(abs) {
   } catch {
     return null;
   }
+}
+
+/**
+ * 把库里已有的文件挪到另一个目录，返回新的 relPath。
+ * 只在跨角色搬运时用：文件名带 sha 前缀，同名即同内容，
+ * 目标端已有同名文件说明库里有同一份副本，删掉源文件复用目标即可。
+ */
+export async function relocateFile(relPath, newRelDir) {
+  const src = absPathOf(relPath);
+  const dir = absPathOf(newRelDir);
+  await fsp.mkdir(dir, { recursive: true });
+  const dst = path.join(dir, path.basename(src));
+  if (path.resolve(dst) === path.resolve(src)) {
+    return String(relPath).split(path.sep).join('/');
+  }
+  if (fs.existsSync(dst)) {
+    await fsp.unlink(src).catch(() => {});
+  } else {
+    await moveFile(src, dst);
+  }
+  return path.relative(DATA_DIR, dst).split(path.sep).join('/');
 }
 
 /** 删除库内文件（只在库目录内，不碰外部路径） */

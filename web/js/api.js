@@ -61,6 +61,8 @@ export const api = {
   deletePack: (id, { withMedia = false } = {}) =>
     req(`/api/packs/${id}${withMedia ? '?withMedia=1' : ''}`, { method: 'DELETE' }),
   packMedia: (id) => req(`/api/packs/${id}/media`),
+  addMediaToPack: (packId, ids) => json('POST')(`/api/packs/${packId}/media`, { ids }),
+  pickMedia: (params) => req(`/api/media/pick${qs(params)}`),
   characterMedia: (id, params) => req(`/api/characters/${id}/media${qs(params)}`),
 
   updateMedia: (id, patch) => json('PATCH')(`/api/media/${id}`, patch),

@@ -105,6 +105,20 @@ await send('Emulation.setDeviceMetricsOverride', {
   mobile: false,
 });
 
+// --throttle <KB/s>：限速，用来观察上传进度这类一闪而过的中间态
+const throttleIdx = process.argv.indexOf('--throttle');
+if (throttleIdx > 0) {
+  const bps = (Number(process.argv[throttleIdx + 1]) || 0) * 1024;
+  if (bps > 0) {
+    await send('Network.emulateNetworkConditions', {
+      offline: false,
+      latency: 20,
+      downloadThroughput: bps,
+      uploadThroughput: bps,
+    });
+  }
+}
+
 await send('Page.navigate', { url });
 await sleep(waitMs);
 

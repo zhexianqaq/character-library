@@ -18,6 +18,8 @@ import { WEB_DIR, INBOX_DIR, DATA_DIR, slugify } from './config.js';
 import {
   absPathOf,
   adoptFile,
+  hashFileOf,
+  relocateFile,
   removeLibraryFile,
   removeDir,
   kindOfExt,
@@ -199,6 +201,11 @@ async function resolvePackDir(db, charRelDir, pack, kind, category = null) {
   }
   // 虚拟角色库：库/角色/小库/图包/图片|视频
   const base = category ? `${charRelDir}/${category}` : charRelDir;
+  // 图包被搬空但目录还在时沿用旧目录，否则每搬一次就分裂出「-2」「-3」
+  const plain = slugify(pack.title);
+  if (fs.existsSync(absPathOf(`${base}/${plain}`))) {
+    return `${base}/${plain}/${typeDir}`;
+  }
   const slug = await uniqueDirName(base, pack.title);
   return `${base}/${slug}/${typeDir}`;
 }
@@ -747,6 +754,151 @@ export function createApp() {
   });
 
   // ---------- 媒体 ----------
+
+  /**
+   * 素材挑选器（「添加到图包」用）。
+   * scope: all 全部素材 / character 本角色 / loose 未归包 / filed 已归包
+   */
+  app.get('/api/media/pick', (req, res) => {
+    const db = getDb();
+    const scope = String(req.query.scope || 'all');
+    const charId = Number(req.query.charId) || null;
+    const kind = String(req.query.kind || '');
+    const q = String(req.query.q || '').trim().slice(0, 60);
+    const limit = Math.min(200, Math.max(12, Number(req.query.limit) || 60));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+    // 已经在目标图包里的排到后面：一打开就是可选的，不用先滚过一堆「已在包内」
+    const pid = Number(req.query.packId) || null;
+
+    const where = [];
+    const params = { limit, offset, pid };
+    if (scope === 'character') {
+      if (!charId) return res.status(400).json({ error: '缺少角色' });
+      where.push('m.character_id = @charId');
+      params.charId = charId;
+    } else if (scope === 'loose') {
+      where.push('m.pack_id IS NULL');
+    } else if (scope === 'filed') {
+      where.push('m.pack_id IS NOT NULL');
+    }
+    if (kind === 'image' || kind === 'video') {
+      where.push('m.kind = @kind');
+      params.kind = kind;
+    }
+    if (q) {
+      where.push('(m.file_name LIKE @q OR m.tags LIKE @q)');
+      params.q = `%${q}%`;
+    }
+    const clause = where.length ? where.join(' AND ') : '1=1';
+
+    const total = db.prepare(`SELECT COUNT(*) AS n FROM media m WHERE ${clause}`).get(params).n;
+    const rows = db
+      .prepare(
+        `SELECT m.*, c.name AS char_name, sh.kind AS shelf_kind, p.title AS pack_title
+         FROM media m
+         LEFT JOIN characters c ON c.id = m.character_id
+         LEFT JOIN shelves sh ON sh.id = c.shelf_id
+         LEFT JOIN packs p ON p.id = m.pack_id
+         WHERE ${clause}
+         ORDER BY CASE WHEN @pid IS NOT NULL AND m.pack_id = @pid THEN 1 ELSE 0 END, m.id DESC
+         LIMIT @limit OFFSET @offset`
+      )
+      .all(params);
+
+    res.json({
+      items: rows.map((r) => ({
+        id: r.id,
+        kind: r.kind,
+        fileName: r.file_name,
+        width: r.width,
+        height: r.height,
+        bytes: r.bytes,
+        durationMs: r.duration_ms,
+        packId: r.pack_id,
+        packTitle: r.pack_title || '',
+        characterId: r.character_id,
+        characterName: r.char_name || '',
+        shelfKind: r.shelf_kind || 'people',
+      })),
+      total,
+      hasMore: offset + rows.length < total,
+    });
+  });
+
+  /**
+   * 把已有素材加进图包（「从全部/本角色/未分类素材添加」）。
+   * 同角色 = 只改分组；跨角色 = 改归属，文件要跟着搬到目标角色的图包目录。
+   */
+  app.post('/api/packs/:id/media', async (req, res) => {
+    const db = getDb();
+    const packId = Number(req.params.id);
+    const pack = db.prepare('SELECT * FROM packs WHERE id = ?').get(packId);
+    if (!pack) return res.status(404).json({ error: '图包不存在' });
+
+    const raw = req.body && Array.isArray(req.body.ids) ? req.body.ids : [];
+    const ids = [...new Set(raw.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+    if (!ids.length) return res.status(400).json({ error: '没有选择素材' });
+    if (ids.length > 2000) return res.status(400).json({ error: '一次最多添加 2000 个素材' });
+
+    const target = db.prepare('SELECT id, dir_slug FROM characters WHERE id = ?').get(pack.character_id);
+    if (!target) return res.status(404).json({ error: '目标角色不存在' });
+
+    const getMedia = db.prepare('SELECT * FROM media WHERE id = ?');
+    const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order),-1) AS n FROM media WHERE pack_id = ?');
+    const sameCharMove = db.prepare('UPDATE media SET pack_id = ?, sort_order = ? WHERE id = ?');
+    const crossMove = db.prepare(
+      'UPDATE media SET character_id = ?, pack_id = ?, rel_path = ?, sort_order = ? WHERE id = ?'
+    );
+    const dupCheck = db.prepare('SELECT id FROM media WHERE character_id = ? AND sha256 = ?');
+
+    let order = maxOrder.get(packId).n;
+    const moved = [];
+    const skipped = [];
+    const touched = new Set([pack.character_id]);
+
+    for (const id of ids) {
+      const row = getMedia.get(id);
+      if (!row) {
+        skipped.push({ id, reason: '素材不存在' });
+        continue;
+      }
+      if (row.pack_id === packId) {
+        skipped.push({ id, reason: '已在图包内' });
+        continue;
+      }
+
+      if (row.character_id === pack.character_id) {
+        order += 1;
+        sameCharMove.run(packId, order, id);
+        moved.push(id);
+        continue;
+      }
+
+      const dup = dupCheck.get(pack.character_id, row.sha256);
+      if (dup) {
+        skipped.push({ id, reason: '目标角色已有相同文件' });
+        continue;
+      }
+
+      let relPath;
+      try {
+        const relDir = await resolvePackDir(db, target.dir_slug, pack, row.kind, pack.category);
+        relPath = await relocateFile(row.rel_path, relDir);
+      } catch (err) {
+        skipped.push({ id, reason: `文件搬迁失败：${err.message || err}` });
+        continue;
+      }
+      order += 1;
+      crossMove.run(pack.character_id, packId, relPath, order, id);
+      touched.add(row.character_id);
+      moved.push(id);
+    }
+
+    refreshPack(packId);
+    for (const cid of touched) refreshCharacter(cid);
+    res.json({ ok: true, moved: moved.length, skipped, ids: moved });
+  });
+
   app.get('/api/characters/:id/media', (req, res) => {
     const db = getDb();
     const charId = Number(req.params.id);
@@ -782,9 +934,26 @@ export function createApp() {
 
     for (const f of files) {
       const originalName = decodeName(f.originalname);
+      const drop = () => fsp.unlink(f.path).catch(() => {});
       const kind = kindOfExt(path.extname(originalName).toLowerCase());
       if (!kind) {
+        await drop();
         skipped.push({ name: originalName, reason: '不支持的文件类型' });
+        continue;
+      }
+
+      // 先算哈希查重：重复文件不该再跨盘复制一遍（机械盘上这一步很贵）
+      let sha;
+      try {
+        sha = await hashFileOf(f.path);
+      } catch (err) {
+        await drop();
+        skipped.push({ name: originalName, reason: `读取失败：${err.code || err.message}` });
+        continue;
+      }
+      if (db.prepare('SELECT id FROM media WHERE character_id = ? AND sha256 = ?').get(charId, sha)) {
+        await drop();
+        skipped.push({ name: originalName, reason: '重复文件' });
         continue;
       }
 
@@ -794,6 +963,7 @@ export function createApp() {
         ? db.prepare('SELECT id, title, category FROM packs WHERE id = ?').get(forcedPackId)
         : ensurePackFor(db, charId, month, category);
       if (!pack) {
+        await drop();
         skipped.push({ name: originalName, reason: '图包不存在' });
         continue;
       }
@@ -802,20 +972,14 @@ export function createApp() {
 
       let saved;
       try {
-        saved = await adoptFile(f.path, relDir, originalName);
+        saved = await adoptFile(f.path, relDir, originalName, sha);
       } catch (err) {
-        skipped.push({ name: originalName, reason: String(err.message || err) });
+        await drop();
+        skipped.push({ name: originalName, reason: `写入失败：${err.code || err.message}` });
         continue;
       }
       if (!saved) {
         skipped.push({ name: originalName, reason: '不支持的文件类型' });
-        continue;
-      }
-
-      const dup = db.prepare('SELECT id FROM media WHERE character_id = ? AND sha256 = ?').get(charId, saved.sha256);
-      if (dup) {
-        await removeLibraryFile(saved.relPath);
-        skipped.push({ name: originalName, reason: '重复文件' });
         continue;
       }
 

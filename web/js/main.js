@@ -1,6 +1,8 @@
 import { LibraryView } from './views/library.js';
 import { CharacterView } from './views/character.js';
 import { PackView } from './views/pack.js';
+import { UploadsView } from './views/uploads.js';
+import { initUploadHud } from './components/upload-hud.js';
 
 const app = document.getElementById('app');
 
@@ -9,9 +11,11 @@ const routes = [
   [/^\/s\/(\d+)$/, (m) => LibraryView(app, Number(m[1]))],
   [/^\/c\/(\d+)$/, (m) => CharacterView(app, Number(m[1]))],
   [/^\/p\/(\d+)$/, (m) => PackView(app, Number(m[1]))],
+  [/^\/uploads$/, () => UploadsView(app)],
 ];
 
 let busy = false;
+let cleanup = null;
 
 export async function renderRoute() {
   if (busy) return;
@@ -22,9 +26,18 @@ export async function renderRoute() {
     const m = path.match(re);
     if (!m) continue;
     try {
+      if (typeof cleanup === 'function') {
+        try {
+          cleanup();
+        } catch (err) {
+          console.error(err);
+        }
+      }
+      cleanup = null;
       app.innerHTML = '';
-      await fn(m);
-      if (!/^\/c\/|^\/p\//.test(path)) document.title = '资料库';
+      const ret = await fn(m);
+      if (typeof ret === 'function') cleanup = ret;
+      if (!/^\/c\/|^\/p\/|^\/uploads/.test(path)) document.title = '资料库';
       window.scrollTo(0, 0);
     } catch (err) {
       console.error(err);
@@ -54,4 +67,5 @@ document.addEventListener('click', (e) => {
 window.addEventListener('popstate', renderRoute);
 window.addEventListener('app:route', renderRoute);
 
+initUploadHud();
 renderRoute();

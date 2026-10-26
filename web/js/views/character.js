@@ -1,12 +1,15 @@
-import { api, uploadMedia } from '../api.js';
+import { api } from '../api.js';
 import { esc, fmtNum, fmtBytes, fadeIn, toast } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { openLightbox } from '../components/lightbox.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openTagPicker } from '../components/tag-picker.js';
-import { openContextMenu } from '../components/context-menu.js';
+import { openContextMenu, openMenuAtPoint } from '../components/context-menu.js';
 import { mediaMenu } from '../components/media-actions.js';
+import { addMediaMenuItems } from '../components/media-picker.js';
+import { bindDropUpload } from '../components/dropzone.js';
+import { queue } from '../upload-queue.js';
 
 /** 复制文本：优先 Clipboard API，失败降级到 execCommand（无手势环境也能用） */
 async function copyText(text) {
@@ -84,10 +87,9 @@ export async function CharacterView(root, id) {
            </div>
            <span class="spacer"></span>
            <button class="tb-btn" data-new-pack>＋ 图包</button>
-           <button class="tb-btn primary" data-upload>＋ 上传图片 / 视频</button>
+           <button class="tb-btn primary" data-upload>↑ 上传素材</button>
          </div>
          ${isWorkShelf() ? '<div class="cat-row" data-cats></div>' : ''}
-         <div class="progress hidden" data-progress><i style="width:0%"></i></div>
          <div data-body></div>
        </main>`
     );
@@ -486,6 +488,34 @@ export async function CharacterView(root, id) {
     loadPacks();
   }
 
+  /** 图包「添加素材」的四个来源（右键菜单和卡片上的 ＋ 共用） */
+  function addMediaItems(pack) {
+    return addMediaMenuItems({
+      charId: c.id,
+      charName: c.name,
+      packId: pack.id,
+      packTitle: pack.title,
+      onUpload: () => pickFiles({ packId: pack.id, packTitle: pack.title }),
+      onDone: refreshAfterMediaChange,
+    });
+  }
+
+  /** 素材归属变了：角色统计、图包封面、当前列表都要重拉 */
+  function refreshAfterMediaChange() {
+    api
+      .character(id)
+      .then((next) => {
+        c = next;
+        paint();
+        return loadPacks();
+      })
+      .then(() => {
+        if (mode === 'media') return loadMedia();
+        return null;
+      })
+      .catch((err) => toast(err.message || '刷新失败'));
+  }
+
   /** 图包 / 平台 / 空白处的右键 */
   function bindContextMenus() {
     const page = root.querySelector('.page');
@@ -515,7 +545,7 @@ export async function CharacterView(root, id) {
           { label: '打开', onClick: () => gotoPack(pack.id) },
           { label: '编辑名称', onClick: () => renamePack(pack) },
           { label: '编辑标签', onClick: () => editPackTags(pack) },
-          { label: '添加素材', hint: '传进这个图包', onClick: () => pickFiles({ packId: pack.id }) },
+          { label: '添加素材', hint: '4 种来源', children: addMediaItems(pack) },
           { label: '打开本地文件夹', onClick: () => api.reveal('pack', pack.id).catch(() => toast('目录已丢失')) },
           { separator: true },
           { label: '解散图包', hint: '保留媒体', onClick: () => dissolvePack(pack) },
@@ -525,7 +555,8 @@ export async function CharacterView(root, id) {
       }
 
       openContextMenu(e, [
-        { label: '上传素材', onClick: () => pickFiles() },
+        { label: '上传素材', hint: '也可以直接拖进来', onClick: () => pickFiles() },
+        { label: '打开上传队列', onClick: () => { history.pushState({}, '', '/uploads'); window.dispatchEvent(new CustomEvent('app:route')); } },
         { label: '新建图包', onClick: () => root.querySelector('[data-new-pack]').click() },
         { separator: true },
         { label: `编辑${noun()}资料`, onClick: () => root.querySelector('[data-edit]').click() },
@@ -595,6 +626,7 @@ export async function CharacterView(root, id) {
             <div class="m">${meta || '0 项'}</div>
           </div>
           <div class="pack-acts">
+            <button data-add-media="${p.id}" title="添加素材">＋</button>
             <button data-rename="${p.id}" title="重命名">✎</button>
             <button data-del="${p.id}" title="删除图包">✕</button>
           </div>
@@ -602,6 +634,17 @@ export async function CharacterView(root, id) {
       })
       .join('');
     holder.querySelectorAll('img').forEach(fadeIn);
+
+    holder.querySelectorAll('[data-add-media]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const pack = packsCache.find((p) => p.id === Number(btn.dataset.addMedia));
+        if (!pack) return;
+        const r = btn.getBoundingClientRect();
+        openMenuAtPoint(Math.min(window.innerWidth - 16, r.right), r.bottom + 6, addMediaItems(pack));
+      });
+    });
 
     holder.querySelectorAll('[data-rename]').forEach((btn) => {
       btn.addEventListener('click', async (e) => {
@@ -661,10 +704,11 @@ export async function CharacterView(root, id) {
     });
   }
 
-  const progress = () => root.querySelector('[data-progress]');
-
-  /** 选文件并上传；packId 指定传进哪个图包 */
-  function pickFiles({ packId = null } = {}) {
+  /**
+   * 选本地文件进上传队列。packId 指定传进哪个图包，
+   * 不指定就按文件名里的日期自动归包（走当前小库）。
+   */
+  function pickFiles({ packId = null, packTitle = '' } = {}) {
     const input = document.createElement('input');
     input.type = 'file';
     input.multiple = true;
@@ -674,41 +718,33 @@ export async function CharacterView(root, id) {
     input.addEventListener('change', () => {
       const files = Array.from(input.files || []);
       input.remove();
-      if (files.length) runUpload(files, packId);
+      if (!files.length) return;
+      const n = queue.enqueue(files, {
+        charId: c.id,
+        charName: c.name,
+        packId,
+        packTitle,
+        category: packCategory(),
+      });
+      toast(n ? `已加入上传队列 ${n} 个文件 · 点右下角看进度` : '这些文件已经在队列里了');
     });
     input.click();
   }
 
-  async function runUpload(files, packId) {
-    const bar = progress();
-    bar.classList.remove('hidden');
-    bar.querySelector('i').style.width = '0%';
-    try {
-      const res = await uploadMedia(c.id, files, {
-        packId,
-        category: packCategory(),
-        onProgress: (loaded, total) => {
-          bar.querySelector('i').style.width = `${Math.round((loaded / total) * 100)}%`;
-        },
-      });
-      bar.querySelector('i').style.width = '100%';
-      const skipped = res.skipped || [];
-      toast(
-        skipped.length
-          ? `导入 ${res.added} 个，跳过 ${skipped.length} 个（${skipped[0].reason}）`
-          : `已导入 ${res.added} 个文件`
-      );
-      c = await api.character(id);
-      paint();
-      await loadPacks();
-      if (mode === 'media') await loadMedia();
-    } catch (err) {
-      toast(err.message || '上传失败');
-    } finally {
-      bar.classList.add('hidden');
-    }
+  /** 队列里所有文件都结束后刷新页面数据（不打断当前浏览就靠这个） */
+  function watchUploads() {
+    queue.onIdle = async () => {
+      if (!root.isConnected || !root.querySelector('.page')) return;
+      try {
+        c = await api.character(id);
+        paint();
+        await loadPacks();
+        if (mode === 'media') await loadMedia();
+      } catch {
+        /* 页面可能已经被切走了 */
+      }
+    };
   }
-
 
   function bindToolbar() {
     root.querySelector('[data-view]').addEventListener('click', async (e) => {
@@ -783,6 +819,14 @@ export async function CharacterView(root, id) {
   bindToolbar();
   root.querySelector('[data-upload]').addEventListener('click', () => pickFiles());
   bindContextMenus();
+  watchUploads();
+  bindDropUpload(root.querySelector('.page'), () => ({
+    charId: c.id,
+    charName: c.name,
+    packId: null,
+    packTitle: '',
+    category: packCategory(),
+  }));
   await loadPacks();
 
   // 从右键菜单「添加素材」跳过来时，直接弹选择框

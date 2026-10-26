@@ -368,10 +368,69 @@ try {
     );
   }
 
-  // 4. 切到全部媒体
+  // 2.8 「添加素材」展开四个来源
+  if (await realRightClick('.pack-card')) {
+    const sub = await evaluate(`(async () => {
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+      const add = [...document.querySelectorAll('.ctx-menu .ctx-item')]
+        .find(b => b.querySelector('span').textContent.trim() === '添加素材');
+      if (!add) return null;
+      add.click();
+      await sleep(220);
+      return [...document.querySelectorAll('.ctx-menu .ctx-item')].map(b => b.querySelector('span').textContent.trim());
+    })()`);
+    check(
+      '添加素材有四个来源',
+      Array.isArray(sub) && sub.length === 4,
+      Array.isArray(sub) ? sub.join(' / ') : String(sub)
+    );
+    await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await sleep(200);
+  }
+
+  // 2.9 素材选择器：范围切换 + 多选计数（只读，不落库）
+  const mediaPicker = await evaluate(`(async () => {
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const btn = document.querySelector('[data-add-media]');
+    if (!btn) return { open: false };
+    btn.click();
+    await sleep(220);
+    const item = [...document.querySelectorAll('.ctx-menu .ctx-item')]
+      .find(b => b.querySelector('span').textContent.includes('从本角色素材添加'));
+    item.click();
+    await sleep(1800);
+    const out = {
+      open: !!document.querySelector('.picker'),
+      scopes: [...document.querySelectorAll('.pk-scope button')].map(b => b.textContent.trim()),
+      cells: document.querySelectorAll('.pk-cell').length,
+    };
+    const cell = document.querySelector('.pk-cell:not(.is-in)');
+    if (cell) cell.click();
+    await sleep(200);
+    out.count = document.querySelector('[data-count]').textContent.replace(/\\s+/g, ' ').trim();
+    out.okText = document.querySelector('[data-ok]').textContent.trim();
+    document.querySelector('[data-cancel]').click();
+    await sleep(200);
+    out.closed = !document.querySelector('.picker');
+    return out;
+  })()`);
+  check('素材选择器能打开', mediaPicker.open === true, `${mediaPicker.cells || 0} 个格子`);
+  check(
+    '选择器有四个范围',
+    Array.isArray(mediaPicker.scopes) && mediaPicker.scopes.length === 4,
+    (mediaPicker.scopes || []).join(' / ')
+  );
+  check('选中后底部显示已选数量', /已选\s*1\s*项/.test(mediaPicker.count || ''), mediaPicker.count);
+  check('取消后选择器关闭', mediaPicker.closed === true);
+
+  // 4. 切到全部媒体（瀑布流在 rAF 里画，轮询等它出来，别用固定 sleep）
   await evaluate(`document.querySelector('[data-view] button[data-v="media"]').click()`);
-  await sleep(3000);
-  const tiles = await evaluate(`document.querySelectorAll('.tile').length`);
+  let tiles = 0;
+  for (let i = 0; i < 24; i += 1) {
+    tiles = await evaluate(`document.querySelectorAll('.tile').length`);
+    if (tiles) break;
+    await sleep(300);
+  }
   check('全部媒体瀑布流', tiles > 0, `${tiles} 个 tile`);
 
   const imgOk = await evaluate(`
