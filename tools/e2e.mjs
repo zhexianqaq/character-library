@@ -652,7 +652,10 @@ try {
       await fetch('/api/characters/' + mk.id, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ platforms: [{ platform: '游戏', handle: '原神', url: '' }] }),
+        body: JSON.stringify({
+          platforms: [{ platform: '游戏', handle: '原神', url: '' }],
+          tags: ['原神'],
+        }),
       });
       // 三个小库各建一个图包，验证层级
       for (const cat of ['官图', 'cosplay', '同人']) {
@@ -693,11 +696,21 @@ try {
         plat.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
         await sleep(280);
       }
+      const dds = [...m.querySelectorAll('.dd')];
       const out = {
         title: m.querySelector('h3').textContent,
         label: m.querySelector('.field > span').textContent.trim(),
         options: [...m.querySelectorAll('.dd-panel .dd-opt')].map((o) => o.textContent.trim()),
+        ddCount: dds.length,
       };
+      // 第二个下拉是作品名：既能选已有资源，也能直接输入
+      if (dds[1]) {
+        const wi = dds[1].querySelector('.dd-input');
+        out.workEditable = wi.dataset.ddEditable === '1';
+        wi.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        await sleep(260);
+        out.workOptions = [...dds[1].querySelectorAll('.dd-opt')].map((o) => o.textContent.trim());
+      }
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
       await sleep(150);
       return out;
@@ -707,8 +720,57 @@ try {
       !!workModal && workModal.title === '添加出处' && workModal.label.startsWith('出处类型') && workModal.options.includes('动画'),
       JSON.stringify(workModal)
     );
+    check(
+      '作品名是下拉 + 可输入',
+      !!workModal && workModal.ddCount === 2 && workModal.workEditable === true && (workModal.workOptions || []).includes('原神'),
+      JSON.stringify(workModal && { workEditable: workModal.workEditable, workOptions: workModal.workOptions })
+    );
     await evaluate(`document.querySelector('.modal [data-cancel]').click()`);
     await sleep(200);
+
+    // 标签：点击进对应资源，删除走右键
+    const tagNav = await evaluate(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const chip = [...document.querySelectorAll('[data-tags] .chip[data-tag]')]
+        .find((c) => c.textContent.trim() === '原神');
+      if (!chip) return { ok: false };
+      const out = { ok: true, linked: chip.classList.contains('link'), hasX: chip.textContent.includes('×') };
+      chip.click();
+      await sleep(1600);
+      out.path = location.pathname;
+      return out;
+    })()`);
+    check(
+      '点标签进入对应资源',
+      tagNav.ok && tagNav.linked && /^\/r\/\d+$/.test(tagNav.path || ''),
+      JSON.stringify(tagNav)
+    );
+    check('标签不再挂 ×（删除挪到右键）', tagNav.ok && tagNav.hasX === false);
+
+    await goto(`${BASE}/c/${workId}`, 1600);
+    const tagMenu = await evaluate(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const chip = [...document.querySelectorAll('[data-tags] .chip[data-tag]')]
+        .find((c) => c.textContent.trim() === '原神');
+      const r = chip.getBoundingClientRect();
+      chip.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true,
+        clientX: Math.round(r.left + 10), clientY: Math.round(r.bottom + 4),
+      }));
+      await sleep(300);
+      const items = [...document.querySelectorAll('.ctx-menu .ctx-item')].map((b) => ({
+        t: b.querySelector('span').textContent.trim(),
+        disabled: b.disabled,
+      }));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await sleep(200);
+      return items;
+    })()`);
+    check(
+      '标签右键有「删除标签」',
+      tagMenu.some((i) => i.t === '删除标签' && !i.disabled) && tagMenu.some((i) => i.t.includes('打开对应的资源')),
+      JSON.stringify(tagMenu)
+    );
 
     // 小库：三个分类 + 按分类过滤图包
     const catTabs = await evaluate(`[...document.querySelectorAll('.cat')].map((b) => b.dataset.cat)`);
@@ -749,11 +811,16 @@ try {
   await sleep(500);
   check('新建角色弹窗打开', (await evaluate(`!!document.querySelector('.modal')`)) === true);
 
+  const createFields = await evaluate(`[...document.querySelectorAll('.modal .field > span')].map((s) => s.textContent.trim())`);
+  check(
+    '新建角色只问名字和简介',
+    createFields.length === 2 && !createFields.some((f) => f.includes('账号')),
+    createFields.join(' / ')
+  );
   await evaluate(`
     (() => {
       const m = document.querySelector('.modal');
       m.querySelector('[name=name]').value = 'E2E 测试角色';
-      m.querySelector('[name=account]').value = 'e2e_bot';
       m.querySelector('[data-ok]').click();
       return true;
     })()
@@ -1138,6 +1205,44 @@ try {
       check('gif 详情页标题是 GIF DETAILS', gif.kicker === 'GIF DETAILS', gif.kicker);
     }
   }
+
+  // 8.8 批量新建：中英文逗号分隔
+  await goto(`${BASE}/`, 1600);
+  const batch = await evaluate(`(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const btn = document.querySelector('[data-new-char]');
+    if (!btn) return { ok: false };
+    btn.click();
+    await sleep(520);
+    const m = document.querySelector('.modal');
+    if (!m) return { ok: false };
+    m.querySelector('[name=name]').value = 'E2E 批量甲，E2E 批量乙';
+    m.querySelector('[data-ok]').click();
+    await sleep(3000);
+    const names = [...document.querySelectorAll('.char-card .name')].map((n) => n.textContent.trim());
+    return {
+      ok: true,
+      names: names.filter((n) => n.startsWith('E2E 批量')),
+      toast: document.querySelector('#toast')?.textContent || '',
+    };
+  })()`);
+  check(
+    '中英文逗号可批量新建',
+    batch.ok && (batch.names || []).length === 2,
+    `${batch.toast || ''} · ${(batch.names || []).join(' / ')}`
+  );
+
+  // 清掉批量造的角色
+  await evaluate(`(async () => {
+    const ov = await (await fetch('/api/overview')).json();
+    for (const s of ov.shelves) {
+      const d = await (await fetch('/api/shelves/' + s.id + '/characters')).json().catch(() => ({ items: [] }));
+      for (const c of d.items || []) {
+        if (c.name.indexOf('E2E 批量') === 0) await fetch('/api/characters/' + c.id, { method: 'DELETE' });
+      }
+    }
+    return true;
+  })()`);
 
   // 9. 删除角色（走接口，顺带验证级联清理）
   const charId = Number(newPath.split('/').pop());

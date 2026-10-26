@@ -51,6 +51,7 @@ export const api = {
   resources: (shelfId) => req(`/api/shelves/${shelfId}/resources`),
   resource: (id) => req(`/api/resources/${id}`),
   resourceIndex: () => req('/api/resources/index'),
+  ensureResource: (name, category) => json('POST')('/api/resources/ensure', { name, category }),
   createCharacter: (data) => json('POST')('/api/characters', data),
   character: (id) => req(`/api/characters/${id}`),
   updateCharacter: (id, patch) => json('PATCH')(`/api/characters/${id}`, patch),

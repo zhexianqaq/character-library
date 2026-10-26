@@ -55,7 +55,7 @@ export async function CharacterView(root, id) {
         <div class="hero-main">
           <div class="hero-head">
             <h1 class="hero-name">${esc(c.name)}</h1>
-            <div class="hero-account">${esc(c.account ? '@' + c.account : (c.shelf ? c.shelf.name : ''))}</div>
+            <div class="hero-account">${esc(c.shelf ? c.shelf.name : '')}</div>
           </div>
           <div class="chip-row" data-tags></div>
           <div class="hero-body">
@@ -274,6 +274,8 @@ export async function CharacterView(root, id) {
     const work = isWorkShelf();
     const list = Array.isArray(c.platforms) ? c.platforms : [];
     const cur = index >= 0 ? list[index] : null;
+    // 作品名下拉给已有的资源名，选一个就等于挂到那张卡上；输入新的保存时自动建卡
+    const resNames = work ? [...(await resourceIndex()).keys()] : [];
     const v = await openModal({
       title: work
         ? cur
@@ -282,6 +284,9 @@ export async function CharacterView(root, id) {
         : cur
           ? '编辑平台账号'
           : '添加平台账号',
+      description: work
+        ? '作品名可以从已有的资源里选，也可以直接输入新的 —— 保存时会自动在资源库建一张卡。'
+        : '',
       fields: work
         ? [
             {
@@ -297,11 +302,12 @@ export async function CharacterView(root, id) {
             {
               name: 'handle',
               label: '作品名',
-              type: 'text',
+              type: 'datalist',
+              options: resNames,
               half: true,
               required: true,
               value: cur ? cur.handle : '',
-              placeholder: '比如 原神',
+              placeholder: '选择或输入新的',
             },
             {
               name: 'url',
@@ -360,7 +366,23 @@ export async function CharacterView(root, id) {
       c.platforms = next;
       paintPlatforms();
       const noun = work ? '出处' : '平台账号';
-      toast(index >= 0 ? `已更新${noun}` : `已添加${noun}`);
+      let extra = '';
+      if (work && entry.handle) {
+        try {
+          const r = await api.ensureResource(entry.handle, entry.platform);
+          if (r && r.created) {
+            extra = ` · 已在资源库建立「${entry.handle}」`;
+            // 新卡要能被出处点击和标签跳转认到，索引立刻过期
+            RES_INDEX = null;
+            RES_INDEX_AT = 0;
+            await resourceIndex();
+            paintTags();
+          }
+        } catch {
+          /* 建卡失败不影响出处本身 */
+        }
+      }
+      toast((index >= 0 ? `已更新${noun}` : `已添加${noun}`) + extra);
     } catch (err) {
       toast(err.message || '保存失败');
     }
@@ -389,26 +411,67 @@ export async function CharacterView(root, id) {
     return `https://${s}`.slice(0, 300);
   }
 
+  /** 标签点进去是「对应的库」（资源详情），删除走右键 —— 点一下就没太容易误删 */
+  function gotoResourceByName(name) {
+    const hit = RES_INDEX && RES_INDEX.get(name);
+    if (!hit) {
+      toast(`「${name}」还没有对应的资源，去资源库建一张就能跳了`);
+      return false;
+    }
+    history.pushState({ from: location.pathname + location.search }, '', `/r/${hit.id}`);
+    window.dispatchEvent(new CustomEvent('app:route'));
+    return true;
+  }
+
   function paintTags() {
     const el = root.querySelector('[data-tags]');
     if (!el) return;
-    // 条目自己的名字标签是系统带的（图片也会继承它），不给删
+    // 条目自己的名字标签是系统带的（图片也会继承它），不给删；永远排第一个
+    const tags = c.tags.includes(c.name) ? [c.name, ...c.tags.filter((t) => t !== c.name)] : c.tags.slice();
     el.innerHTML =
-      c.tags
+      tags
         .map((t) => {
           const self = t === c.name;
-          return `<button class="chip${self ? ' self' : ''}" data-tag="${esc(t)}" data-self="${
+          const hit = !self && RES_INDEX && RES_INDEX.get(t);
+          return `<button class="chip${self ? ' self' : ''}${hit ? ' link' : ''}" data-tag="${esc(t)}" data-self="${
             self ? 1 : 0
-          }" title="${self ? '条目自己的标签，改名会自动更新' : '点一下移除'}">${esc(t)}${self ? '' : ' ×'}</button>`;
+          }" title="${
+            self ? '条目自己的标签，改名会自动更新' : hit ? `点击进入「${esc(t)}」· 右键可删除` : '右键可删除'
+          }">${esc(t)}</button>`;
         })
         .join('') + `<button class="chip add" data-add-tag>+ 标签</button>`;
     el.querySelectorAll('[data-tag]').forEach((btn) => {
-      btn.addEventListener('click', () => {
+      const pick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const t = btn.dataset.tag;
         if (btn.dataset.self === '1') {
           toast('这是条目自己的标签，改名会自动更新');
           return;
         }
-        saveTags(c.tags.filter((t) => t !== btn.dataset.tag));
+        gotoResourceByName(t);
+      };
+      btn.addEventListener('click', pick);
+      btn.addEventListener('contextmenu', (e) => {
+        const t = btn.dataset.tag;
+        const self = btn.dataset.self === '1';
+        const hit = RES_INDEX && RES_INDEX.get(t);
+        openContextMenu(e, [
+          {
+            label: '打开对应的资源',
+            hint: hit ? t : '还没有',
+            disabled: !hit,
+            onClick: () => gotoResourceByName(t),
+          },
+          { separator: true },
+          {
+            label: self ? '条目自己的标签' : '删除标签',
+            hint: self ? '改名时自动更新' : '',
+            danger: !self,
+            disabled: self,
+            onClick: () => saveTags(c.tags.filter((x) => x !== t)),
+          },
+        ]);
       });
     });
     el.querySelector('[data-add-tag]').addEventListener('click', async () => {
@@ -1213,7 +1276,6 @@ export async function CharacterView(root, id) {
         title: `编辑${noun()}资料`,
         fields: [
           { name: 'name', label: `${noun()}名`, value: c.name, required: true },
-          { name: 'account', label: '账号 / 来源', value: c.account || '' },
           { name: 'intro', label: '简介', type: 'textarea', value: c.intro || '' },
         ],
         submitText: '保存',
@@ -1226,11 +1288,11 @@ export async function CharacterView(root, id) {
     });
   }
 
+  await resourceIndex(); // 先拿索引：标签要据此决定「能不能点进去」
   root.innerHTML = shellHtml();
   bindTopbar(root);
   paint();
   paintResNote();
-  resourceIndex();
   bindIntro();
   bindToolbar();
   buildFilterBar();

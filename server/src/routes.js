@@ -687,6 +687,56 @@ export function createApp() {
     });
   });
 
+  /**
+   * 出处里写了新作品名 → 自动在资源库建一张卡片（分类 = 出处类型）。
+   * 资源库不存在就顺手建一个，这样「只填名字 + 出处」也能自洽。
+   */
+  app.post('/api/resources/ensure', async (req, res) => {
+    const db = getDb();
+    const name = String((req.body && req.body.name) || '').trim();
+    const category = String((req.body && req.body.category) || '').trim().slice(0, 20);
+    if (!name) return res.status(400).json({ error: '作品名不能为空' });
+
+    let shelf = db
+      .prepare("SELECT * FROM shelves WHERE kind = 'resource' ORDER BY sort_order, id LIMIT 1")
+      .get();
+    let createdShelf = false;
+    if (!shelf) {
+      const lib = mainLibrary();
+      const sid = Number(
+        db
+          .prepare(
+            `INSERT INTO shelves(library_id, name, note, kind, sort_order, created_at, updated_at)
+             VALUES(?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM shelves WHERE library_id=?),?,?)`
+          )
+          .run(lib.id, '资源库', '', 'resource', lib.id, nowIso(), nowIso()).lastInsertRowid
+      );
+      shelf = db.prepare('SELECT * FROM shelves WHERE id = ?').get(sid);
+      createdShelf = true;
+    }
+
+    const found = db
+      .prepare('SELECT id FROM characters WHERE shelf_id = ? AND is_container = 0 AND name = ?')
+      .get(shelf.id, name);
+    if (found) {
+      return res.json({ id: found.id, shelfId: shelf.id, created: false, createdShelf });
+    }
+
+    const dirSlug = await uniqueCharRelDir(db, shelf.id, name);
+    const ts = nowIso();
+    const id = Number(
+      db
+        .prepare(
+          `INSERT INTO characters(shelf_id, name, account, intro, dir_slug, category, sort_order, created_at, updated_at)
+           VALUES(?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM characters WHERE shelf_id=?),?,?)`
+        )
+        .run(shelf.id, name.slice(0, 100), '', '', dirSlug, category || null, shelf.id, ts, ts)
+        .lastInsertRowid
+    );
+    ensureSelfTags(db); // 资源名本身也是标签，标签库里能搜到
+    res.json({ id, shelfId: shelf.id, created: true, createdShelf });
+  });
+
   app.get('/api/resources/:id', (req, res) => {
     const db = getDb();
     const id = Number(req.params.id);

@@ -324,6 +324,10 @@ img { display: block; }
 /* 条目自己的名字标签：系统带的，不给删 */
 .chip.self { background: rgba(255, 255, 255, 0.55); color: var(--text); cursor: default; }
 .chip.self:hover { background: rgba(255, 255, 255, 0.55); }
+/* 有对应资源的标签：点一下进那个库，删除在右键 */
+.chip[data-tag] { cursor: pointer; }
+.chip.link { background: #fff; color: var(--text); }
+.chip.link:hover { background: var(--accent); color: var(--on-accent); }
 
 /* 四象限：2×2 等分，右侧留给简介 */
 .hero-body {

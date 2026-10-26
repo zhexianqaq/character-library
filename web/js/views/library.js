@@ -84,7 +84,11 @@ export async function LibraryView(root, shelfId) {
             </div>
             <div class="info">
               <div class="name">${esc(c.name)}</div>
-              <div class="sub">${c.packCount} 个图包${c.account ? ' · @' + esc(c.account) : ''}</div>
+              <div class="sub">${(() => {
+                const first = Array.isArray(c.platforms) && c.platforms.length ? c.platforms[0] : null;
+                const tag = first ? first.handle || first.platform : '';
+                return `${c.packCount} 个图包${tag ? ' · ' + esc(tag) : ''}`;
+              })()}</div>
             </div>
           </a>`;
         })
@@ -198,20 +202,56 @@ export async function LibraryView(root, shelfId) {
       if (!state.shelfId) return toast('先建一个角色库');
       const v = await openModal({
         title: `新建${noun}`,
-        description: `建好后可以在${noun}页面上传图片和视频。`,
+        description: `建好后可以在${noun}页面上传图片和视频，出处 / 平台在详情页右侧填。`,
         fields: [
-          { name: 'name', label: `${noun}名`, required: true, placeholder: isWork ? '比如：雷电将军' : '比如：水淼' },
-          { name: 'account', label: '账号 / 来源', placeholder: '选填，比如 aqua_cosplay' },
+          {
+            name: 'name',
+            label: `${noun}名`,
+            required: true,
+            placeholder: isWork ? '比如：申鹤，雷电将军' : '比如：水淼，纸悦',
+            hint: '要一次建多个，用逗号隔开（中英文逗号都行）',
+          },
           { name: 'intro', label: '简介', type: 'textarea', placeholder: '选填，之后也能改' },
         ],
         submitText: '创建',
       });
       if (!v) return;
+
+      // 中英文逗号 / 顿号 / 分号都能当分隔符
+      const names = String(v.name || '')
+        .split(/[,，、;；\n]+/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .slice(0, 80);
+      if (!names.length) {
+        toast('名字不能为空');
+        return;
+      }
+
       try {
-        const c = await api.createCharacter({ shelfId: state.shelfId, ...v });
-        toast(`${noun}已创建，去上传素材吧`);
-        history.pushState({}, '', `/c/${c.id}`);
-        window.dispatchEvent(new CustomEvent('app:route'));
+        if (names.length === 1) {
+          const c = await api.createCharacter({ shelfId: state.shelfId, name: names[0], intro: v.intro });
+          toast(`${noun}已创建，去上传素材吧`);
+          history.pushState({}, '', `/c/${c.id}`);
+          window.dispatchEvent(new CustomEvent('app:route'));
+          return;
+        }
+
+        const failed = [];
+        for (const name of names) {
+          try {
+            await api.createCharacter({ shelfId: state.shelfId, name, intro: v.intro });
+          } catch {
+            failed.push(name);
+          }
+        }
+        const okCount = names.length - failed.length;
+        toast(
+          failed.length
+            ? `已创建 ${okCount} 个，失败 ${failed.length} 个（${failed.slice(0, 3).join('、')}）`
+            : `已创建 ${okCount} 个${noun}`
+        );
+        await render();
       } catch (err) {
         toast(err.message || '创建失败');
       }
