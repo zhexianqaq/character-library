@@ -63,8 +63,8 @@ const insertPack = db.prepare(
    VALUES(?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?)`
 );
 const insertMedia = db.prepare(
-  `INSERT INTO media(character_id, pack_id, kind, rel_path, file_name, ext, bytes, sha256, width, height, sort_order, created_at)
-   VALUES(?,?,?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM media WHERE pack_id IS ?),?)`
+  `INSERT INTO media(character_id, pack_id, kind, rel_path, file_name, ext, bytes, sha256, width, height, anim, sort_order, created_at)
+   VALUES(?,?,?,?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM media WHERE pack_id IS ?),?)`
 );
 const findBySha = db.prepare('SELECT id FROM media WHERE character_id = ? AND sha256 = ?');
 
@@ -122,6 +122,7 @@ for (const g of groups) {
         saved.sha256,
         saved.width,
         saved.height,
+        saved.anim ? 1 : 0,
         packId,
         ts
       );

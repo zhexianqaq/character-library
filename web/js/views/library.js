@@ -4,6 +4,9 @@ import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openContextMenu } from '../components/context-menu.js';
 
+/** 没有条目层级的库，直接有自己的页面 */
+const FLAT_HOME = { emoji: '/e/', resource: '/rs/' };
+
 export async function LibraryView(root, shelfId) {
   const state = { q: '', shelfId: Number(shelfId) || null, sort: 'recent' };
 
@@ -19,9 +22,9 @@ export async function LibraryView(root, shelfId) {
     }
 
     const active = shelves.find((s) => s.id === state.shelfId);
-    // 表情库没有条目层级，直接进自己的页面（图包 / 未分类 / 全部素材）
-    if (active && active.kind === 'emoji') {
-      history.replaceState({}, '', `/e/${active.id}`);
+    // 表情库 / 资源库没有条目层级，直接进自己的页面
+    if (active && FLAT_HOME[active.kind]) {
+      history.replaceState({}, '', `${FLAT_HOME[active.kind]}${active.id}`);
       root.innerHTML = '';
       // 当前这一轮 renderRoute 还占着 busy，下一帧再切
       setTimeout(() => window.dispatchEvent(new CustomEvent('app:route')), 0);
@@ -144,8 +147,8 @@ export async function LibraryView(root, shelfId) {
       if (!tab) return;
       const nextId = Number(tab.dataset.shelf);
       const nextShelf = shelves.find((s) => s.id === nextId);
-      if (nextShelf && nextShelf.kind === 'emoji') {
-        history.pushState({}, '', `/e/${nextId}`);
+      if (nextShelf && FLAT_HOME[nextShelf.kind]) {
+        history.pushState({}, '', `${FLAT_HOME[nextShelf.kind]}${nextId}`);
         window.dispatchEvent(new CustomEvent('app:route'));
         return;
       }
@@ -167,6 +170,7 @@ export async function LibraryView(root, shelfId) {
               { value: 'people', label: '人物库 · 真人，填平台账号' },
               { value: 'work', label: '角色库 · 虚拟角色，标出处' },
               { value: 'emoji', label: '表情库 · 没有条目，直接放图包（gif / 表情包）' },
+              { value: 'resource', label: '资源库 · 游戏 / 动画 / 电影 / 剧集，按标签串起角色' },
             ],
             value: 'people',
             hint: '建好之后也能改，只影响条目那一栏的字段。',
@@ -178,8 +182,8 @@ export async function LibraryView(root, shelfId) {
       try {
         const created = await api.createShelf(v.name, v.kind);
         toast('库已创建');
-        if (v.kind === 'emoji') {
-          history.pushState({}, '', `/e/${created.id}`);
+        if (FLAT_HOME[v.kind]) {
+          history.pushState({}, '', `${FLAT_HOME[v.kind]}${created.id}`);
           window.dispatchEvent(new CustomEvent('app:route'));
           return;
         }

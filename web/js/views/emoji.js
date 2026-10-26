@@ -11,8 +11,11 @@ import { createDropdown } from '../components/dropdown.js';
 import { bindDropUpload } from '../components/dropzone.js';
 import { queue } from '../upload-queue.js';
 
-/** 动图 = gif 或视频；其余都算静态表情 */
-const isAnim = (m) => m.ext === 'gif' || m.kind === 'video';
+/**
+ * 动图 = 真有多帧（服务端 anim 标记，按 sharp 的 pages 算）。
+ * 别用 ext === 'gif' —— 微信/QQ 导出的表情里大量 .gif 只有一帧，其实是静态图。
+ */
+const isAnim = (m) => !!m.anim;
 
 const SORTS = [
   { value: 'new', label: '最新添加' },
@@ -24,7 +27,8 @@ const SORTS = [
 
 /** 打开媒体详情页 */
 function gotoMedia(mediaId) {
-  history.pushState({ from: location.pathname }, {}, `/i/${mediaId}`);
+  // from 带上 ?tab=，否则从详情页退回来只会落在「图包」分区
+  history.pushState({ from: location.pathname + location.search }, {}, `/i/${mediaId}`);
   window.dispatchEvent(new CustomEvent('app:route'));
 }
 
@@ -354,6 +358,8 @@ export async function EmojiView(root, shelfId) {
   async function switchMode(next) {
     if (next === mode) return;
     mode = next;
+    // 分区写进 URL：刷新、从详情页返回都能回到同一个分区
+    history.replaceState({}, '', `/e/${shelfId}${next === 'packs' ? '' : `?tab=${next}`}`);
     resetSelection();
     paintTabs();
     const bar = root.querySelector('[data-filter-bar]');
@@ -748,7 +754,21 @@ export async function EmojiView(root, shelfId) {
   buildFilterBar();
   bindContextMenus();
   paintHead();
+
+  const wanted = new URLSearchParams(location.search).get('tab');
+  mode = wanted === 'loose' || wanted === 'all' ? wanted : 'packs';
+  const filterBar = root.querySelector('[data-filter-bar]');
+  if (filterBar) filterBar.hidden = mode === 'packs';
+  if (packDD) packDD.el.hidden = mode !== 'all';
   paintTabs();
-  renderPacks();
-  syncCount();
+
+  if (mode === 'packs') {
+    renderPacks();
+    syncCount();
+  } else {
+    bodyEl.innerHTML = '<div class="masonry" data-masonry></div>';
+    await ensureMedia();
+    refreshFilterOptions();
+    renderMedia();
+  }
 }

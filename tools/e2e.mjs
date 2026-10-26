@@ -199,7 +199,7 @@ try {
     const tabCount = await evaluate(`document.querySelectorAll('[data-shelf]').length`);
     check('库标签数量与接口一致', tabCount === shelves.length, `${tabCount} 个标签`);
     // 表情库没有条目层，切它不会停在 /s/:id，所以这里挑一个普通库来验 URL
-    const regular = shelves.filter((s) => s.kind !== 'emoji');
+    const regular = shelves.filter((s) => s.kind === 'people' || s.kind === 'work');
     const last = regular[regular.length - 1] || shelves[0];
     await evaluate(`document.querySelector('[data-shelf="${last.id}"]').click()`);
     await sleep(1200);
@@ -212,6 +212,16 @@ try {
       after.path === `/s/${last.id}` && after.active === String(last.id),
       JSON.stringify(after)
     );
+
+    // 资源库标签进 /rs/:id
+    const resTab = shelves.find((s) => s.kind === 'resource');
+    if (resTab) {
+      await evaluate(`document.querySelector('[data-shelf="${resTab.id}"]').click()`);
+      await sleep(1600);
+      const p2 = await evaluate(`location.pathname`);
+      check('资源库标签跳到 /rs/:id', p2 === `/rs/${resTab.id}`, p2);
+      await goto(`${BASE}/`, 1600);
+    }
 
     // 表情库标签直接进自己的页面
     const emojiTab = shelves.find((s) => s.kind === 'emoji');
@@ -860,6 +870,64 @@ try {
   await evaluate(`document.querySelector('.modal [data-cancel]').click()`);
   await sleep(300);
 
+  // 8.6 资源库：卡片 → 详情 → 关联角色（带标签筛选）→ 出处跳回资源
+  const resShelf = shelves.find((s) => s.kind === 'resource');
+  if (resShelf) {
+    await goto(`${BASE}/rs/${resShelf.id}`, 2200);
+    const resList = await evaluate(`(() => ({
+      cards: document.querySelectorAll('.res-card').length,
+      tabs: [...document.querySelectorAll('[data-cat] button')].map((b) => b.textContent.trim()),
+    }))()`);
+    check('资源库按分类分组展示卡片', resList.cards > 0 && resList.tabs.some((t) => t.startsWith('游戏')), resList.tabs.join(' / '));
+
+    const resId = await evaluate(`Number(document.querySelector('.res-card').dataset.id)`);
+    await evaluate(`document.querySelector('.res-card').click()`);
+    await sleep(1800);
+    const resDetail = await evaluate(`(() => ({
+      path: location.pathname,
+      name: document.querySelector('.hero-name')?.textContent || '',
+      related: document.querySelectorAll('[data-related] .char-card').length,
+      stats: [...document.querySelectorAll('.stat span')].map((s) => s.textContent.trim()),
+    }))()`);
+    check(
+      '资源详情：封面 + 名称 + 标签 + 简介 + 关联卡片',
+      resDetail.path === `/r/${resId}` && resDetail.name.length > 0 && resDetail.related > 0 &&
+        resDetail.stats.includes('相关条目'),
+      `${resDetail.name} · ${resDetail.related} 个关联`
+    );
+
+    const resName = resDetail.name;
+    await evaluate(`document.querySelector('[data-related] .char-card').click()`);
+    await sleep(2000);
+    const filtered = await evaluate(`(() => ({
+      path: location.pathname + location.search,
+      note: document.querySelector('[data-res-note]')?.textContent || '',
+      noteShown: !document.querySelector('[data-res-note]')?.hidden,
+      packs: document.querySelectorAll('.pack-card').length,
+    }))()`);
+    check(
+      '跳角色页时自动带上 ?res= 并只显示该标签图包',
+      filtered.noteShown && filtered.note.includes(resName) && filtered.path.includes('res='),
+      `${decodeURIComponent(filtered.path)} · ${filtered.packs} 个图包`
+    );
+
+    // 出处点「原神」→ 回资源详情
+    const viaOrigin = await evaluate(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const card = [...document.querySelectorAll('.pf-card')]
+        .find((c) => c.textContent.includes(${JSON.stringify(resName)}));
+      if (!card) return { ok: false };
+      card.click();
+      await sleep(1500);
+      return { ok: true, path: location.pathname };
+    })()`);
+    check(
+      '出处点资源名会打开资源详情',
+      viaOrigin.ok && viaOrigin.path === `/r/${resId}`,
+      viaOrigin.ok ? viaOrigin.path : '出处里没有这个名称'
+    );
+  }
+
   // 9. 表情库：扁平库 = 图包 / 未分类 / 全部素材
   const emojiShelf = shelves.find((s) => s.kind === 'emoji');
   if (emojiShelf) {
@@ -950,7 +1018,8 @@ try {
       const d = await (await fetch('/api/shelves/${emojiShelf.id}/emoji')).json();
       const p = d.packs.find((x) => x.animCount > 0) || d.packs[0];
       const m = await (await fetch('/api/packs/' + p.id + '/media')).json();
-      const hit = m.items.find((x) => x.ext === 'gif') || m.items[0];
+      // 要挑「真动图」（anim），不是扩展名为 gif 的静态图
+      const hit = m.items.find((x) => x.anim) || m.items[0];
       return hit ? hit.id : 0;
     })()`);
     if (gifId) {

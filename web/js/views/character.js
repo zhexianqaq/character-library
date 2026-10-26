@@ -37,6 +37,24 @@ async function copyText(text) {
   }
 }
 
+/**
+ * 资源名 → 资源。出处卡片点「原神」时要跳到资源详情，
+ * 所以进角色页先拉一次索引，缓存 30 秒，点击就不用等网络。
+ */
+let RES_INDEX = null;
+let RES_INDEX_AT = 0;
+async function resourceIndex() {
+  if (RES_INDEX && Date.now() - RES_INDEX_AT < 30000) return RES_INDEX;
+  try {
+    const d = await api.resourceIndex();
+    RES_INDEX = new Map(d.items.map((x) => [x.name, x]));
+  } catch {
+    RES_INDEX = new Map();
+  }
+  RES_INDEX_AT = Date.now();
+  return RES_INDEX;
+}
+
 export async function CharacterView(root, id) {
   let c = await api.character(id);
   let mode = 'packs';
@@ -49,6 +67,8 @@ export async function CharacterView(root, id) {
   let selecting = false;
   const picked = new Set();
   let packsShown = [];
+  // 从资源详情页点进来时带 ?res=原神，只显示带这个标签的图包
+  let resFilter = new URLSearchParams(location.search).get('res') || '';
 
   function heroHtml() {
     const cover = c.coverMediaId ? api.thumb(c.coverMediaId) : '';
@@ -111,6 +131,7 @@ export async function CharacterView(root, id) {
            <button class="tb-btn" data-new-pack>＋ 图包</button>
            <button class="tb-btn primary" data-upload>↑ 上传素材</button>
          </div>
+         <div class="filter-note" data-res-note hidden></div>
          ${isWorkShelf() ? '<div class="cat-row" data-cats></div>' : ''}
          <div data-body></div>
          <div class="sel-bar" data-selbar hidden></div>
@@ -177,6 +198,13 @@ export async function CharacterView(root, id) {
       const open = () => {
         const entry = list[idx];
         if (!entry) return;
+        // 出处 / 平台写的是某个资源名（原神、Fate/stay night…）→ 直接进资源页
+        const hit = RES_INDEX && RES_INDEX.get(String(entry.handle || '').trim());
+        if (hit) {
+          history.pushState({ from: location.pathname + location.search }, '', `/r/${hit.id}`);
+          window.dispatchEvent(new CustomEvent('app:route'));
+          return;
+        }
         if (entry.url) {
           // 用 <a> 触发，比 window.open 更稳（带 noopener 时 window.open 恒返回 null）
           const a = document.createElement('a');
@@ -474,7 +502,7 @@ export async function CharacterView(root, id) {
 
   /** 打开媒体详情页 */
   function gotoMedia(mediaId) {
-    history.pushState({ from: location.pathname }, {}, `/i/${mediaId}`);
+    history.pushState({ from: location.pathname + location.search }, {}, `/i/${mediaId}`);
     window.dispatchEvent(new CustomEvent('app:route'));
   }
 
@@ -808,6 +836,25 @@ export async function CharacterView(root, id) {
     }
   }
 
+  /** 「来自资源 X」的提示条，清除后恢复全部图包 */
+  function paintResNote() {
+    const el = root.querySelector('[data-res-note]');
+    if (!el) return;
+    el.hidden = !resFilter;
+    if (!resFilter) {
+      el.innerHTML = '';
+      return;
+    }
+    el.innerHTML = `<span>来自资源「${esc(resFilter)}」· 只看带这个标签的图包</span>
+      <button data-clear-res>显示全部</button>`;
+    el.querySelector('[data-clear-res]').addEventListener('click', () => {
+      resFilter = '';
+      history.replaceState({}, '', location.pathname);
+      paintResNote();
+      loadPacks();
+    });
+  }
+
   /** 当前小库；人物库或「未分类」时返回 null */
   function packCategory() {
     return isWorkShelf() && CATEGORIES.includes(cat) ? cat : null;
@@ -846,11 +893,22 @@ export async function CharacterView(root, id) {
     const data = await api.packs(c.id);
     packsCache = data.items;
     paintCats();
-    const items = isWorkShelf() ? data.items.filter((p) => (p.category || '未分类') === cat) : data.items;
+    let items = isWorkShelf() ? data.items.filter((p) => (p.category || '未分类') === cat) : data.items;
+    if (resFilter) items = items.filter((p) => (p.tags || []).includes(resFilter));
     packsShown = items;
     if (!items.length) {
       holder.innerHTML = `<div class="empty" style="grid-column:1/-1">
-        <b>${isWorkShelf() ? `「${cat}」还没有图包` : '还没有图包'}</b>上传图片或视频后，会按文件名里的日期自动月份归包；也可以点「＋ 图包」手动建一个
+        <b>${
+          resFilter
+            ? `「${esc(resFilter)}」下还没有图包`
+            : isWorkShelf()
+              ? `「${cat}」还没有图包`
+              : '还没有图包'
+        }</b>${
+          resFilter
+            ? `给图包加上「${esc(resFilter)}」标签，它就会出现在这里`
+            : '上传图片或视频后，会按文件名里的日期自动月份归包；也可以点「＋ 图包」手动建一个'
+        }
       </div>`;
       return;
     }
@@ -1197,6 +1255,8 @@ export async function CharacterView(root, id) {
   root.innerHTML = shellHtml();
   bindTopbar(root);
   paint();
+  paintResNote();
+  resourceIndex();
   bindIntro();
   bindToolbar();
   buildFilterBar();

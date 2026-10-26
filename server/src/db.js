@@ -121,10 +121,14 @@ function migrate(d) {
   addColumnIfMissing('media', 'tags', `tags TEXT NOT NULL DEFAULT '[]'`);
   // 单个媒体的内容介绍（详情页可编辑，空着就用自动文案）
   addColumnIfMissing('media', 'intro', `intro TEXT NOT NULL DEFAULT ''`);
+  // 真动图标记：按帧数（pages>1）判定，不是按扩展名
+  addColumnIfMissing('media', 'anim', `anim INTEGER NOT NULL DEFAULT 0`);
   // 库类型：people 真人 / work 虚拟角色 / emoji 表情包（没有条目层级）
   addColumnIfMissing('shelves', 'kind', `kind TEXT NOT NULL DEFAULT 'people'`);
   // 表情库这类「扁平库」用一个隐藏条目承载图包和媒体，不当作真实条目展示
   addColumnIfMissing('characters', 'is_container', `is_container INTEGER NOT NULL DEFAULT 0`);
+  // 资源库用：游戏 / 动画 / 电影 / 剧集（其他库留空）
+  addColumnIfMissing('characters', 'category', `category TEXT`);
   ensureSelfTags(d);
 }
 

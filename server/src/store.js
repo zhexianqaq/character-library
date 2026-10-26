@@ -140,14 +140,18 @@ async function finalize(tmp, dir, fileName, ext, kind, sha, relDir) {
 
   let width = null;
   let height = null;
+  // anim=1 只看「真的有多帧」：gif 扩展名不等于动图，
+  // 微信/QQ 导出的表情里大量 .gif 其实只有一帧（一张静态图）
+  let anim = kind === 'video' ? 1 : 0;
   if (kind === 'image') {
-    const dims = await readImageDims(target);
-    if (dims) {
-      width = dims.width;
-      height = dims.height;
+    const meta = await readImageDims(target);
+    if (meta) {
+      width = meta.width;
+      height = meta.height;
+      if (meta.pages > 1) anim = 1;
     }
   }
-  return { relPath, fileName, ext, kind, bytes: stat.size, sha256: sha, width, height, relDir };
+  return { relPath, fileName, ext, kind, bytes: stat.size, sha256: sha, width, height, anim, relDir };
 }
 
 /**
@@ -176,7 +180,12 @@ export async function readImageDims(abs) {
     if (!m.width || !m.height) return null;
     const o = m.orientation ?? 1;
     const swap = o >= 5 && o <= 8;
-    return { width: swap ? m.height : m.width, height: swap ? m.width : m.height };
+    return {
+      width: swap ? m.height : m.width,
+      height: swap ? m.width : m.height,
+      // 多帧 = 真动图（gif / 动态 webp / apng）
+      pages: m.pages || 1,
+    };
   } catch {
     return null;
   }

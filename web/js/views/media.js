@@ -107,8 +107,8 @@ export async function MediaView(root, id) {
       v.addEventListener('loadedmetadata', fitVideo, { once: true });
       if (v.videoWidth) fitVideo(); // 元数据已在缓存里的话事件不会再发
     } else {
-      // gif 用原件，预览图是静态首帧，动图动不起来
-      const src = item.ext === 'gif' ? api.original(item.id) : api.preview(item.id);
+      // 真动图用原件（预览图是静态首帧，动不起来）；单帧 gif 走预览图更轻
+      const src = item.anim ? api.original(item.id) : api.preview(item.id);
       canvas.innerHTML = `<img data-img src="${src}" alt="${esc(item.fileName)}" />`;
       const img = canvas.querySelector('[data-img]');
       fadeIn(img);
@@ -132,7 +132,7 @@ export async function MediaView(root, id) {
   function renderInfo() {
     const isVideo = item.kind === 'video';
     const res = item.width && item.height ? `${item.width} × ${item.height}` : '未知';
-    const animated = !isVideo && item.ext === 'gif';
+    const animated = !isVideo && !!item.anim;
     const place = isFlat()
       ? [item.shelf.name, groupName()].filter(Boolean).join(' / ')
       : [item.shelf.name, item.character.name, item.pack ? item.pack.title : '未归包']

@@ -48,6 +48,9 @@ export const api = {
 
   shelfCharacters: (shelfId, params) => req(`/api/shelves/${shelfId}/characters${qs(params)}`),
   emojiShelf: (shelfId) => req(`/api/shelves/${shelfId}/emoji`),
+  resources: (shelfId) => req(`/api/shelves/${shelfId}/resources`),
+  resource: (id) => req(`/api/resources/${id}`),
+  resourceIndex: () => req('/api/resources/index'),
   createCharacter: (data) => json('POST')('/api/characters', data),
   character: (id) => req(`/api/characters/${id}`),
   updateCharacter: (id, patch) => json('PATCH')(`/api/characters/${id}`, patch),

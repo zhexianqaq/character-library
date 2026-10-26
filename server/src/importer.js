@@ -117,8 +117,8 @@ export async function importCharacterDir({ shelfId, sourceDir, name, account, on
   }
 
   const insertMedia = db.prepare(
-    `INSERT INTO media(character_id, pack_id, kind, rel_path, file_name, ext, bytes, sha256, width, height, sort_order, created_at)
-     VALUES(?,?,?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM media WHERE pack_id=?),?)`
+    `INSERT INTO media(character_id, pack_id, kind, rel_path, file_name, ext, bytes, sha256, width, height, anim, sort_order, created_at)
+     VALUES(?,?,?,?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM media WHERE pack_id=?),?)`
   );
   const findBySha = db.prepare('SELECT id FROM media WHERE character_id = ? AND sha256 = ?');
 
@@ -164,6 +164,7 @@ export async function importCharacterDir({ shelfId, sourceDir, name, account, on
       saved.sha256,
       saved.width,
       saved.height,
+      saved.anim ? 1 : 0,
       pack.id,
       ts
     );

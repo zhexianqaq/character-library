@@ -126,6 +126,7 @@ function mapChar(row, tags) {
     shelfId: row.shelf_id,
     name: row.name,
     account: row.account,
+    category: row.category || '',
     intro: row.intro,
     dirSlug: row.dir_slug,
     coverMediaId: row.cover_media_id,
@@ -160,6 +161,7 @@ function normalizeShelfKind(v) {
   const k = String(v || '').toLowerCase();
   if (k === 'work') return 'work';
   if (k === 'emoji') return 'emoji';
+  if (k === 'resource') return 'resource';
   return 'people';
 }
 
@@ -198,6 +200,8 @@ function mapMedia(r) {
     height: r.height,
     durationMs: r.duration_ms,
     bytes: r.bytes,
+    // 真动图：按帧数标记（视频也算），gif 扩展名不算
+    anim: r.kind === 'video' ? true : !!r.anim,
     sortOrder: r.sort_order,
     tags: own,
     // 自己手动打的标签；tags 会被调用方替换成「含继承」的完整集合
@@ -340,7 +344,7 @@ export function createApp() {
            (SELECT COUNT(*) FROM media m JOIN characters c ON c.id = m.character_id WHERE c.shelf_id = s.id) AS media_count,
            (SELECT COUNT(*) FROM packs p JOIN characters c ON c.id = p.character_id WHERE c.shelf_id = s.id) AS pack_count,
            (SELECT COUNT(*) FROM media m JOIN characters c ON c.id = m.character_id
-              WHERE c.shelf_id = s.id AND (LOWER(m.ext) = '.gif' OR m.kind = 'video')) AS anim_count,
+              WHERE c.shelf_id = s.id AND (m.anim = 1 OR m.kind = 'video')) AS anim_count,
            (SELECT COALESCE(SUM(m.bytes),0) FROM media m JOIN characters c ON c.id = m.character_id WHERE c.shelf_id = s.id) AS bytes,
            (SELECT m.id FROM media m JOIN characters c ON c.id = m.character_id
               WHERE c.shelf_id = s.id AND m.kind IN ('image','video')
@@ -542,7 +546,7 @@ export function createApp() {
       .prepare(
         `SELECT p.id, p.title, p.month, p.category, p.tags, p.created_at,
            (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id) AS media_count,
-           (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id AND (LOWER(m.ext) = '.gif' OR m.kind = 'video')) AS anim_count
+           (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id AND (m.anim = 1 OR m.kind = 'video')) AS anim_count
          FROM packs p WHERE p.character_id = ?
          ORDER BY p.sort_order, p.id`
       )
@@ -567,8 +571,8 @@ export function createApp() {
       .prepare(
         `SELECT COUNT(*) total,
            SUM(CASE WHEN pack_id IS NULL THEN 1 ELSE 0 END) loose,
-           SUM(CASE WHEN LOWER(ext) = '.gif' OR kind = 'video' THEN 1 ELSE 0 END) anim,
-           SUM(CASE WHEN LOWER(ext) = '.gif' THEN 1 ELSE 0 END) gifs,
+           SUM(CASE WHEN anim = 1 OR kind = 'video' THEN 1 ELSE 0 END) anim,
+           SUM(CASE WHEN anim = 1 AND kind = 'image' THEN 1 ELSE 0 END) gifs,
            SUM(CASE WHEN kind = 'video' THEN 1 ELSE 0 END) videos,
            COALESCE(SUM(bytes),0) bytes
          FROM media WHERE character_id = ?`
@@ -602,6 +606,141 @@ export function createApp() {
     });
   });
 
+  // ---------- 资源库（游戏 / 动画 / 电影 / 剧集）----------
+  /**
+   * 资源卡片复用 characters 行：name=资源名、category=分类、tags=标签。
+   * 它和「角色 / 人物」的关系完全靠标签（同名标签）或出处（platforms.handle）建立，
+   * 不额外建关联表，这样在条目上打个「原神」标签就自动挂上去了。
+   */
+  const RESOURCE_LINKED = `
+    (SELECT COUNT(*) FROM characters c2
+       JOIN character_tags ct2 ON ct2.character_id = c2.id
+       JOIN tags t2 ON t2.id = ct2.tag_id
+      WHERE t2.name = c.name AND c2.is_container = 0 AND c2.id <> c.id)
+    + (SELECT COUNT(*) FROM characters c3
+        WHERE c3.is_container = 0 AND c3.id <> c.id
+          AND c3.platforms LIKE ('%"handle":"' || c.name || '"%'))`;
+
+  // 没设封面时，自动借一个关联条目的封面：优先「角色库」（作品里的角色更像封面）
+  const RESOURCE_COVER = `
+    COALESCE(c.cover_media_id,
+      (SELECT c4.cover_media_id FROM characters c4
+         JOIN shelves sh4 ON sh4.id = c4.shelf_id
+        WHERE c4.is_container = 0 AND c4.id <> c.id AND c4.cover_media_id IS NOT NULL
+          AND (
+            EXISTS (SELECT 1 FROM character_tags ct4 JOIN tags t4 ON t4.id = ct4.tag_id
+                    WHERE ct4.character_id = c4.id AND t4.name = c.name)
+            OR c4.platforms LIKE ('%"handle":"' || c.name || '"%')
+          )
+        ORDER BY CASE sh4.kind WHEN 'work' THEN 0 WHEN 'people' THEN 1 ELSE 2 END, c4.id
+        LIMIT 1))`;
+
+  app.get('/api/shelves/:id/resources', (req, res) => {
+    const db = getDb();
+    const shelfId = Number(req.params.id);
+    const shelf = db.prepare('SELECT * FROM shelves WHERE id = ?').get(shelfId);
+    if (!shelf) return res.status(404).json({ error: '库不存在' });
+    const rows = db
+      .prepare(
+        `SELECT c.*, ${RESOURCE_COVER} AS cover,
+                ${RESOURCE_LINKED} AS linked
+         FROM characters c
+         WHERE c.shelf_id = ? AND c.is_container = 0
+         ORDER BY c.sort_order, c.id`
+      )
+      .all(shelfId);
+
+    const cats = new Map();
+    for (const r of rows) {
+      const k = r.category || '其他';
+      cats.set(k, (cats.get(k) || 0) + 1);
+    }
+    res.json({
+      shelf: { id: shelf.id, name: shelf.name, note: shelf.note, kind: shelf.kind || 'resource' },
+      items: rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        category: r.category || '',
+        intro: r.intro || '',
+        tags: tagsOf(db, r.id).filter((t) => t !== r.name),
+        coverMediaId: r.cover || null,
+        linked: r.linked || 0,
+      })),
+      groups: [...cats.entries()].map(([name, count]) => ({ name, count })),
+      total: rows.length,
+    });
+  });
+
+  /** 出处点击时用它把「原神」这个名字换成资源详情页 */
+  app.get('/api/resources/index', (req, res) => {
+    const db = getDb();
+    const rows = db
+      .prepare(
+        `SELECT c.id, c.name, c.shelf_id, c.category
+         FROM characters c JOIN shelves sh ON sh.id = c.shelf_id
+         WHERE sh.kind = 'resource' AND c.is_container = 0
+         ORDER BY c.sort_order, c.id`
+      )
+      .all();
+    res.json({
+      items: rows.map((r) => ({ id: r.id, name: r.name, shelfId: r.shelf_id, category: r.category || '' })),
+    });
+  });
+
+  app.get('/api/resources/:id', (req, res) => {
+    const db = getDb();
+    const id = Number(req.params.id);
+    const row = db
+      .prepare(
+        `SELECT c.*, sh.name AS shelf_name, sh.kind AS shelf_kind, ${RESOURCE_COVER} AS cover
+         FROM characters c LEFT JOIN shelves sh ON sh.id = c.shelf_id
+         WHERE c.id = ?`
+      )
+      .get(id);
+    if (!row) return res.status(404).json({ error: '资源不存在' });
+
+    const related = db
+      .prepare(
+        `SELECT c.*, sh.kind AS shelf_kind, sh.name AS shelf_name,
+           (SELECT COUNT(*) FROM media m WHERE m.character_id = c.id) AS media_count,
+           (SELECT COUNT(*) FROM packs p WHERE p.character_id = c.id) AS pack_count
+         FROM characters c JOIN shelves sh ON sh.id = c.shelf_id
+         WHERE c.is_container = 0 AND c.id <> @id AND sh.kind IN ('people','work')
+           AND (
+             EXISTS (SELECT 1 FROM character_tags ct JOIN tags t ON t.id = ct.tag_id
+                     WHERE ct.character_id = c.id AND t.name = @name)
+             OR c.platforms LIKE @like
+           )
+         ORDER BY CASE sh.kind WHEN 'work' THEN 0 ELSE 1 END, media_count DESC, c.name`
+      )
+      .all({ id, name: row.name, like: `%"handle":"${row.name}"%` });
+
+    res.json({
+      resource: {
+        id: row.id,
+        name: row.name,
+        category: row.category || '',
+        intro: row.intro || '',
+        coverMediaId: row.cover || null,
+        // ownCoverId = 资源自己设过的封面（null 表示用自动借来的）
+        ownCoverId: row.cover_media_id || null,
+        tags: tagsOf(db, row.id).filter((t) => t !== row.name),
+        shelf: { id: row.shelf_id, name: row.shelf_name || '', kind: row.shelf_kind || 'resource' },
+      },
+      related: related.map((r) => ({
+        id: r.id,
+        name: r.name,
+        kind: r.shelf_kind,
+        shelfName: r.shelf_name,
+        account: r.account || '',
+        mediaCount: r.media_count || 0,
+        packCount: r.pack_count || 0,
+        coverMediaId: r.cover_media_id,
+        viaTag: true,
+      })),
+    });
+  });
+
   app.post('/api/characters', async (req, res) => {
     const db = getDb();
     const b = req.body || {};
@@ -612,10 +751,20 @@ export function createApp() {
     const ts = nowIso();
     const info = db
       .prepare(
-        `INSERT INTO characters(shelf_id, name, account, intro, dir_slug, sort_order, created_at, updated_at)
-         VALUES(?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM characters WHERE shelf_id=?),?,?)`
+        `INSERT INTO characters(shelf_id, name, account, intro, dir_slug, category, sort_order, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM characters WHERE shelf_id=?),?,?)`
       )
-      .run(shelfId, name.slice(0, 100), String(b.account || '').slice(0, 100), String(b.intro || '').slice(0, 20000), dirSlug, shelfId, ts, ts);
+      .run(
+        shelfId,
+        name.slice(0, 100),
+        String(b.account || '').slice(0, 100),
+        String(b.intro || '').slice(0, 20000),
+        dirSlug,
+        String(b.category || '').trim().slice(0, 20) || null,
+        shelfId,
+        ts,
+        ts
+      );
     const id = Number(info.lastInsertRowid);
     if (Array.isArray(b.tags) && b.tags.length) applyTags(db, id, b.tags);
     ensureSelfTags(db); // 新条目立刻带上自己的名字标签
@@ -653,6 +802,13 @@ export function createApp() {
       }
       if (typeof b.intro === 'string') {
         db.prepare('UPDATE characters SET intro = ?, updated_at = ? WHERE id = ?').run(b.intro.slice(0, 20000), nowIso(), id);
+      }
+      if (typeof b.category === 'string') {
+        db.prepare('UPDATE characters SET category = ?, updated_at = ? WHERE id = ?').run(
+          b.category.trim().slice(0, 20) || null,
+          nowIso(),
+          id
+        );
       }
       if (b.coverMediaId !== undefined) {
         db.prepare('UPDATE characters SET cover_media_id = ?, updated_at = ? WHERE id = ?').run(
@@ -1240,8 +1396,8 @@ export function createApp() {
 
       const info = db
         .prepare(
-          `INSERT INTO media(character_id, pack_id, kind, rel_path, file_name, ext, bytes, sha256, width, height, sort_order, created_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,
+          `INSERT INTO media(character_id, pack_id, kind, rel_path, file_name, ext, bytes, sha256, width, height, anim, sort_order, created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,
              (SELECT COALESCE(MAX(sort_order),-1)+1 FROM media WHERE pack_id IS ?),?)`
         )
         .run(
@@ -1255,6 +1411,7 @@ export function createApp() {
           saved.sha256,
           saved.width,
           saved.height,
+          saved.anim ? 1 : 0,
           pack ? pack.id : null,
           nowIso()
         );
