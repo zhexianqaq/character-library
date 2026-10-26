@@ -232,10 +232,6 @@ export async function PackView(root, id) {
       return;
     }
     const others = data.items.filter((p) => p.id !== pack.id);
-    if (!others.length) {
-      toast('没有别的图包可以移过去');
-      return;
-    }
     const v = await openModal({
       title: `移动 ${picked.size} 个媒体`,
       description: '只改所属图包，磁盘文件留在原地。',
@@ -245,17 +241,47 @@ export async function PackView(root, id) {
           label: '目标图包',
           type: 'select',
           required: true,
-          options: others.map((p) => ({
-            value: String(p.id),
-            label: `${p.category ? `${p.category} / ` : ''}${p.title}（${p.mediaCount}）`,
-          })),
+          options: [
+            { value: '__new__', label: '＋ 新建图包…' },
+            ...others.map((p) => ({
+              value: String(p.id),
+              label: `${p.category ? `${p.category} / ` : ''}${p.title}（${p.mediaCount}）`,
+            })),
+          ],
+          value: others.length ? String(others[0].id) : '__new__',
         },
       ],
       submitText: '移动',
     });
     if (!v) return;
+
+    let packId = Number(v.packId);
+    if (v.packId === '__new__') {
+      const nv = await openModal({
+        title: '新建图包',
+        description: '建好后这些媒体会直接移进去。',
+        fields: [
+          { name: 'title', label: '图包名称', required: true, placeholder: '比如：夏日写真' },
+          { name: 'month', label: '日期（可选）', type: 'month' },
+        ],
+        submitText: '创建并移动',
+      });
+      if (!nv) return;
+      try {
+        const created = await api.createPack(pack.character.id, {
+          title: nv.title,
+          month: nv.month,
+          category: pack.category || null,
+        });
+        packId = created.id;
+      } catch (err) {
+        toast(err.message || '创建失败');
+        return;
+      }
+    }
+
     try {
-      const res = await api.bulkMedia([...picked], 'move', Number(v.packId));
+      const res = await api.bulkMedia([...picked], 'move', packId);
       toast(res.skipped ? `已移动 ${res.done} 个，跳过 ${res.skipped} 个` : `已移动 ${res.done} 个`);
       resetSelection();
       await reload();

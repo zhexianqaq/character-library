@@ -39,23 +39,25 @@ export function openModal({
           options: f.options || [],
           value: f.value || '',
           placeholder: f.placeholder || '',
+          editable: true,
+          allowEmpty: false,
         }) - 1;
         control = `<div class="dd-slot" data-dd-slot="${idx}"></div>`;
       } else if (f.type === 'select') {
         const opts = (f.options || []).map((o) =>
           typeof o === 'string' ? { value: o, label: o } : o
         );
-        control = `<select name="${esc(f.name)}">
-          ${f.placeholder ? `<option value="" ${!f.value ? 'selected' : ''}>${esc(f.placeholder)}</option>` : ''}
-          ${opts
-            .map(
-              (o) =>
-                `<option value="${esc(o.value)}" ${String(o.value) === String(f.value || '') ? 'selected' : ''}>${esc(
-                  o.label
-                )}</option>`
-            )
-            .join('')}
-        </select>`;
+        // 原生 select 展开是系统蓝条，样式跟站内对不上，统一走自定义下拉
+        const idx = combos.push({
+          name: f.name,
+          options: opts,
+          value: f.value || '',
+          placeholder: f.placeholder || '',
+          editable: false,
+          allowEmpty: !!f.placeholder,
+          emptyLabel: f.placeholder || '全部',
+        }) - 1;
+        control = `<div class="dd-slot" data-dd-slot="${idx}"></div>`;
       } else {
         control = `<input name="${esc(f.name)}" type="${esc(f.type || 'text')}" value="${esc(
           f.value || ''
@@ -108,8 +110,9 @@ export function openModal({
         options: cfg.options,
         value: cfg.value,
         placeholder: cfg.placeholder,
-        editable: true,
-        allowEmpty: false,
+        editable: cfg.editable !== false,
+        allowEmpty: cfg.allowEmpty !== false,
+        emptyLabel: cfg.emptyLabel || '全部',
         className: 'dd-field',
       });
       slot.replaceWith(dd.el);
@@ -140,7 +143,14 @@ export function openModal({
       const values = {};
       for (const f of fields) {
         const el = root.querySelector(`[name="${f.name}"]`);
-        values[f.name] = el ? String(el.value).trim() : '';
+        if (!el) {
+          values[f.name] = '';
+        } else if (el.dataset && el.dataset.ddValue !== undefined && el.dataset.ddEditable !== '1') {
+          // 自定义下拉：提交 value 而不是显示用的 label
+          values[f.name] = String(el.dataset.ddValue);
+        } else {
+          values[f.name] = String(el.value).trim();
+        }
         if (f.required && !values[f.name]) {
           el.focus();
           el.classList.add('invalid');

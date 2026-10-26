@@ -74,8 +74,9 @@ export function splitColumns(items, cols) {
   return buckets;
 }
 
-export function columnCount(width, min = 280) {
-  return Math.max(1, Math.min(6, Math.floor(width / min)));
+/** 瀑布流列数：列宽固定（默认 120px），算得下几列就排几列 */
+export function columnCount(width, colW = 120, gap = 8) {
+  return Math.max(1, Math.floor((width + gap) / (colW + gap)));
 }
 
 /** 让图片淡入，避免加载完成时闪一下 */

@@ -4,7 +4,7 @@ import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openTagPicker } from '../components/tag-picker.js';
-import { openContextMenu, openMenuAtPoint } from '../components/context-menu.js';
+import { openContextMenu } from '../components/context-menu.js';
 import { mediaMenu } from '../components/media-actions.js';
 import { addMediaMenuItems } from '../components/media-picker.js';
 import { createDropdown } from '../components/dropdown.js';
@@ -748,10 +748,6 @@ export async function CharacterView(root, id) {
       toast(err.message || '图包列表读取失败');
       return;
     }
-    if (!data.items.length) {
-      toast('还没有图包，先建一个');
-      return;
-    }
     const v = await openModal({
       title: `移动 ${picked.size} 个媒体`,
       description: '只改所属图包，磁盘文件留在原地。',
@@ -761,17 +757,48 @@ export async function CharacterView(root, id) {
           label: '目标图包',
           type: 'select',
           required: true,
-          options: data.items.map((p) => ({
-            value: String(p.id),
-            label: `${p.category ? `${p.category} / ` : ''}${p.title}（${p.mediaCount}）`,
-          })),
+          // 新建放第一项，图包多的时候不用滚到底才找得到
+          options: [
+            { value: '__new__', label: '＋ 新建图包…' },
+            ...data.items.map((p) => ({
+              value: String(p.id),
+              label: `${p.category ? `${p.category} / ` : ''}${p.title}（${p.mediaCount}）`,
+            })),
+          ],
+          value: data.items.length ? String(data.items[0].id) : '__new__',
         },
       ],
       submitText: '移动',
     });
     if (!v) return;
+
+    let packId = Number(v.packId);
+    if (v.packId === '__new__') {
+      const nv = await openModal({
+        title: '新建图包',
+        description: '建好后这些媒体会直接移进去。',
+        fields: [
+          { name: 'title', label: '图包名称', required: true, placeholder: '比如：夏日写真' },
+          { name: 'month', label: '日期（可选）', type: 'month' },
+        ],
+        submitText: '创建并移动',
+      });
+      if (!nv) return;
+      try {
+        const created = await api.createPack(c.id, {
+          title: nv.title,
+          month: nv.month,
+          category: packCategory(),
+        });
+        packId = created.id;
+      } catch (err) {
+        toast(err.message || '创建失败');
+        return;
+      }
+    }
+
     try {
-      const res = await api.bulkMedia([...picked], 'move', Number(v.packId));
+      const res = await api.bulkMedia([...picked], 'move', packId);
       toast(res.skipped ? `已移动 ${res.done} 个，跳过 ${res.skipped} 个` : `已移动 ${res.done} 个`);
       resetSelection();
       if (mode === 'media') await loadMedia(true);
@@ -839,16 +866,10 @@ export async function CharacterView(root, id) {
           <a class="pack-hit" href="/p/${p.id}" data-link aria-label="${esc(p.title)}"></a>
           <div class="cover single">
             ${img ? `<img src="${img}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : '<div class="cover-empty">空</div>'}
-            ${p.videoCount ? '<span class="kind">含视频</span>' : ''}
           </div>
           <div class="info">
             <div class="t">${esc(p.title)}</div>
             <div class="m">${meta || '0 项'}</div>
-          </div>
-          <div class="pack-acts">
-            <button data-add-media="${p.id}" title="添加素材">＋</button>
-            <button data-rename="${p.id}" title="重命名">✎</button>
-            <button data-del="${p.id}" title="删除图包">✕</button>
           </div>
         </div>`;
       })
@@ -870,51 +891,6 @@ export async function CharacterView(root, id) {
       );
     }
 
-    holder.querySelectorAll('[data-add-media]').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const pack = packsCache.find((p) => p.id === Number(btn.dataset.addMedia));
-        if (!pack) return;
-        const r = btn.getBoundingClientRect();
-        openMenuAtPoint(Math.min(window.innerWidth - 16, r.right), r.bottom + 6, addMediaItems(pack));
-      });
-    });
-
-    holder.querySelectorAll('[data-rename]').forEach((btn) => {
-      btn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const pack = packsCache.find((p) => p.id === Number(btn.dataset.rename));
-        const v = await openModal({
-          title: '重命名图包',
-          fields: [{ name: 'title', label: '名称', value: pack ? pack.title : '', required: true }],
-          submitText: '保存',
-        });
-        if (!v) return;
-        await api.updatePack(pack.id, { title: v.title });
-        toast('已重命名');
-        loadPacks();
-      });
-    });
-
-    holder.querySelectorAll('[data-del]').forEach((btn) => {
-      btn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const pack = packsCache.find((p) => p.id === Number(btn.dataset.del));
-        const ok = await confirmDialog(
-          '删除图包？',
-          `「${pack.title}」里的 ${pack.mediaCount} 个媒体会变成未归包，不会被删除。`
-        );
-        if (!ok) return;
-        await api.deletePack(pack.id);
-        toast('图包已删除');
-        c = await api.character(id);
-        paint();
-        loadPacks();
-      });
-    });
   }
 
   // ---------- 全部媒体的筛选 ----------

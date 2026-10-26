@@ -19,7 +19,8 @@ export function createDropdown({
   className = '',
 } = {}) {
   const items = options.map((o) => (typeof o === 'string' ? { value: o, label: o } : o));
-  let current = value;
+  // 不给「空」选项时默认选中第一个，避免弹窗一打开就是空白且提交被 required 卡住
+  let current = value === '' && !allowEmpty && items.length ? items[0].value : value;
   let view = items.slice();
   let active = -1;
 
@@ -34,6 +35,8 @@ export function createDropdown({
   const panel = el.querySelector('.dd-panel');
   if (name) input.name = name;
   input.placeholder = placeholder;
+  // 表单提交要拿 value 而不是显示用的 label，从这里读
+  input.dataset.ddEditable = editable ? '1' : '0';
 
   function labelOf(v) {
     if (String(v) === '' && allowEmpty) return emptyLabel;
@@ -41,6 +44,7 @@ export function createDropdown({
     return hit ? hit.label : v || '';
   }
   input.value = labelOf(current);
+  input.dataset.ddValue = current;
 
   function render() {
     const head = allowEmpty
@@ -84,6 +88,7 @@ export function createDropdown({
   function pick(v) {
     current = v;
     input.value = labelOf(v);
+    input.dataset.ddValue = v;
     close();
     if (typeof onChange === 'function') onChange(v, labelOf(v));
   }
@@ -160,6 +165,7 @@ export function createDropdown({
     setValue: (v) => {
       current = v;
       input.value = labelOf(v);
+      input.dataset.ddValue = v;
     },
     setOptions: (list) => {
       items.length = 0;

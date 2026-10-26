@@ -435,14 +435,25 @@ try {
   }
 
   // 2.9 素材选择器：范围切换 + 多选计数（只读，不落库）
+  // 图包卡片上已经没有 ＋ 按钮了，入口统一走右键 →「添加素材」
   const mediaPicker = await evaluate(`(async () => {
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-    const btn = document.querySelector('[data-add-media]');
-    if (!btn) return { open: false };
-    btn.click();
-    await sleep(220);
+    const card = document.querySelector('.pack-card');
+    if (!card) return { open: false };
+    const rect = card.getBoundingClientRect();
+    card.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true, cancelable: true,
+      clientX: Math.round(rect.left + 40), clientY: Math.round(rect.top + 40),
+    }));
+    await sleep(260);
+    const add = [...document.querySelectorAll('.ctx-menu .ctx-item')]
+      .find(b => b.querySelector('span').textContent.trim() === '添加素材');
+    if (!add) return { open: false, reason: 'no add item' };
+    add.click();
+    await sleep(280);
     const item = [...document.querySelectorAll('.ctx-menu .ctx-item')]
       .find(b => b.querySelector('span').textContent.includes('从本角色素材添加'));
+    if (!item) return { open: false, reason: 'no sub item' };
     item.click();
     await sleep(1800);
     const out = {
