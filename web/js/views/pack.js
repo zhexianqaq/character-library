@@ -98,6 +98,8 @@ export async function PackView(root, id) {
       }, {
         selectable: selecting,
         isPicked: (it) => picked.has(it.id),
+        // 人物库 / 角色库的图包跟条目页保持同一套排版；表情库不动
+        spanWide: !emoji,
         onContext: selecting
           ? null
           : (e, item) =>

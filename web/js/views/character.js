@@ -1179,6 +1179,8 @@ export async function CharacterView(root, id) {
         {
           selectable: selecting,
           isPicked: (it) => picked.has(it.id),
+          // 超宽素材（高宽比 < 1:2）占两列，其余仍是一列 120
+          spanWide: true,
           onContext: selecting
             ? null
             : (e, item) =>

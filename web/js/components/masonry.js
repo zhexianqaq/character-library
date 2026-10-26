@@ -1,11 +1,18 @@
 import { api } from '../api.js';
-import { aspectStyle, columnCount, splitColumns, fadeIn, fmtDur, esc } from '../util.js';
+import { aspectStyle, columnCount, splitColumns, layoutSpanned, fadeIn, fmtDur, esc } from '../util.js';
 
-function tileHtml(it, opts = {}) {
+const COL_W = 120;
+const GAP = 8;
+
+/** geo 有值时走跨列布局（绝对定位，像素由 layoutSpanned 算），否则交给 aspect-ratio 自己撑高 */
+function tileHtml(it, opts = {}, geo = null) {
   const isVideo = it.kind === 'video';
   const fallback = isVideo ? 16 / 9 : 3 / 4;
   const picked = typeof opts.isPicked === 'function' ? opts.isPicked(it) : false;
-  return `<button class="tile ratio${picked ? ' is-sel' : ''}" style="${aspectStyle(it.width, it.height, fallback)}"
+  const box = geo
+    ? `left:${geo.x}px;top:${geo.y}px;width:${geo.w}px;height:${geo.h}px`
+    : aspectStyle(it.width, it.height, fallback);
+  return `<button class="tile${geo ? '' : ' ratio'}${picked ? ' is-sel' : ''}" style="${box}"
       data-id="${it.id}" data-anim="${it.anim ? 1 : 0}">
     <img src="${api.thumb(it.id)}" alt="${esc(it.fileName)}" loading="lazy" decoding="async">
     ${isVideo ? '<span class="play"><i></i></span>' : ''}
@@ -68,14 +75,24 @@ function bindHoverPlay(container, opts) {
  * 渲染瀑布流。列数按容器宽度决定；图片用各自宽高比占位，不裁剪。
  * onOpen(indexInItems) 回调由调用方决定灯箱范围。
  * opts.selectable / opts.isPicked 用来支持多选。
+ * opts.spanWide = true 时启用跨列布局：宽/高 > 2 的素材占两列（人物库 / 角色库用）。
  */
 export function renderMasonry(container, items, onOpen, opts = {}) {
   stopLive();
-  const cols = columnCount(container.clientWidth);
-  const buckets = splitColumns(items, cols);
-  container.innerHTML = buckets
-    .map((col) => `<div class="col">${col.map((it) => tileHtml(it, opts)).join('')}</div>`)
-    .join('');
+  const cols = columnCount(container.clientWidth, COL_W, GAP);
+  if (opts.spanWide) {
+    const { placed, height } = layoutSpanned(items, cols, COL_W, GAP);
+    container.classList.add('is-spanned');
+    container.style.height = `${height}px`;
+    container.innerHTML = placed.map((p) => tileHtml(p.it, opts, p)).join('');
+  } else {
+    container.classList.remove('is-spanned');
+    container.style.removeProperty('height');
+    const buckets = splitColumns(items, cols);
+    container.innerHTML = buckets
+      .map((col) => `<div class="col">${col.map((it) => tileHtml(it, opts)).join('')}</div>`)
+      .join('');
+  }
 
   container.querySelectorAll('img').forEach(fadeIn);
   bindHoverPlay(container, opts);

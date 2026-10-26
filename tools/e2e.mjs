@@ -1529,6 +1529,87 @@ try {
     `${kb.dialog} · ${kb.beforeDel} → ${kb.afterDel}`
   );
 
+  // 8.9 超宽素材跨两列：宽/高 > 2 的占两列（248 = 2×120 + 间隙），其余仍是 120
+  const spanCharId = Number(newPath.split('/').pop());
+  const spanUpload = await evaluate(`(async () => {
+    const mk = async (w, h, name) => {
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#3f6f8f'; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = '#fff'; ctx.font = '40px sans-serif'; ctx.fillText(name, 32, Math.round(h / 2));
+      const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+      return new File([blob], name + '.png', { type: 'image/png' });
+    };
+    const fd = new FormData();
+    fd.append('files', await mk(1200, 300, 'e2e-wide-20250316'));
+    fd.append('files', await mk(600, 800, 'e2e-tall-20250316'));
+    const r = await (await fetch('/api/characters/' + ${spanCharId} + '/media', { method: 'POST', body: fd })).json();
+    return r;
+  })()`);
+  const wideId = (spanUpload.ids || [])[0];
+  const tallId = (spanUpload.ids || [])[1];
+  await goto(`${BASE}/c/${spanCharId}`, 2200);
+  const span = await evaluate(`(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    document.querySelector('[data-view] button[data-v=media]').click();
+    for (let i = 0; i < 50; i += 1) {
+      if (document.querySelectorAll('.tile').length >= 2) break;
+      await sleep(120);
+    }
+    await sleep(420);
+    const m = document.querySelector('.masonry');
+    const mb = m.getBoundingClientRect();
+    const rs = [...document.querySelectorAll('.tile')].map((el) => {
+      const b = el.getBoundingClientRect();
+      return {
+        id: Number(el.dataset.id),
+        w: Math.round(b.width),
+        h: Math.round(b.height),
+        x: Math.round(b.left - mb.left),
+        y: Math.round(b.top - mb.top),
+      };
+    });
+    const pick = (id) => rs.find((o) => o.id === id) || null;
+    let overlap = 0;
+    for (let i = 0; i < rs.length; i += 1) {
+      for (let j = i + 1; j < rs.length; j += 1) {
+        const a = rs[i];
+        const b = rs[j];
+        const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+        const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+        if (ox > 0 && oy > 0) overlap += 1;
+      }
+    }
+    const bottom = Math.max(...rs.map((o) => o.y + o.h));
+    return {
+      spanned: m.classList.contains('is-spanned'),
+      wide: pick(${wideId}),
+      tall: pick(${tallId}),
+      overlap,
+      gridOk: rs.every((o) => (o.w === 120 || o.w === 248) && o.x % 128 === 0),
+      bottom,
+      boxH: Math.round(m.getBoundingClientRect().height),
+      n: rs.length,
+    };
+  })()`);
+  check(
+    '超宽素材占两列（248px）',
+    span.spanned &&
+      span.wide &&
+      span.wide.w === 248 &&
+      Math.abs(span.wide.h - 62) <= 2 &&
+      span.tall &&
+      span.tall.w === 120 &&
+      Math.abs(span.tall.h - 160) <= 2,
+    `宽 ${JSON.stringify(span.wide)} / 竖 ${JSON.stringify(span.tall)}`
+  );
+  check(
+    '跨列后列对齐、间隙一致、无重叠',
+    span.gridOk && span.overlap === 0 && span.boxH === span.bottom,
+    `宽度只含 120/248 且 x 对齐=${span.gridOk} · 重叠=${span.overlap} · 容器高=${span.boxH}/${span.bottom}`
+  );
+
   // 9. 删除角色（走接口，顺带验证级联清理）
   const charId = Number(newPath.split('/').pop());
   const delRes = await fetch(`${BASE}/api/characters/${charId}`, { method: 'DELETE' });

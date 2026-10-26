@@ -677,6 +677,12 @@ img { display: block; }
   flex-direction: column;
   gap: var(--gap);
 }
+.masonry.is-spanned {
+  /* 跨列布局：瓦片绝对定位，位置和高度由 layoutSpanned 算好，两个方向都是 var(--gap) */
+  display: block;
+  position: relative;
+}
+.masonry.is-spanned .tile { position: absolute; }
 .tile {
   position: relative;
   display: block;

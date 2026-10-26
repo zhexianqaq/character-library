@@ -86,6 +86,65 @@ export function aspectStyle(w, h, fallback = 3 / 4) {
 }
 
 /**
+ * 超宽素材的判定线：宽/高 > 2（也就是高宽比小于 1:2）。
+ * 这类图放一列只有 50px 高，细节全糊，改成占两列。
+ */
+export const WIDE_AR = 2;
+
+/** 瓦片宽高比；没尺寸信息时按类型给个保底值（和缩略图占位一致） */
+export function tileAspect(it) {
+  if (it && it.width && it.height) return it.width / it.height;
+  return it && it.kind === 'video' ? 16 / 9 : 3 / 4;
+}
+
+/**
+ * 支持「超宽项跨两列」的瀑布流：列宽固定，超宽项占 2 列（= 2 列 + 1 个间隙），
+ * 每次放进当前最矮的一列（超宽项放最矮的相邻两列），返回像素坐标。
+ * 用绝对定位而不是 flex 列，是为了让宽项真的跨过两列、且两个方向的间隙都是同一个值。
+ */
+export function layoutSpanned(items, cols, colW = 120, gap = 8, wideAr = WIDE_AR) {
+  const n = Math.max(1, cols);
+  const heights = new Array(n).fill(0);
+  const placed = [];
+  let height = 0;
+
+  for (const it of items) {
+    const ar = tileAspect(it);
+    const span = n > 1 && ar > wideAr ? 2 : 1;
+    const w = span * colW + (span - 1) * gap;
+    const h = Math.round(w / ar);
+    let col = 0;
+    let top = 0;
+
+    if (span === 1) {
+      for (let i = 1; i < n; i += 1) if (heights[i] < heights[col]) col = i;
+      top = heights[col];
+      heights[col] = top + h + gap;
+    } else {
+      let bestTop = Infinity;
+      let bestSum = Infinity;
+      for (let i = 0; i + span <= n; i += 1) {
+        const t = Math.max(heights[i], heights[i + 1]);
+        const s = heights[i] + heights[i + 1];
+        if (t < bestTop || (t === bestTop && s < bestSum)) {
+          col = i;
+          bestTop = t;
+          bestSum = s;
+        }
+      }
+      top = bestTop;
+      heights[col] = top + h + gap;
+      heights[col + 1] = top + h + gap;
+    }
+
+    placed.push({ it, x: col * (colW + gap), y: top, w, h });
+    if (top + h > height) height = top + h;
+  }
+
+  return { placed, height };
+}
+
+/**
  * 估算瀑布流：已知宽高比时按「最短列优先」分配，保证从左到右的视觉顺序
  * 且各列高度基本齐平。返回每列的条目数组。
  */
