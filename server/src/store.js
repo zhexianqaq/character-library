@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
-import { DATA_DIR, slugify } from './config.js';
+import { DATA_DIR, INBOX_DIR, slugify } from './config.js';
 
 const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.avif', '.heic', '.jfif', '.tif', '.tiff']);
 const VIDEO_EXT = new Set(['.mp4', '.mov', '.mkv', '.avi', '.wmv', '.webm', '.m4v', '.flv', '.ts', '.mpg', '.mpeg', '.3gp']);
@@ -31,9 +31,18 @@ export async function hashFileOf(abs) {
   return hash.digest('hex');
 }
 
+/**
+ * 文件名清洗 + 限长 100。
+ * **截断时必须保留扩展名**：以前直接 slice(0,100)，长标题的文件会连 ".mp4" 一起被切掉，
+ * 后面 kindOfExt 认不出类型 → 当成不支持的文件处理（adoptFile 还会删源），等于把文件弄丢。
+ */
 export function safeFileName(name) {
   const base = path.basename(String(name || 'file'));
-  return base.replace(/[\x00-\x1f\\/:*?"<>|]/g, '_').slice(0, 100) || 'file';
+  const clean = base.replace(/[\x00-\x1f\\/:*?"<>|]/g, '_') || 'file';
+  if (clean.length <= 100) return clean;
+  const ext = path.extname(clean).slice(0, 12);
+  const stem = clean.slice(0, Math.max(1, 100 - ext.length));
+  return stem + ext;
 }
 
 function extOf(name) {
@@ -163,7 +172,12 @@ export async function adoptFile(tmpAbs, relDir, originalName, knownSha = null) {
   const ext = extOf(fileName);
   const kind = kindOfExt(ext);
   if (!kind) {
-    await fsp.unlink(tmpAbs).catch(() => {});
+    // 只清理上传临时区里的文件。以前这里是无条件 unlink ——
+    // 传进来的是库里已有的真实文件时（导入脚本），一次类型误判就等于删用户文件
+    const abs = path.resolve(tmpAbs);
+    if (abs.startsWith(path.resolve(INBOX_DIR) + path.sep)) {
+      await fsp.unlink(abs).catch(() => {});
+    }
     return null;
   }
 
