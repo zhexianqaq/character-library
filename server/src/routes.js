@@ -53,6 +53,18 @@ function tagsOf(db, charId) {
     .map((r) => r.name);
 }
 
+/** 媒体继承的标签：角色自己的标签 + 库类型（人物/角色）+ 角色名本身 */
+function mediaTagSet(db, charId) {
+  const c = db
+    .prepare(`SELECT c.name, sh.kind FROM characters c LEFT JOIN shelves sh ON sh.id = c.shelf_id WHERE c.id = ?`)
+    .get(charId);
+  if (!c) return [];
+  const set = new Set(tagsOf(db, charId));
+  set.add(c.name);
+  set.add(c.kind === 'work' ? '角色' : '人物');
+  return [...set];
+}
+
 function mapChar(row, tags) {
   return {
     id: row.id,
@@ -336,6 +348,19 @@ export function createApp() {
     res.json({ ok: true });
   });
 
+  // 全部标签 + 每个标签被多少条目使用
+  app.get('/api/tags', (req, res) => {
+    const db = getDb();
+    const rows = db
+      .prepare(
+        `SELECT t.id, t.name, COUNT(ct.character_id) AS count
+         FROM tags t LEFT JOIN character_tags ct ON ct.tag_id = t.id
+         GROUP BY t.id ORDER BY count DESC, t.name`
+      )
+      .all();
+    res.json({ items: rows.map((r) => ({ name: r.name, count: r.count })) });
+  });
+
   // ---------- 角色 ----------
   app.get('/api/shelves/:id/characters', (req, res) => {
     const db = getDb();
@@ -608,10 +633,13 @@ export function createApp() {
 
   app.get('/api/packs/:id/media', (req, res) => {
     const db = getDb();
+    const packId = Number(req.params.id);
+    const pack = db.prepare('SELECT character_id FROM packs WHERE id = ?').get(packId);
     const rows = db
       .prepare('SELECT * FROM media WHERE pack_id = ? ORDER BY sort_order, file_name')
-      .all(Number(req.params.id));
-    res.json({ items: rows.map(mapMedia), total: rows.length });
+      .all(packId);
+    const tags = pack ? mediaTagSet(db, pack.character_id) : [];
+    res.json({ items: rows.map((r) => ({ ...mapMedia(r), tags })), total: rows.length });
   });
 
   // ---------- 媒体 ----------
@@ -628,7 +656,8 @@ export function createApp() {
     const rows = db
       .prepare(`SELECT * FROM media WHERE ${where.join(' AND ')} ORDER BY sort_order DESC, id DESC`)
       .all(params);
-    res.json({ items: rows.map(mapMedia), total: rows.length });
+    const tags = mediaTagSet(db, charId);
+    res.json({ items: rows.map((r) => ({ ...mapMedia(r), tags })), total: rows.length });
   });
 
   app.post('/api/characters/:id/media', upload.array('files', 400), async (req, res) => {

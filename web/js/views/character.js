@@ -4,6 +4,7 @@ import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { openLightbox } from '../components/lightbox.js';
 import { openModal, confirmDialog } from '../components/modal.js';
+import { openTagPicker } from '../components/tag-picker.js';
 
 /** 复制文本：优先 Clipboard API，失败降级到 execCommand（无手势环境也能用） */
 async function copyText(text) {
@@ -369,13 +370,13 @@ export async function CharacterView(root, id) {
       btn.addEventListener('click', () => saveTags(c.tags.filter((t) => t !== btn.dataset.tag)));
     });
     el.querySelector('[data-add-tag]').addEventListener('click', async () => {
-      const v = await openModal({
-        title: '添加标签',
-        fields: [{ name: 'tag', label: '标签', required: true, placeholder: '比如：写真、制服、夜景' }],
-        submitText: '添加',
-      });
-      if (!v || c.tags.includes(v.tag)) return;
-      saveTags([...c.tags, v.tag]);
+      const next = await openTagPicker({ title: '编辑标签', selected: c.tags });
+      if (!next) return;
+      if (next.join('\n') === c.tags.join('\n')) {
+        toast('标签没有变化');
+        return;
+      }
+      await saveTags(next);
     });
   }
 

@@ -52,6 +52,7 @@ export const api = {
   updateCharacter: (id, patch) => json('PATCH')(`/api/characters/${id}`, patch),
   deleteCharacter: (id) => req(`/api/characters/${id}`, { method: 'DELETE' }),
 
+  tags: () => req('/api/tags'),
   packs: (charId) => req(`/api/characters/${charId}/packs`),
   createPack: (charId, data) => json('POST')(`/api/characters/${charId}/packs`, data),
   pack: (id) => req(`/api/packs/${id}`),

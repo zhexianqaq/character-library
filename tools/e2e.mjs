@@ -281,6 +281,43 @@ try {
     check('平台账号功能', true, '当前角色无平台账号，跳过');
   }
 
+  // 2.6 标签：媒体继承 + 弹窗查重/相似校验
+  const tagPool = await evaluate(`fetch('/api/tags').then((r) => r.json()).then((d) => d.items)`);
+  check('标签接口可用', Array.isArray(tagPool), `${tagPool.length} 个标签`);
+
+  const mediaTags = await evaluate(`fetch('/api/characters/' + location.pathname.split('/').pop() + '/media')
+    .then((r) => r.json())
+    .then((d) => (d.items[0] ? d.items[0].tags : []))`);
+  check(
+    '媒体自动带上角色标签和库标签',
+    mediaTags.length >= 2 && mediaTags.includes('人物'),
+    JSON.stringify(mediaTags)
+  );
+
+  await evaluate(`document.querySelector('[data-add-tag]').click()`);
+  await sleep(700);
+  const picker = await evaluate(`(() => {
+    const q = (s) => document.querySelector(s);
+    const input = q('.tag-input');
+    const out = {};
+    input.value = 'E2E标签';
+    q('[data-add]').click();
+    out.added = [...document.querySelectorAll('.tag-pill')].some((b) => b.dataset.tag === 'E2E标签');
+    input.value = 'E2E标签';
+    q('[data-add]').click();
+    out.dupHint = q('[data-hint]').textContent.trim();
+    out.dupCount = [...document.querySelectorAll('.tag-pill')].filter((b) => b.dataset.tag === 'E2E标签').length;
+    input.value = 'E2E标签cos';
+    q('[data-add]').click();
+    out.simHint = q('[data-hint]').textContent.trim();
+    return out;
+  })()`);
+  check('标签弹窗能加新标签', picker.added === true);
+  check('重复标签被拦下并提示', /已经有/.test(picker.dupHint) && picker.dupCount === 1, picker.dupHint);
+  check('相似标签会先提醒', /很像/.test(picker.simHint), picker.simHint);
+  await evaluate(`document.querySelector('.tag-modal [data-cancel]').click()`);
+  await sleep(300);
+
   // 3. 图包网格
   const packCount = await evaluate(`document.querySelectorAll('.pack-card').length`);
   check('图包按月渲染', packCount > 0, `${packCount} 个`);

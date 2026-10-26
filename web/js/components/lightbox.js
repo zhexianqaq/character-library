@@ -26,6 +26,7 @@ export function openLightbox(items, startIndex = 0, opts = {}) {
     <div class="lb-bar">
       <span class="count"></span>
       <span class="name"></span>
+      <span class="lb-tags"></span>
       <button class="close" title="关闭 (Esc)" aria-label="关闭">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
           <path d="M3 3l10 10M13 3L3 13"/>
@@ -44,6 +45,7 @@ export function openLightbox(items, startIndex = 0, opts = {}) {
   const stage = root.querySelector('.lb-stage');
   const countEl = root.querySelector('.lb-bar .count');
   const nameEl = root.querySelector('.lb-bar .name');
+  const tagsEl = root.querySelector('.lb-bar .lb-tags');
   const prevBtn = root.querySelector('.lb-nav.prev');
   const nextBtn = root.querySelector('.lb-nav.next');
 
@@ -58,6 +60,8 @@ export function openLightbox(items, startIndex = 0, opts = {}) {
     const it = list[idx];
     countEl.textContent = `${idx + 1} / ${list.length}`;
     nameEl.textContent = it.fileName || '';
+    const tags = Array.isArray(it.tags) ? it.tags : [];
+    tagsEl.innerHTML = tags.map((t) => `<i>${esc(t)}</i>`).join('');
     prevBtn.disabled = idx === 0;
     nextBtn.disabled = idx === list.length - 1;
     stage.querySelectorAll('img, video').forEach((n) => n.remove());
