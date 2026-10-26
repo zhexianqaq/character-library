@@ -75,7 +75,7 @@ function bindHoverPlay(container, opts) {
  * 渲染瀑布流。列数按容器宽度决定；图片用各自宽高比占位，不裁剪。
  * onOpen(indexInItems) 回调由调用方决定灯箱范围。
  * opts.selectable / opts.isPicked 用来支持多选。
- * opts.spanWide = true 时启用跨列布局：宽/高 > 2 的素材占两列（人物库 / 角色库用）。
+ * opts.spanWide = true 时启用跨列布局：宽/高 > WIDE_AR(1.7) 的素材占两列（人物库 / 角色库用）。
  */
 export function renderMasonry(container, items, onOpen, opts = {}) {
   stopLive();

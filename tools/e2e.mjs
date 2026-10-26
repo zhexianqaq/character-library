@@ -1751,11 +1751,13 @@ try {
     const fd = new FormData();
     fd.append('files', await mk(1200, 300, 'e2e-wide-20250316'));
     fd.append('files', await mk(600, 800, 'e2e-tall-20250316'));
+    fd.append('files', await mk(1600, 900, 'e2e-hd-20250316')); // 16:9 = 1.78 > 1.7，也要跨两列
     const r = await (await fetch('/api/characters/' + ${spanCharId} + '/media', { method: 'POST', body: fd })).json();
     return r;
   })()`);
   const wideId = (spanUpload.ids || [])[0];
   const tallId = (spanUpload.ids || [])[1];
+  const hdId = (spanUpload.ids || [])[2];
   await goto(`${BASE}/c/${spanCharId}`, 2200);
   const span = await evaluate(`(async () => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1793,6 +1795,7 @@ try {
       spanned: m.classList.contains('is-spanned'),
       wide: pick(${wideId}),
       tall: pick(${tallId}),
+      hd: pick(${hdId}),
       overlap,
       gridOk: rs.every((o) => (o.w === 120 || o.w === 248) && o.x % 128 === 0),
       bottom,
@@ -1801,15 +1804,18 @@ try {
     };
   })()`);
   check(
-    '超宽素材占两列（248px）',
+    '超宽素材占两列（248px，含 16:9）',
     span.spanned &&
       span.wide &&
       span.wide.w === 248 &&
       Math.abs(span.wide.h - 62) <= 2 &&
+      span.hd &&
+      span.hd.w === 248 &&
+      Math.abs(span.hd.h - 140) <= 2 &&
       span.tall &&
       span.tall.w === 120 &&
       Math.abs(span.tall.h - 160) <= 2,
-    `宽 ${JSON.stringify(span.wide)} / 竖 ${JSON.stringify(span.tall)}`
+    `4:1 ${JSON.stringify(span.wide)} / 16:9 ${JSON.stringify(span.hd)} / 竖 ${JSON.stringify(span.tall)}`
   );
   check(
     '跨列后列对齐、间隙一致、无重叠',

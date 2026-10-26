@@ -86,10 +86,11 @@ export function aspectStyle(w, h, fallback = 3 / 4) {
 }
 
 /**
- * 超宽素材的判定线：宽/高 > 2（也就是高宽比小于 1:2）。
- * 这类图放一列只有 50px 高，细节全糊，改成占两列。
+ * 超宽素材的判定线：宽/高 > 1.7（也就是高宽比小于 1:1.7）。
+ * 这条线要能收下 16:9（1.78）——视频和手机横拍基本都是这个比例，
+ * 放一列只有 67px 高，细节全糊；占两列才有辨识度。
  */
-export const WIDE_AR = 2;
+export const WIDE_AR = 1.7;
 
 /** 瓦片宽高比；没尺寸信息时按类型给个保底值（和缩略图占位一致） */
 export function tileAspect(it) {
@@ -121,18 +122,20 @@ export function layoutSpanned(items, cols, colW = 120, gap = 8, wideAr = WIDE_AR
       top = heights[col];
       heights[col] = top + h + gap;
     } else {
-      let bestTop = Infinity;
-      let bestSum = Infinity;
+      let bestScore = Infinity;
       for (let i = 0; i + span <= n; i += 1) {
-        const t = Math.max(heights[i], heights[i + 1]);
-        const s = heights[i] + heights[i + 1];
-        if (t < bestTop || (t === bestTop && s < bestSum)) {
+        // 打分 = 2×两列较高的那个 − 较矮的那个（也就是 max + 高低差）：
+        // 先要「放得靠上」，其次要「两列齐平」。只按 max 挑的话会挑到一高一矮的相邻列，
+        // 矮的那列上方会留一个大空洞（16:9 变多以后特别明显）。
+        const lo = Math.min(heights[i], heights[i + 1]);
+        const hi = Math.max(heights[i], heights[i + 1]);
+        const score = 2 * hi - lo;
+        if (score < bestScore) {
           col = i;
-          bestTop = t;
-          bestSum = s;
+          bestScore = score;
+          top = hi;
         }
       }
-      top = bestTop;
       heights[col] = top + h + gap;
       heights[col + 1] = top + h + gap;
     }
