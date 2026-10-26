@@ -126,11 +126,15 @@ await sleep(waitMs);
 const evalIdx = process.argv.indexOf('--eval');
 if (evalIdx > 0 && process.argv[evalIdx + 1]) {
   try {
-    await send('Runtime.evaluate', {
+    const r = await send('Runtime.evaluate', {
       expression: process.argv[evalIdx + 1],
       awaitPromise: true,
       userGesture: true,
+      returnByValue: true,
     });
+    if (r && r.result && r.result.value !== undefined) {
+      console.log('eval =>', JSON.stringify(r.result.value));
+    }
     await sleep(900);
   } catch (err) {
     console.log('eval failed: ' + err.message);

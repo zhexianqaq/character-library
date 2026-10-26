@@ -54,14 +54,40 @@ export async function MediaView(root, id) {
   const info = root.querySelector('[data-info]');
   const chipName = root.querySelector('[data-chip-name]');
 
+  /**
+   * 视频画布贴合视频本身的比例，不要撑满整块再留一圈黑边。
+   * 竖屏视频在宽舞台里只能到这个大小，剩下的留白交给白卡，比铺黑好看。
+   */
+  function fitVideo() {
+    const v = canvas.querySelector('video');
+    if (!v || !v.videoWidth || !v.videoHeight) return;
+    const box = stage.getBoundingClientRect();
+    const availW = Math.max(160, box.width - 16);
+    const availH = Math.max(160, box.height - 16);
+    const ar = v.videoWidth / v.videoHeight;
+    let w = availW;
+    let h = w / ar;
+    if (h > availH) {
+      h = availH;
+      w = h * ar;
+    }
+    canvas.style.width = `${Math.round(w)}px`;
+    canvas.style.height = `${Math.round(h)}px`;
+  }
+
   function renderStage() {
     const isVideo = item.kind === 'video';
     // 胶囊写「条目 · 图包」，比整条文件名好认
     chipName.textContent = [item.character.name, item.pack ? item.pack.title : ''].filter(Boolean).join(' · ');
     chipName.title = item.fileName;
+    canvas.style.width = '';
+    canvas.style.height = '';
     if (isVideo) {
       canvas.innerHTML = `<video data-v src="${api.original(item.id)}" controls playsinline preload="metadata"
         poster="${api.thumb(item.id)}"></video>`;
+      const v = canvas.querySelector('video');
+      v.addEventListener('loadedmetadata', fitVideo, { once: true });
+      if (v.videoWidth) fitVideo(); // 元数据已在缓存里的话事件不会再发
     } else {
       canvas.innerHTML = `<img data-img src="${api.preview(item.id)}" alt="${esc(item.fileName)}" />`;
       const img = canvas.querySelector('[data-img]');
@@ -268,6 +294,14 @@ export async function MediaView(root, id) {
     }
   });
 
+  let resizeTimer = 0;
+  const onResize = () => {
+    if (item.kind !== 'video') return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(fitVideo, 120);
+  };
+  window.addEventListener('resize', onResize);
+
   const onKey = (e) => {
     if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
     // 灯箱开着的时候键盘归灯箱管，否则 ← → / Esc 会被两边各处理一次
@@ -289,5 +323,9 @@ export async function MediaView(root, id) {
   renderInfo();
   document.title = `${titleOf(item.fileName)} · 资料库`;
 
-  return () => document.removeEventListener('keydown', onKey);
+  return () => {
+    document.removeEventListener('keydown', onKey);
+    window.removeEventListener('resize', onResize);
+    clearTimeout(resizeTimer);
+  };
 }

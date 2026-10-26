@@ -1560,8 +1560,15 @@ img { display: block; }
 .media-page {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 404px;
+  /* 行高必须显式收紧：auto 行会被大图撑破，整页跟着变长 */
+  grid-template-rows: minmax(0, 1fr);
   gap: 8px;
+  /* 竖向内容（长图 / 竖视频）按视口高度收敛，底部这 8px 边距不能被吃掉；
+     dvh 兜住浏览器 UI 占位导致的 100vh 偏大 */
   height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
   padding: 8px;
 }
 
@@ -1569,40 +1576,54 @@ img { display: block; }
   position: relative;
   display: flex;
   min-width: 0;
+  min-height: 0;
   padding: 8px;
   background: var(--card);
   border-radius: 28px;
   box-shadow: var(--s2);
 }
 .mp-canvas {
+  position: relative;
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
+  height: 100%;
   display: grid;
   place-items: center;
   border-radius: 22px;
   background: #f1f2f4;
   overflow: hidden;
 }
+/* 绝对定位铺满再 contain：grid auto 行里 height:100% 会退化成 auto，超大图会被裁一截 */
 .mp-canvas img {
+  position: absolute;
+  inset: 0;
   display: block;
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   cursor: zoom-in;
   opacity: 0;
   transition: opacity 0.35s var(--ease);
 }
 .mp-canvas img.loaded { opacity: 1; }
+/* 视频画布由 JS 按视频比例定尺寸，所以这里直接铺满自己那格 */
 .mp-canvas video {
   display: block;
-  max-width: 100%;
-  max-height: 100%;
-  border-radius: 18px;
+  width: 100%;
+  height: 100%;
+  border-radius: 16px;
   background: #000;
+  box-shadow: var(--s2);
 }
-.mp-stage.is-video .mp-canvas { background: #101012; }
+/* 视频场景：画布收缩成视频大小并居中，四周留白交给白卡，不铺黑底 */
+.mp-stage.is-video { align-items: center; justify-content: center; }
+.mp-stage.is-video .mp-canvas {
+  flex: 0 0 auto;
+  background: transparent;
+  border-radius: 0;
+  overflow: visible;
+}
 
 /* 顶部名称胶囊（截图里那颗） */
 .mp-chip {
