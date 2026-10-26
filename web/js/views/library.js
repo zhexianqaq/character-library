@@ -231,7 +231,12 @@ export async function LibraryView(root, shelfId) {
       try {
         if (names.length === 1) {
           const c = await api.createCharacter({ shelfId: state.shelfId, name: names[0], intro: v.intro });
-          toast(`${noun}已创建，去上传素材吧`);
+          // 磁盘上已有同名目录时会自动加 -2 后缀，别让用户以为目录建错了地方
+          toast(
+            c.dirRenamed
+              ? `${noun}已创建；本地已有同名目录，用了「${String(c.dirSlug || '').split('/').pop()}」`
+              : `${noun}已创建，去上传素材吧`
+          );
           history.pushState({}, '', `/c/${c.id}`);
           window.dispatchEvent(new CustomEvent('app:route'));
           return;

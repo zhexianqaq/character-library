@@ -4,6 +4,7 @@
  * 前置：服务已在 http://127.0.0.1:7788 运行
  */
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
@@ -830,6 +831,32 @@ try {
   check('提交后进入新角色页', /^\/c\/\d+$/.test(newPath), newPath);
   const newName = await evaluate(`document.querySelector('.hero-name')?.textContent?.trim() || ''`);
   check('新角色名正确', newName === 'E2E 测试角色', newName);
+
+  // 7.1 新建人物当场就要把目录和「未分类/图片、未分类/视频」建出来（以前要等第一次上传）
+  const dirCheck = await (async () => {
+    const cid = Number(newPath.split('/').pop());
+    const c = await fetch(`${BASE}/api/characters/${cid}`).then((r) => r.json());
+    const ov = await fetch(`${BASE}/api/overview`).then((r) => r.json());
+    const dirAbs = path.join(ov.library.rootPath, ...String(c.dirSlug).split('/'));
+    const stat = (p) => {
+      try {
+        return fs.statSync(p).isDirectory();
+      } catch {
+        return false;
+      }
+    };
+    return {
+      dirSlug: c.dirSlug,
+      root: stat(dirAbs),
+      img: stat(path.join(dirAbs, '未分类', '图片')),
+      vid: stat(path.join(dirAbs, '未分类', '视频')),
+    };
+  })();
+  check(
+    '新建人物立刻建出目录 + 未分类子目录',
+    dirCheck.root && dirCheck.img && dirCheck.vid,
+    `${dirCheck.dirSlug} · 根=${dirCheck.root} 图片=${dirCheck.img} 视频=${dirCheck.vid}`
+  );
 
   // 7.1 Esc：只关最上面一层
   const escModal = await evaluate(`(async () => {

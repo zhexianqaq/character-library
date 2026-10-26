@@ -258,6 +258,24 @@ async function uniqueCharRelDir(db, shelfId, name) {
 }
 
 /**
+ * 新建条目时就把目录建出来，连「未分类/图片、未分类/视频」两个标准子目录一起建。
+ *
+ * 以前只在第一次上传时才 mkdir，结果前端建完人物、磁盘上什么都没有，
+ * 「打开本地文件夹」还会报目录已丢失。建目录失败不拦建条目（上传时会再建一次）。
+ * 资源库不建：出处里随手输入的作品名会造出一堆空目录；表情库的目录在包这一层。
+ */
+async function ensureCharDirs(relDir) {
+  if (!relDir) return;
+  for (const sub of ['', '未分类/图片', '未分类/视频']) {
+    try {
+      await fsp.mkdir(absPathOf(sub ? `${relDir}/${sub}` : relDir), { recursive: true });
+    } catch {
+      /* 权限 / 占用之类的问题留给第一次上传时重试 */
+    }
+  }
+}
+
+/**
  * 资源版本号 = web 目录下最新文件的 mtime。
  * 改完前端不重启服务也会自动换版本，浏览器不可能命中旧缓存。
  */
@@ -825,8 +843,11 @@ export function createApp() {
     const id = Number(info.lastInsertRowid);
     if (Array.isArray(b.tags) && b.tags.length) applyTags(db, id, b.tags);
     ensureSelfTags(db); // 新条目立刻带上自己的名字标签
+    const shelfKind = (db.prepare('SELECT kind FROM shelves WHERE id = ?').get(shelfId) || {}).kind || 'people';
+    if (shelfKind === 'people' || shelfKind === 'work') await ensureCharDirs(dirSlug);
     const row = db.prepare(`${CHAR_SELECT} WHERE c.id = ?`).get(id);
-    res.json(mapChar(row, tagsOf(db, id)));
+    const dirName = dirSlug.split('/').pop();
+    res.json({ ...mapChar(row, tagsOf(db, id)), dirRenamed: dirName !== slugify(name) });
   });
 
   app.get('/api/characters/:id', (req, res) => {
