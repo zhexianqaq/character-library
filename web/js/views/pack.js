@@ -30,9 +30,12 @@ export async function PackView(root, id) {
   const [pack, media] = await Promise.all([api.pack(id), api.packMedia(id)]);
   let items = media.items;
   // 表情库的图包挂在容器条目下，面包屑要回到库页而不是条目页
-  const emoji = !!(pack.shelf && pack.shelf.kind === 'emoji');
-  const ownerNoun = pack.shelf && pack.shelf.kind === 'work' ? '角色' : '人物';
-  const crumbHref = emoji ? `/e/${pack.shelf.id}` : `/c/${pack.character.id}`;
+  const shelfKind = (pack.shelf && pack.shelf.kind) || 'people';
+  const emoji = shelfKind === 'emoji';
+  const resource = shelfKind === 'resource';
+  const ownerNoun = shelfKind === 'work' ? '角色' : resource ? '资源' : '人物';
+  // 资源库的图包回到资源详情（/r/:id），别把人带到条目页
+  const crumbHref = emoji ? `/e/${pack.shelf.id}` : resource ? `/r/${pack.character.id}` : `/c/${pack.character.id}`;
   const crumbName = emoji ? pack.shelf.name : pack.character.name;
 
   root.innerHTML =

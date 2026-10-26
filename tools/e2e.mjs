@@ -1285,6 +1285,24 @@ try {
     })();
     check('资源库在磁盘上有专属目录', resDirInfo.ok, resDirInfo.prefix);
 
+    // 每个资源都预置「官方」图包 + <作品>/官方/图片|视频（结构同其它库的 条目/图包/图片）
+    const official = await (async () => {
+      const list = await fetch(`${BASE}/api/shelves/${resShelf.id}/resources`).then((r) => r.json());
+      const first = (list.items || [])[0];
+      if (!first) return { ok: false, name: '(空库)' };
+      const ps = await fetch(`${BASE}/api/characters/${first.id}/packs`).then((r) => r.json());
+      const ov = await fetch(`${BASE}/api/overview`).then((r) => r.json());
+      const base = path.join(ov.library.rootPath, ...String(first.dirSlug).split('/'), '官方');
+      return {
+        ok:
+          (ps.items || []).some((p) => p.title === '官方') &&
+          fs.existsSync(path.join(base, '图片')) &&
+          fs.existsSync(path.join(base, '视频')),
+        name: first.name,
+      };
+    })();
+    check('每个资源自带「官方」图包与目录', official.ok, official.name);
+
     // 关联靠标签：造一个带同名标签 + 同名出处的条目，跑完删掉
     const workShelf = shelves.find((s) => s.kind === 'work');
     const link = workShelf
@@ -1339,6 +1357,7 @@ try {
       path: location.pathname,
       name: document.querySelector('.hero-name')?.textContent || '',
       related: document.querySelectorAll('[data-related] .char-card').length,
+      packs: [...document.querySelectorAll('[data-packs] .pack-card .info .t')].map((t) => t.textContent.trim()),
       stats: [...document.querySelectorAll('.stat span')].map((s) => s.textContent.trim()),
     }))()`);
     check(
@@ -1346,6 +1365,11 @@ try {
       resDetail.path === `/r/${resId}` && resDetail.name.length > 0 && resDetail.related > 0 &&
         resDetail.stats.includes('相关条目'),
       `${resDetail.name} · ${resDetail.related} 个关联`
+    );
+    check(
+      '资源详情有「官方图包」（结构同其它库）',
+      (resDetail.packs || []).includes('官方'),
+      (resDetail.packs || []).join(' / ') || '没有图包'
     );
 
     // 右键：关联卡片 / 空白处

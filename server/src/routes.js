@@ -284,6 +284,35 @@ async function ensureCharDirs(relDir) {
   await mkdirRel(`${relDir}/未分类/视频`);
 }
 
+const OFFICIAL_PACK = '官方';
+
+/**
+ * 资源库的每个「作品」预置一个「官方」图包：
+ * `<资源库>/<作品>/官方/图片|视频`，和其他库「条目/图包/图片|视频」的层级完全一致。
+ * 资源本身不直接存媒体，这里只建空壳（DB 一条 pack + 两个子目录），
+ * 官方图可以直接往里放，也能被图包页 / 上传接口按常规流程用起来。
+ */
+async function ensureOfficialPack(db, charId, dirSlug) {
+  if (!charId || !dirSlug) return null;
+  let pack = db
+    .prepare('SELECT id FROM packs WHERE character_id = ? AND title = ? AND month IS NULL')
+    .get(charId, OFFICIAL_PACK);
+  if (!pack) {
+    const id = Number(
+      db
+        .prepare(
+          `INSERT INTO packs(character_id, title, month, category, sort_order, created_at)
+           VALUES(?,?,NULL,NULL,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?)`
+        )
+        .run(charId, OFFICIAL_PACK, charId, nowIso()).lastInsertRowid
+    );
+    pack = { id };
+  }
+  await mkdirRel(`${dirSlug}/${OFFICIAL_PACK}/图片`);
+  await mkdirRel(`${dirSlug}/${OFFICIAL_PACK}/视频`);
+  return pack.id;
+}
+
 /**
  * 资源版本号 = web 目录下最新文件的 mtime。
  * 改完前端不重启服务也会自动换版本，浏览器不可能命中旧缓存。
@@ -781,6 +810,7 @@ export function createApp() {
         .lastInsertRowid
     );
     ensureSelfTags(db); // 资源名本身也是标签，标签库里能搜到
+    await ensureOfficialPack(db, id, dirSlug); // 出处里新建的作品也预置「官方」图包
     res.json({ id, shelfId: shelf.id, created: true, createdShelf });
   });
 
@@ -867,6 +897,8 @@ export function createApp() {
     ensureSelfTags(db); // 新条目立刻带上自己的名字标签
     const shelfKind = (db.prepare('SELECT kind FROM shelves WHERE id = ?').get(shelfId) || {}).kind || 'people';
     if (shelfKind === 'people' || shelfKind === 'work') await ensureCharDirs(dirSlug);
+    // 资源库：每张「作品」卡预置一个「官方」图包 + 对应目录
+    else if (shelfKind === 'resource') await ensureOfficialPack(db, id, dirSlug);
     const row = db.prepare(`${CHAR_SELECT} WHERE c.id = ?`).get(id);
     const dirName = dirSlug.split('/').pop();
     res.json({ ...mapChar(row, tagsOf(db, id)), dirRenamed: dirName !== slugify(name) });

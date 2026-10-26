@@ -11,9 +11,12 @@ import { RES_CATS } from './resources.js';
  * 下面是所有打了同名标签（或出处写了这个名称）的角色 / 人物。
  */
 export async function ResourceView(root, id) {
-  let d = await api.resource(id);
+  const [data, packData] = await Promise.all([api.resource(id), api.packs(id).catch(() => ({ items: [] }))]);
+  let d = data;
   let r = d.resource;
   let related = d.related;
+  // 资源自带一个「官方」图包（结构同其它库：库/条目/图包/图片|视频）
+  let packs = packData.items || [];
 
   root.innerHTML =
     topbarHtml({ back: true, title: r.shelf.name || '资源库', sub: '', actions: `<button class="tb-btn" data-edit>编辑</button>` }) +
@@ -36,6 +39,11 @@ export async function ResourceView(root, id) {
          </div>
        </section>
        <div class="section-head">
+         <h2>官方图包</h2>
+         <span class="meta" data-pack-count></span>
+       </div>
+       <div class="pack-grid" data-packs></div>
+       <div class="section-head">
          <h2>相关角色 / 人物</h2>
          <span class="meta" data-related-count></span>
        </div>
@@ -46,11 +54,13 @@ export async function ResourceView(root, id) {
 
   function paintHero() {
     const cover = r.coverMediaId ? api.thumb(r.coverMediaId) : '';
-    const packs = related.reduce((n, x) => n + (x.packCount || 0), 0);
+    const relatedPacks = related.reduce((n, x) => n + (x.packCount || 0), 0);
     const media = related.reduce((n, x) => n + (x.mediaCount || 0), 0);
+    // 「图包」= 关联条目的图包 + 这个资源自己的（官方）图包
+    const packTotal = relatedPacks + packs.length;
     root.querySelector('[data-stats]').innerHTML = `
       <div class="stat"><b>${fmtNum(related.length)}</b><span>相关条目</span></div>
-      <div class="stat"><b>${fmtNum(packs)}</b><span>图包</span></div>
+      <div class="stat"><b>${fmtNum(packTotal)}</b><span>图包</span></div>
       <div class="stat"><b>${fmtNum(media)}</b><span>素材</span></div>
       <div class="stat"><b>${esc(r.category || '—')}</b><span>分类</span></div>`;
     root.querySelector('[data-bg]').style.backgroundImage = cover ? `url('${cover}')` : 'none';
@@ -278,7 +288,39 @@ export async function ResourceView(root, id) {
     }
   });
 
+  /** 该作品的图包（现在固定有一个「官方」）。点进去就是标准的图包页，能直接上传图片 / 视频 */
+  function paintPacks() {
+    const grid = root.querySelector('[data-packs]');
+    if (!grid) return;
+    root.querySelector('[data-pack-count]').textContent = packs.length ? `${packs.length} 个` : '';
+    if (!packs.length) {
+      grid.innerHTML = '<div class="empty" style="grid-column:1/-1"><b>还没有图包</b>刷新一下试试</div>';
+      return;
+    }
+    grid.innerHTML = packs
+      .map((p) => {
+        const img = p.coverMediaId ? api.thumb(p.coverMediaId) : '';
+        const meta =
+          [p.imageCount ? `${p.imageCount} 图` : '', p.videoCount ? `${p.videoCount} 视频` : '']
+            .filter(Boolean)
+            .join(' · ') || '0 项';
+        return `<div class="pack-card" data-pack="${p.id}">
+          <a class="pack-hit" href="/p/${p.id}" data-link aria-label="${esc(p.title)}"></a>
+          <div class="cover single">
+            ${img ? `<img src="${img}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : '<div class="cover-empty">空</div>'}
+          </div>
+          <div class="info">
+            <div class="t">${esc(p.title)}</div>
+            <div class="m">${meta}</div>
+          </div>
+        </div>`;
+      })
+      .join('');
+    grid.querySelectorAll('img').forEach(fadeIn);
+  }
+
   paintHero();
   paintRelated();
+  paintPacks();
   document.title = `${r.name} · 资料库`;
 }

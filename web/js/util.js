@@ -86,11 +86,11 @@ export function aspectStyle(w, h, fallback = 3 / 4) {
 }
 
 /**
- * 超宽素材的判定线：宽/高 > 1.7（也就是高宽比小于 1:1.7）。
+ * 超宽素材的判定线：宽/高 > 1.4（也就是高宽比小于 1:1.4）。
  * 这条线要能收下 16:9（1.78）——视频和手机横拍基本都是这个比例，
  * 放一列只有 67px 高，细节全糊；占两列才有辨识度。
  */
-export const WIDE_AR = 1.7;
+export const WIDE_AR = 1.4;
 
 /** 瓦片宽高比；没尺寸信息时按类型给个保底值（和缩略图占位一致） */
 export function tileAspect(it) {
