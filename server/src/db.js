@@ -119,6 +119,32 @@ function migrate(d) {
   // 图包 / 单个媒体自己的标签（JSON 数组），媒体最终标签还要并上角色标签与库标签
   addColumnIfMissing('packs', 'tags', `tags TEXT NOT NULL DEFAULT '[]'`);
   addColumnIfMissing('media', 'tags', `tags TEXT NOT NULL DEFAULT '[]'`);
+  // 单个媒体的内容介绍（详情页可编辑，空着就用自动文案）
+  addColumnIfMissing('media', 'intro', `intro TEXT NOT NULL DEFAULT ''`);
+  ensureSelfTags(d);
+}
+
+/**
+ * 每个条目自动带上自己的名字标签（纸悦 → 「纸悦」）。
+ * 媒体标签本来就按「自有标签 + 条目名 + 库类型」算出来，这里只是把这层关系
+ * 固化到 character_tags，让条目自己的标签行里也能看到它。
+ */
+export function ensureSelfTags(d = getDb()) {
+  const chars = d.prepare('SELECT id, name FROM characters').all();
+  if (!chars.length) return 0;
+  const insTag = d.prepare('INSERT OR IGNORE INTO tags(name) VALUES(?)');
+  const getTag = d.prepare('SELECT id FROM tags WHERE name = ?');
+  const link = d.prepare('INSERT OR IGNORE INTO character_tags(character_id, tag_id) VALUES(?,?)');
+  let n = 0;
+  for (const c of chars) {
+    const name = String(c.name || '').trim();
+    if (!name) continue;
+    insTag.run(name);
+    const t = getTag.get(name);
+    if (!t) continue;
+    n += link.run(c.id, t.id).changes;
+  }
+  return n;
 }
 
 export function nowIso() {

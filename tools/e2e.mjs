@@ -441,16 +441,54 @@ try {
   `);
   check('缩略图实际加载出像素', imgOk > 0, `${imgOk}/${tiles} 张有内容`);
 
-  // 5. 灯箱
+  // 5. 媒体详情页
   await evaluate(`document.querySelector('.tile').click()`);
-  await sleep(2500);
-  const lb = await evaluate(`!!document.querySelector('.lightbox')`);
-  check('点击打开灯箱', lb === true);
-  const lbImg = await evaluate(`document.querySelector('.lightbox img')?.naturalWidth || 0`);
-  check('灯箱内大图加载', lbImg > 0, `${lbImg}px 宽`);
+  let detailPath = '';
+  for (let i = 0; i < 24; i += 1) {
+    detailPath = await evaluate(`location.pathname`);
+    if (/^\/i\/\d+$/.test(detailPath)) break;
+    await sleep(250);
+  }
+  check('点瓦片进入媒体详情页', /^\/i\/\d+$/.test(detailPath), detailPath);
+
+  let detail = {};
+  for (let i = 0; i < 20; i += 1) {
+    detail = await evaluate(`({
+      img: document.querySelector('.mp-canvas img')?.naturalWidth || 0,
+      title: document.querySelector('.mp-title')?.textContent.trim() || '',
+      rows: [...document.querySelectorAll('.mp-row > span')].map(s => s.textContent.trim()),
+      tags: [...document.querySelectorAll('[data-tags] .mp-pill')].map(b => b.textContent.trim()),
+      intro: document.querySelector('[data-intro]')?.textContent.trim() || '',
+      place: document.querySelector('.mp-row b.mp-wrap')?.textContent.trim() || ''
+    })`);
+    if (detail.img > 0 && detail.rows.length) break;
+    await sleep(300);
+  }
+  check('详情页大图加载出像素', detail.img > 0, `${detail.img}px 宽`);
+  check(
+    '详情页字段齐全',
+    ['分辨率', '标签', '内容介绍', '关联', '存储位置', '存储大小', '存储时间'].every((k) => detail.rows.includes(k)),
+    detail.rows.join(' / ')
+  );
+  check('详情页标签含条目名', (detail.tags || []).includes('纸悦'), (detail.tags || []).join(' '));
+  check('详情页有介绍文案', (detail.intro || '').length > 4, detail.intro);
+  check('存储位置带上库 / 条目 / 图包', /人物库.*纸悦/.test(detail.place || ''), detail.place);
+
+  // 点图片进灯箱，Esc 只关灯箱、不退出详情页
+  await evaluate(`document.querySelector('.mp-canvas img').click()`);
+  await sleep(1500);
+  check('详情页点图片打开灯箱', (await evaluate(`!!document.querySelector('.lightbox')`)) === true);
+  check('灯箱内大图有像素', (await evaluate(`document.querySelector('.lightbox img')?.naturalWidth || 0`)) > 0);
   await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
   await sleep(400);
-  check('Esc 关闭灯箱', (await evaluate(`!!document.querySelector('.lightbox')`)) === false);
+  check('Esc 关灯箱后仍停在详情页', (await evaluate(`!!document.querySelector('.lightbox')`)) === false
+    && /^\/i\//.test(await evaluate(`location.pathname`)));
+
+  await evaluate(`document.querySelector('[data-close]').click()`);
+  await sleep(700);
+  check('关闭详情页回到角色页', /^\/c\//.test(await evaluate(`location.pathname`)), await evaluate(`location.pathname`));
+  await evaluate(`document.querySelector('[data-view] button[data-v="packs"]').click()`);
+  await sleep(1200);
 
   // 6. 平台栏：超过 4 条时不拉高、内部滚动、底部有阴影、ID 左对齐
   const tmpId = await evaluate(`

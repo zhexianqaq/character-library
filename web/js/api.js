@@ -65,6 +65,7 @@ export const api = {
   pickMedia: (params) => req(`/api/media/pick${qs(params)}`),
   characterMedia: (id, params) => req(`/api/characters/${id}/media${qs(params)}`),
 
+  media: (id) => req(`/api/media/${id}`),
   updateMedia: (id, patch) => json('PATCH')(`/api/media/${id}`, patch),
   deleteMedia: (id) => req(`/api/media/${id}`, { method: 'DELETE' }),
 

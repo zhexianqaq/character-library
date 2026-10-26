@@ -2,7 +2,6 @@ import { api } from '../api.js';
 import { esc, fmtNum, fmtBytes, fadeIn, toast } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
-import { openLightbox } from '../components/lightbox.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openTagPicker } from '../components/tag-picker.js';
 import { openContextMenu, openMenuAtPoint } from '../components/context-menu.js';
@@ -367,11 +366,24 @@ export async function CharacterView(root, id) {
   function paintTags() {
     const el = root.querySelector('[data-tags]');
     if (!el) return;
+    // 条目自己的名字标签是系统带的（图片也会继承它），不给删
     el.innerHTML =
-      c.tags.map((t) => `<button class="chip" data-tag="${esc(t)}">${esc(t)} ×</button>`).join('') +
-      `<button class="chip add" data-add-tag>+ 标签</button>`;
+      c.tags
+        .map((t) => {
+          const self = t === c.name;
+          return `<button class="chip${self ? ' self' : ''}" data-tag="${esc(t)}" data-self="${
+            self ? 1 : 0
+          }" title="${self ? '条目自己的标签，改名会自动更新' : '点一下移除'}">${esc(t)}${self ? '' : ' ×'}</button>`;
+        })
+        .join('') + `<button class="chip add" data-add-tag>+ 标签</button>`;
     el.querySelectorAll('[data-tag]').forEach((btn) => {
-      btn.addEventListener('click', () => saveTags(c.tags.filter((t) => t !== btn.dataset.tag)));
+      btn.addEventListener('click', () => {
+        if (btn.dataset.self === '1') {
+          toast('这是条目自己的标签，改名会自动更新');
+          return;
+        }
+        saveTags(c.tags.filter((t) => t !== btn.dataset.tag));
+      });
     });
     el.querySelector('[data-add-tag]').addEventListener('click', async () => {
       const next = await openTagPicker({ title: '编辑标签', selected: c.tags });
@@ -434,6 +446,12 @@ export async function CharacterView(root, id) {
         if (ev.key === 'Escape') ta.blur();
       });
     });
+  }
+
+  /** 打开媒体详情页 */
+  function gotoMedia(mediaId) {
+    history.pushState({}, '', `/i/${mediaId}`);
+    window.dispatchEvent(new CustomEvent('app:route'));
   }
 
   /** 打开图包页 */
@@ -693,11 +711,11 @@ export async function CharacterView(root, id) {
       return;
     }
     requestAnimationFrame(() => {
-      renderMasonry(holder, mediaItems, (i) => openLightbox(mediaItems, i), {
+      renderMasonry(holder, mediaItems, (i) => gotoMedia(mediaItems[i].id), {
         onContext: (e, item) =>
           mediaMenu(e, item, {
             characterId: c.id,
-            onOpen: () => openLightbox(mediaItems, mediaItems.findIndex((x) => x.id === item.id)),
+            onOpen: () => gotoMedia(item.id),
             onChange: loadMedia,
           }),
       });

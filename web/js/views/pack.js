@@ -2,7 +2,6 @@ import { api } from '../api.js';
 import { esc, fmtNum, toast } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
-import { openLightbox } from '../components/lightbox.js';
 import { openModal } from '../components/modal.js';
 import { openContextMenu, openMenuAtPoint } from '../components/context-menu.js';
 import { mediaMenu } from '../components/media-actions.js';
@@ -19,6 +18,12 @@ function packDateLabel(pack) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+/** 打开媒体详情页 */
+function gotoMedia(mediaId) {
+  history.pushState({}, '', `/i/${mediaId}`);
+  window.dispatchEvent(new CustomEvent('app:route'));
+}
+
 export async function PackView(root, id) {
   const [pack, media] = await Promise.all([api.pack(id), api.packMedia(id)]);
   let items = media.items;
@@ -32,6 +37,7 @@ export async function PackView(root, id) {
            <div class="title-row">
              <h1 class="page-title" data-title>${esc(pack.title)}</h1>
              <span class="pack-date" data-date>${esc(packDateLabel(pack))}</span>
+             <span class="pack-tags" data-pack-tags></span>
            </div>
          </div>
          <span class="spacer"></span>
@@ -49,6 +55,15 @@ export async function PackView(root, id) {
   const countEl = root.querySelector('[data-count]');
   const addBtn = root.querySelector('[data-add-media]');
 
+  /** 图包标签挂在日期右边，跟在标题行里 */
+  function paintPackTags() {
+    const el = root.querySelector('[data-pack-tags]');
+    if (!el) return;
+    const tags = Array.isArray(pack.tags) ? pack.tags : [];
+    el.innerHTML = tags.map((t) => `<span class="pack-tag">${esc(t)}</span>`).join('');
+    el.hidden = !tags.length;
+  }
+
   function syncCount() {
     countEl.textContent = `${fmtNum(items.length)} 项${pack.counts && pack.counts.video ? ` · ${pack.counts.video} 个视频` : ''}`;
   }
@@ -62,11 +77,11 @@ export async function PackView(root, id) {
       return;
     }
     requestAnimationFrame(() => {
-      renderMasonry(holder, items, (i) => openLightbox(items, i), {
+      renderMasonry(holder, items, (i) => gotoMedia(items[i].id), {
         onContext: (e, item) =>
           mediaMenu(e, item, {
             characterId: pack.character.id,
-            onOpen: () => openLightbox(items, items.findIndex((x) => x.id === item.id)),
+            onOpen: () => gotoMedia(item.id),
             onChange: reload,
           }),
       });
@@ -79,6 +94,8 @@ export async function PackView(root, id) {
       pack.title = nextPack.title;
       pack.month = nextPack.month;
       pack.counts = nextPack.counts;
+      pack.tags = nextPack.tags;
+      paintPackTags();
       titleEl.textContent = nextPack.title;
       dateEl.textContent = packDateLabel(nextPack);
       items = nextMedia.items;
@@ -191,9 +208,11 @@ export async function PackView(root, id) {
     if (!next) return;
     await api.updatePack(pack.id, { tags: next });
     pack.tags = next;
+    paintPackTags();
     toast(next.length ? `已保存 ${next.length} 个标签` : '已清空标签');
   }
 
   paintMedia();
+  paintPackTags();
   document.title = `${pack.title} · 资料库`;
 }

@@ -12,6 +12,7 @@ import {
   refreshCharacter,
   refreshPack,
   refreshCharacterPacks,
+  ensureSelfTags,
 } from './db.js';
 import { getDerivative, warmAll, warmState } from './thumbs.js';
 import { WEB_DIR, INBOX_DIR, DATA_DIR, slugify } from './config.js';
@@ -156,6 +157,7 @@ const CHAR_SELECT = `
   FROM characters c LEFT JOIN shelves sh ON sh.id = c.shelf_id`;
 
 function mapMedia(r) {
+  const own = safeJson(r.tags);
   return {
     id: r.id,
     packId: r.pack_id,
@@ -166,7 +168,9 @@ function mapMedia(r) {
     durationMs: r.duration_ms,
     bytes: r.bytes,
     sortOrder: r.sort_order,
-    tags: safeJson(r.tags),
+    tags: own,
+    // 自己手动打的标签；tags 会被调用方替换成「含继承」的完整集合
+    ownTags: own,
   };
 }
 
@@ -490,6 +494,7 @@ export function createApp() {
       .run(shelfId, name.slice(0, 100), String(b.account || '').slice(0, 100), String(b.intro || '').slice(0, 20000), dirSlug, shelfId, ts, ts);
     const id = Number(info.lastInsertRowid);
     if (Array.isArray(b.tags) && b.tags.length) applyTags(db, id, b.tags);
+    ensureSelfTags(db); // 新条目立刻带上自己的名字标签
     const row = db.prepare(`${CHAR_SELECT} WHERE c.id = ?`).get(id);
     res.json(mapChar(row, tagsOf(db, id)));
   });
@@ -551,6 +556,8 @@ export function createApp() {
       }
     });
     tx();
+    // 名字标签始终跟着条目走：改名补新名，手删了也会补回来
+    ensureSelfTags(db);
     const fresh = db.prepare(`${CHAR_SELECT} WHERE c.id = ?`).get(id);
     res.json(mapChar(fresh, tagsOf(db, id)));
   });
@@ -786,12 +793,17 @@ export function createApp() {
       params.kind = kind;
     }
     if (q) {
-      where.push('(m.file_name LIKE @q OR m.tags LIKE @q)');
+      // 条目名也算可搜内容：媒体会继承条目名标签，搜「纸悦」就该出她全部素材
+      where.push('(m.file_name LIKE @q OR m.tags LIKE @q OR c.name LIKE @q)');
       params.q = `%${q}%`;
     }
     const clause = where.length ? where.join(' AND ') : '1=1';
 
-    const total = db.prepare(`SELECT COUNT(*) AS n FROM media m WHERE ${clause}`).get(params).n;
+    const total = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM media m LEFT JOIN characters c ON c.id = m.character_id WHERE ${clause}`
+      )
+      .get(params).n;
     const rows = db
       .prepare(
         `SELECT m.*, c.name AS char_name, sh.kind AS shelf_kind, p.title AS pack_title
@@ -1000,6 +1012,41 @@ export function createApp() {
     res.json({ added: added.length, skipped, ids: added });
   });
 
+  /** 单个媒体详情（详情页用）：带上所属条目 / 图包 / 库，标签是含继承的完整集合 */
+  app.get('/api/media/:id', (req, res) => {
+    const db = getDb();
+    const row = db
+      .prepare(
+        `SELECT m.*, c.name AS char_name, sh.name AS shelf_name, sh.kind AS shelf_kind,
+                p.title AS pack_title, p.month AS pack_month, p.category AS pack_category
+         FROM media m
+         JOIN characters c ON c.id = m.character_id
+         LEFT JOIN shelves sh ON sh.id = c.shelf_id
+         LEFT JOIN packs p ON p.id = m.pack_id
+         WHERE m.id = ?`
+      )
+      .get(Number(req.params.id));
+    if (!row) return res.status(404).json({ error: '媒体不存在' });
+
+    const base = mediaTagSet(db, row.character_id);
+    const own = safeJson(row.tags);
+    res.json({
+      ...mapMedia(row),
+      tags: mergeTags(own, base),
+      ownTags: own,
+      intro: row.intro || '',
+      createdAt: row.created_at,
+      thumb: `/t/${row.id}`,
+      preview: `/pv/${row.id}`,
+      original: `/m/${row.id}`,
+      pack: row.pack_id
+        ? { id: row.pack_id, title: row.pack_title, month: row.pack_month, category: row.pack_category }
+        : null,
+      character: { id: row.character_id, name: row.char_name },
+      shelf: { name: row.shelf_name || '', kind: row.shelf_kind || 'people' },
+    });
+  });
+
   app.patch('/api/media/:id', (req, res) => {
     const db = getDb();
     const id = Number(req.params.id);
@@ -1028,6 +1075,9 @@ export function createApp() {
         JSON.stringify(cleanTags(b.tags)),
         id
       );
+    }
+    if (typeof b.intro === 'string') {
+      db.prepare('UPDATE media SET intro = ? WHERE id = ?').run(b.intro.slice(0, 600), id);
     }
     refreshCharacter(row.character_id);
     res.json({ ok: true });
