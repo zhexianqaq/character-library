@@ -68,11 +68,12 @@ export const api = {
 };
 
 /** 大文件上传走 XHR，才能拿到进度 */
-export function uploadMedia(charId, files, { packId = null, onProgress } = {}) {
+export function uploadMedia(charId, files, { packId = null, category = null, onProgress } = {}) {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     for (const f of files) form.append('files', f, f.name);
     if (packId) form.append('packId', String(packId));
+    if (category) form.append('category', category);
 
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `/api/characters/${charId}/media`);

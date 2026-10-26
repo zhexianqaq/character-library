@@ -626,6 +626,36 @@ img { display: block; }
 .pack-card .m { font-size: 11px; color: var(--text-3); margin-top: 2px; }
 
 /* ============ 瀑布流 ============ */
+/* 小库切换条（仅虚拟角色库）：官图 / cosplay / 同人 */
+.cat-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: var(--gap);
+  flex-wrap: wrap;
+}
+.cat {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: var(--r-pill);
+  background: var(--card);
+  border: 1px solid var(--line);
+  font-size: 12.5px;
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.16s var(--ease), color 0.16s var(--ease), border-color 0.16s var(--ease);
+}
+.cat:hover { background: var(--fill); }
+.cat.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.cat i {
+  font-style: normal;
+  font-size: 11px;
+  opacity: 0.55;
+  font-variant-numeric: tabular-nums;
+}
+
 .masonry {
   display: flex;
   align-items: flex-start;

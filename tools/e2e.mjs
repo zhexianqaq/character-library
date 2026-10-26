@@ -375,6 +375,14 @@ try {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ platforms: [{ platform: '游戏', handle: '原神', url: '' }] }),
       });
+      // 三个小库各建一个图包，验证层级
+      for (const cat of ['官图', 'cosplay', '同人']) {
+        await fetch('/api/characters/' + mk.id + '/packs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: cat + '包', category: cat }),
+        });
+      }
       return mk.id;
     })()
   `);
@@ -415,6 +423,35 @@ try {
     );
     await evaluate(`document.querySelector('.modal [data-cancel]').click()`);
     await sleep(200);
+
+    // 小库：三个分类 + 按分类过滤图包
+    const catTabs = await evaluate(`[...document.querySelectorAll('.cat')].map((b) => b.dataset.cat)`);
+    check(
+      '角色页出现 官图 / cosplay / 同人 三个小库',
+      catTabs.join(',') === '官图,cosplay,同人',
+      catTabs.join(' / ')
+    );
+    const firstCat = await evaluate(`({
+      on: document.querySelector('.cat.on')?.dataset.cat || '',
+      packs: [...document.querySelectorAll('.pack-card .t')].map((e) => e.textContent.trim()),
+    })`);
+    check(
+      '默认只看「官图」，且只显示该小库的图包',
+      firstCat.on === '官图' && firstCat.packs.join() === '官图包',
+      JSON.stringify(firstCat)
+    );
+    await evaluate(`document.querySelector('[data-cat="cosplay"]').click()`);
+    await sleep(900);
+    const afterCat = await evaluate(`({
+      on: document.querySelector('.cat.on')?.dataset.cat || '',
+      packs: [...document.querySelectorAll('.pack-card .t')].map((e) => e.textContent.trim()),
+    })`);
+    check(
+      '切到 cosplay 只显示 cosplay 的图包',
+      afterCat.on === 'cosplay' && afterCat.packs.join() === 'cosplay包',
+      JSON.stringify(afterCat)
+    );
+
     await evaluate(`fetch('/api/characters/${workId}', { method: 'DELETE' })`);
   } else {
     check('虚拟角色库', true, '没有 work 类型的库，跳过');

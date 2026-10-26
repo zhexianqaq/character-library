@@ -34,6 +34,9 @@ async function copyText(text) {
 export async function CharacterView(root, id) {
   let c = await api.character(id);
   let mode = 'packs';
+  // 虚拟角色库的三个小库；人物库不启用
+  const CATEGORIES = ['官图', 'cosplay', '同人'];
+  let cat = CATEGORIES[0];
   let mediaItems = [];
   let packsCache = [];
 
@@ -80,6 +83,7 @@ export async function CharacterView(root, id) {
            <button class="tb-btn" data-new-pack>＋ 图包</button>
            <button class="tb-btn primary" data-upload>＋ 上传图片 / 视频</button>
          </div>
+         ${isWorkShelf() ? '<div class="cat-row" data-cats></div>' : ''}
          <div class="progress hidden" data-progress><i style="width:0%"></i></div>
          <div data-body></div>
        </main>`
@@ -427,19 +431,52 @@ export async function CharacterView(root, id) {
     });
   }
 
+  /** 当前小库；人物库或「未分类」时返回 null */
+  function packCategory() {
+    return isWorkShelf() && CATEGORIES.includes(cat) ? cat : null;
+  }
+
+  /** 三个小库的切换条，带各库图包数 */
+  function paintCats() {
+    const el = root.querySelector('[data-cats]');
+    if (!el) return;
+    const counts = Object.fromEntries(CATEGORIES.map((k) => [k, 0]));
+    let uncategorized = 0;
+    for (const p of packsCache) {
+      const k = p.category || '未分类';
+      if (k in counts) counts[k] += 1;
+      else uncategorized += 1;
+    }
+    const tabs = CATEGORIES.map((k) => ({ k, n: counts[k] }));
+    if (uncategorized) tabs.push({ k: '未分类', n: uncategorized });
+    el.innerHTML = tabs
+      .map((t) => `<button class="cat${t.k === cat ? ' on' : ''}" data-cat="${esc(t.k)}">${esc(t.k)}<i>${t.n}</i></button>`)
+      .join('');
+    el.querySelectorAll('[data-cat]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.cat === cat) return;
+        cat = btn.dataset.cat;
+        el.querySelectorAll('.cat').forEach((x) => x.classList.toggle('on', x.dataset.cat === cat));
+        loadPacks();
+      });
+    });
+  }
+
   async function loadPacks() {
     const body = root.querySelector('[data-body]');
     body.innerHTML = '<div class="pack-grid" data-packs></div>';
     const holder = body.querySelector('[data-packs]');
     const data = await api.packs(c.id);
     packsCache = data.items;
-    if (!data.items.length) {
+    paintCats();
+    const items = isWorkShelf() ? data.items.filter((p) => (p.category || '未分类') === cat) : data.items;
+    if (!items.length) {
       holder.innerHTML = `<div class="empty" style="grid-column:1/-1">
-        <b>还没有图包</b>上传图片或视频后，会按文件名里的日期自动月份归包；也可以点「＋ 图包」手动建一个
+        <b>${isWorkShelf() ? `「${cat}」还没有图包` : '还没有图包'}</b>上传图片或视频后，会按文件名里的日期自动月份归包；也可以点「＋ 图包」手动建一个
       </div>`;
       return;
     }
-    holder.innerHTML = data.items
+    holder.innerHTML = items
       .map((p) => {
         const img = p.coverMediaId ? api.thumb(p.coverMediaId) : '';
         const meta = [p.imageCount ? `${p.imageCount} 图` : '', p.videoCount ? `${p.videoCount} 视频` : '']
@@ -533,6 +570,7 @@ export async function CharacterView(root, id) {
       bar.querySelector('i').style.width = '0%';
       try {
         const res = await uploadMedia(c.id, files, {
+          category: packCategory(),
           onProgress: (loaded, total) => {
             bar.querySelector('i').style.width = `${Math.round((loaded / total) * 100)}%`;
           },
@@ -589,7 +627,11 @@ export async function CharacterView(root, id) {
         // 两个都空，直接用今天，不再弹二次确认
       }
       try {
-        const created = await api.createPack(c.id, { month: v.month, title: v.title });
+        const created = await api.createPack(c.id, {
+          month: v.month,
+          title: v.title,
+          category: packCategory(),
+        });
         toast(
           created.autoMonth ? `已用今天创建「${created.title}」` : `图包「${created.title}」已创建`
         );

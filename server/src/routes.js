@@ -126,19 +126,19 @@ function mapMedia(r) {
 }
 
 /** 上传后按文件名月份自动归包；没有日期的进「未分类」 */
-function ensurePackFor(db, charId, month) {
+function ensurePackFor(db, charId, month, category = null) {
   const existing = db
-    .prepare('SELECT id, title FROM packs WHERE character_id = ? AND month IS ?')
-    .get(charId, month);
+    .prepare('SELECT id, title FROM packs WHERE character_id = ? AND month IS ? AND category IS ?')
+    .get(charId, month, category);
   if (existing) return { id: existing.id, title: existing.title };
   const title = monthTitle(month);
   const id = Number(
     db
       .prepare(
-        `INSERT INTO packs(character_id, title, month, sort_order, created_at)
-         VALUES(?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?)`
+        `INSERT INTO packs(character_id, title, month, category, sort_order, created_at)
+         VALUES(?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?)`
       )
-      .run(charId, title, month, charId, nowIso()).lastInsertRowid
+      .run(charId, title, month, category, charId, nowIso()).lastInsertRowid
   );
   return { id, title };
 }
@@ -147,15 +147,17 @@ function ensurePackFor(db, charId, month) {
  * 算出文件该落在哪个目录：<角色库>/<角色>/<图包>/<图片|视频>
  * 图包目录沿用库里已有文件的位置；新图包才新建目录，避免重复生成 -2 -3
  */
-async function resolvePackDir(db, charRelDir, pack, kind) {
+async function resolvePackDir(db, charRelDir, pack, kind, category = null) {
   const typeDir = kind === 'image' ? '图片' : '视频';
   const existing = db.prepare('SELECT rel_path FROM media WHERE pack_id = ? LIMIT 1').get(pack.id);
   if (existing) {
     const parts = existing.rel_path.split('/');
     return [...parts.slice(0, -2), typeDir].join('/');
   }
-  const slug = await uniqueDirName(charRelDir, pack.title);
-  return `${charRelDir}/${slug}/${typeDir}`;
+  // 虚拟角色库：库/角色/小库/图包/图片|视频
+  const base = category ? `${charRelDir}/${category}` : charRelDir;
+  const slug = await uniqueDirName(base, pack.title);
+  return `${base}/${slug}/${typeDir}`;
 }
 
 /**
@@ -451,21 +453,25 @@ export function createApp() {
   // ---------- 图包 ----------
   app.get('/api/characters/:id/packs', (req, res) => {
     const db = getDb();
+    const cat = String(req.query.category || '').trim();
+    const args = [Number(req.params.id)];
+    if (cat) args.push(cat);
     const rows = db
       .prepare(
         `SELECT p.*,
            (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id) AS media_count,
            (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id AND m.kind='image') AS image_count,
            (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id AND m.kind='video') AS video_count
-         FROM packs p WHERE p.character_id = ?
+         FROM packs p WHERE p.character_id = ? ${cat ? 'AND p.category = ?' : ''}
          ORDER BY p.month IS NULL, p.month DESC, p.id DESC`
       )
-      .all(Number(req.params.id));
+      .all(...args);
     res.json({
       items: rows.map((r) => ({
         id: r.id,
         title: r.title,
         month: r.month,
+        category: r.category,
         mediaCount: r.media_count,
         imageCount: r.image_count,
         videoCount: r.video_count,
@@ -481,6 +487,7 @@ export function createApp() {
       return res.status(404).json({ error: '角色不存在' });
     }
     const b = req.body || {};
+    const category = String(b.category || '').trim().slice(0, 20) || null;
     const rawTitle = String(b.title || '').trim();
     const rawMonth = String(b.month || '').trim();
     const hasTitle = Boolean(rawTitle);
@@ -506,7 +513,9 @@ export function createApp() {
 
     // 同月已存在图包时，不报错打断用户：保留名字、放弃月份归属，名字加序号
     if (month) {
-      const dup = db.prepare('SELECT id FROM packs WHERE character_id = ? AND month = ?').get(charId, month);
+      const dup = db
+        .prepare('SELECT id FROM packs WHERE character_id = ? AND month = ? AND category IS ?')
+        .get(charId, month, category);
       if (dup) {
         month = null;
         let n = 2;
@@ -522,12 +531,12 @@ export function createApp() {
     const id = Number(
       db
         .prepare(
-          `INSERT INTO packs(character_id, title, month, sort_order, created_at)
-           VALUES(?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?)`
+          `INSERT INTO packs(character_id, title, month, category, sort_order, created_at)
+           VALUES(?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?)`
         )
-        .run(charId, title.slice(0, 100), month, charId, nowIso()).lastInsertRowid
+        .run(charId, title.slice(0, 100), month, category, charId, nowIso()).lastInsertRowid
     );
-    res.json({ id, title, month, autoMonth: !hasTitle && !hasMonth });
+    res.json({ id, title, month, category, autoMonth: !hasTitle && !hasMonth });
   });
 
   app.get('/api/packs/:id', (req, res) => {
@@ -631,6 +640,7 @@ export function createApp() {
     if (!files.length) return res.status(400).json({ error: '没有收到文件' });
 
     const forcedPackId = req.body && req.body.packId ? Number(req.body.packId) : null;
+    const category = String((req.body && req.body.category) || '').trim().slice(0, 20) || null;
     const added = [];
     const skipped = [];
 
@@ -645,14 +655,14 @@ export function createApp() {
       // 先定图包，才知道文件该进哪个目录
       const month = monthOfFileName(originalName);
       const pack = forcedPackId
-        ? db.prepare('SELECT id, title FROM packs WHERE id = ?').get(forcedPackId)
-        : ensurePackFor(db, charId, month);
+        ? db.prepare('SELECT id, title, category FROM packs WHERE id = ?').get(forcedPackId)
+        : ensurePackFor(db, charId, month, category);
       if (!pack) {
         skipped.push({ name: originalName, reason: '图包不存在' });
         continue;
       }
 
-      const relDir = await resolvePackDir(db, char.dir_slug, pack, kind);
+      const relDir = await resolvePackDir(db, char.dir_slug, pack, kind, pack.category || category);
 
       let saved;
       try {

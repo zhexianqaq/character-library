@@ -43,10 +43,10 @@ CREATE TABLE IF NOT EXISTS packs (
   character_id   INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
   title          TEXT NOT NULL,
   month          TEXT,
+  category       TEXT,
   cover_media_id INTEGER,
   sort_order     INTEGER NOT NULL DEFAULT 0,
-  created_at     TEXT NOT NULL,
-  UNIQUE(character_id, month)
+  created_at     TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS media (
@@ -79,6 +79,10 @@ CREATE TABLE IF NOT EXISTS character_tags (
 );
 
 CREATE INDEX IF NOT EXISTS idx_packs_char ON packs(character_id, month DESC);
+-- 小库维度：同角色的「同月 + 同小库」只能有一个图包；人物库 category 为空，不受唯一约束
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_packs_scope
+  ON packs(character_id, month, category)
+  WHERE month IS NOT NULL AND category IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_media_pack ON media(pack_id, sort_order, file_name);
 CREATE INDEX IF NOT EXISTS idx_media_char ON media(character_id, kind);
 CREATE INDEX IF NOT EXISTS idx_chars_shelf ON characters(shelf_id, sort_order, name);
@@ -110,6 +114,8 @@ function migrate(d) {
     if (!cols.includes(column)) d.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
   };
   addColumnIfMissing('characters', 'platforms', `platforms TEXT NOT NULL DEFAULT '[]'`);
+  // 小库：官图 / cosplay / 同人（只对虚拟角色库有意义，人物库留空）
+  addColumnIfMissing('packs', 'category', `category TEXT`);
 }
 
 export function nowIso() {
