@@ -16,7 +16,7 @@ async function editResourceModal(item = null) {
       ? '改了名称后，角色 / 人物上的同名标签记得一起改。'
       : '建好之后，给角色或人物打上同名标签（或在出处里写上这个名称），它们就会自动出现在这里。',
     fields: [
-      { name: 'name', label: '名称', required: true, value: item ? item.name : '', placeholder: '比如：原神' },
+      { name: 'name', label: '名称', required: true, value: item ? item.name : '', placeholder: '比如：原神', hint: item ? '' : '要一次建多个，用逗号隔开（中英文逗号都行）' },
       {
         name: 'category',
         label: '分类',
@@ -107,9 +107,43 @@ export async function ResourcesView(root, shelfId) {
     root.querySelector('[data-new-res]').addEventListener('click', async () => {
       const v = await editResourceModal();
       if (!v) return;
+      // 和人物 / 角色一样支持逗号批量：中英文逗号、顿号、分号、换行都算分隔符
+      const names = String(v.name || '')
+        .split(/[,，、;；\n]+/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .slice(0, 80);
+      if (!names.length) return toast('名称不能为空');
+
+      // 已存在的同名资源直接跳过，别建出两张「原神」把关联搞乱
+      const exist = new Set(items.map((x) => x.name));
+      const todo = [];
+      const skipped = [];
+      for (const name of names) {
+        if (exist.has(name)) {
+          skipped.push(name);
+          continue;
+        }
+        exist.add(name);
+        todo.push(name);
+      }
+      if (!todo.length) return toast(`这些资源都已经有了：${skipped.slice(0, 3).join('、')}`);
+
       try {
-        await api.createCharacter({ shelfId, ...v });
-        toast(`「${v.name}」已创建`);
+        const failed = [];
+        for (const name of todo) {
+          try {
+            await api.createCharacter({ shelfId, ...v, name });
+          } catch {
+            failed.push(name);
+          }
+        }
+        const ok = todo.length - failed.length;
+        const parts = [];
+        if (ok) parts.push(todo.length === 1 && !failed.length ? `「${todo[0]}」已创建` : `已创建 ${ok} 个资源`);
+        if (skipped.length) parts.push(`跳过 ${skipped.length} 个已存在`);
+        if (failed.length) parts.push(`失败 ${failed.length} 个（${failed.slice(0, 3).join('、')}）`);
+        toast(parts.join(' · ') || '创建失败');
         await reload();
       } catch (err) {
         toast(err.message || '创建失败');

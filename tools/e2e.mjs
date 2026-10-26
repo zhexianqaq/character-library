@@ -1393,6 +1393,39 @@ try {
       viaOrigin.ok ? viaOrigin.path : '出处里没有这个名称'
     );
 
+    // 资源库支持逗号批量新建（造完立刻删，别影响后面的用例）
+    await goto(`${BASE}/rs/${resShelf.id}`, 1800);
+    const resBatch = await evaluate(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const names = ['E2E 资源甲', 'E2E 资源乙', 'E2E 资源丙'];
+      document.querySelector('[data-new-res]').click();
+      await sleep(520);
+      const m = document.querySelector('.modal');
+      if (!m) return { ok: false, reason: '弹窗没开' };
+      m.querySelector('[name=name]').value = names.join('，');
+      m.querySelector('[data-ok]').click();
+      await sleep(2800);
+      const d = await (await fetch('/api/shelves/${resShelf.id}/resources')).json();
+      const made = (d.items || []).filter((x) => names.includes(x.name));
+      return {
+        ok: true,
+        names,
+        made: made.map((x) => x.name),
+        ids: made.map((x) => x.id),
+        cats: [...new Set(made.map((x) => x.category))],
+        toast: document.querySelector('#toast')?.textContent || '',
+        cards: document.querySelectorAll('.res-card').length,
+      };
+    })()`);
+    check(
+      '资源库支持逗号批量新建',
+      resBatch.ok && resBatch.made.length === 3 && resBatch.cats.length === 1,
+      resBatch.ok ? `${resBatch.made.join(' / ')} · ${resBatch.toast}` : resBatch.reason
+    );
+    for (const id of resBatch.ids || []) {
+      await fetch(`${BASE}/api/characters/${id}`, { method: 'DELETE' });
+    }
+
     // 清理这一节造的数据
     if (link.ok && link.charId) {
       await evaluate(`fetch('/api/characters/${link.charId}', { method: 'DELETE' }).then((r) => r.status)`);
