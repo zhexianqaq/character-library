@@ -584,6 +584,8 @@ export async function CharacterView(root, id) {
     if (!next) return;
     await api.updatePack(pack.id, { tags: next });
     toast(next.length ? `已保存 ${next.length} 个标签` : '已清空标签');
+    // 图包标签会下发给包内每张图，媒体缓存作废，切到「全部媒体」时重新拉
+    mediaAll = [];
     loadPacks();
   }
 

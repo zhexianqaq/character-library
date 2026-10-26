@@ -201,13 +201,17 @@ export async function MediaView(root, id) {
     const box = info.querySelector('[data-tags]');
     if (!box) return;
     const own = new Set(item.ownTags || []);
+    // 图包标签和条目名 / 库标签分开口径：告诉用户该去哪一层改
+    const fromPack = new Set(item.packTags || []);
+    const packLabel = item.pack ? item.pack.title : '图包';
     box.innerHTML =
       (item.tags || [])
         .map((t) => {
           const mine = own.has(t);
+          const src = fromPack.has(t) ? `图包「${esc(packLabel)}」` : `条目「${esc(item.character.name)}」`;
           return `<button class="mp-pill${mine ? ' is-own' : ''}" data-tag="${esc(t)}" data-mine="${
             mine ? 1 : 0
-          }" title="${mine ? '点一下移除' : `来自${isFlat() ? '图包' : '条目'}「${esc(isFlat() ? groupName() : item.character.name)}」`}">${esc(t)}${
+          }" title="${mine ? '点一下移除' : `来自${src}`}">${esc(t)}${
             mine ? '<i>×</i>' : ''
           }</button>`;
         })
@@ -217,7 +221,11 @@ export async function MediaView(root, id) {
       btn.addEventListener('click', async () => {
         const t = btn.dataset.tag;
         if (btn.dataset.mine !== '1') {
-          toast(`「${t}」是从${isFlat() ? '图包' : '条目'}继承的，去${isFlat() ? '图包' : '条目'}上改`);
+          toast(
+            fromPack.has(t)
+              ? `「${t}」是从图包「${packLabel}」继承的，去图包上改`
+              : `「${t}」是从条目「${item.character.name}」继承的，去条目上改`
+          );
           return;
         }
         await saveOwnTags((item.ownTags || []).filter((x) => x !== t));

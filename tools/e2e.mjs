@@ -972,6 +972,79 @@ try {
     JSON.stringify(tagRule.mediaTags)
   );
 
+  // 7.2b 图包标签同步到包内每张图：不遗漏、不重复、不外溢、可撤销
+  const packTagFlow = await evaluate(`(async () => {
+    const cid = Number(location.pathname.split('/').pop());
+    const packs = await (await fetch('/api/characters/' + cid + '/packs')).json();
+    const pack = (packs.items || []).find((p) => p.mediaCount > 0);
+    if (!pack) return { ok: false, reason: '没有带媒体的图包' };
+    const orig = pack.tags || [];
+    const patch = (tags) =>
+      fetch('/api/packs/' + pack.id, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tags }),
+      });
+    const char = await (await fetch('/api/characters/' + cid)).json();
+    const TAG = 'E2E 图包标签';
+
+    // 一个全新标签 + 一个和条目名同名的标签（测去重）
+    await patch([...orig, TAG, char.name]);
+    const all = (await (await fetch('/api/characters/' + cid + '/media')).json()).items;
+    const inPack = all.filter((m) => m.packId === pack.id);
+    const outside = all.filter((m) => m.packId !== pack.id);
+    const covered = inPack.length > 0 && inPack.every((m) => (m.tags || []).includes(TAG));
+    const nameOnce = inPack.every((m) => (m.tags || []).filter((t) => t === char.name).length === 1);
+    const noDup = inPack.every((m) => new Set(m.tags || []).size === (m.tags || []).length);
+    const leaked = outside.filter((m) => (m.tags || []).includes(TAG)).length;
+
+    const packMedia = (await (await fetch('/api/packs/' + pack.id + '/media')).json()).items;
+    const packApiCovered = packMedia.length > 0 && packMedia.every((m) => (m.tags || []).includes(TAG));
+    const detail = await (await fetch('/api/media/' + inPack[0].id)).json();
+
+    await patch(orig);
+    const after = (await (await fetch('/api/characters/' + cid + '/media')).json()).items.filter(
+      (m) => m.packId === pack.id
+    );
+    return {
+      ok: true,
+      n: inPack.length,
+      covered,
+      nameOnce,
+      noDup,
+      leaked,
+      packApiCovered,
+      detailTags: detail.tags || [],
+      detailPackTags: detail.packTags || [],
+      detailOwn: detail.ownTags || [],
+      TAG,
+      residue: after.filter((m) => (m.tags || []).includes(TAG)).length,
+      nameStill: after.every((m) => (m.tags || []).includes(char.name)),
+    };
+  })()`);
+  check(
+    '图包标签下发到包内每张图（不遗漏）',
+    packTagFlow.ok && packTagFlow.covered && packTagFlow.packApiCovered,
+    `${packTagFlow.n} 张 · 列表=${packTagFlow.covered} 图包页=${packTagFlow.packApiCovered}`
+  );
+  check(
+    '继承标签不重复、不外溢到其它图包',
+    packTagFlow.nameOnce && packTagFlow.noDup && packTagFlow.leaked === 0,
+    `同名只出现一次=${packTagFlow.nameOnce} 无重复=${packTagFlow.noDup} 外溢=${packTagFlow.leaked}`
+  );
+  check(
+    '详情页能区分图包标签与自身标签',
+    (packTagFlow.detailPackTags || []).includes(packTagFlow.TAG) &&
+      (packTagFlow.detailTags || []).includes(packTagFlow.TAG) &&
+      !(packTagFlow.detailOwn || []).includes(packTagFlow.TAG),
+    `tags=${JSON.stringify(packTagFlow.detailTags)} pack=${JSON.stringify(packTagFlow.detailPackTags)} own=${JSON.stringify(packTagFlow.detailOwn)}`
+  );
+  check(
+    '图包标签撤销后不留残余',
+    packTagFlow.residue === 0 && packTagFlow.nameStill,
+    `残余 ${packTagFlow.residue} 张 · 条目名仍在=${packTagFlow.nameStill}`
+  );
+
   // 7.3 媒体右键的封面两项
   const coverFlow = await evaluate(`(async () => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

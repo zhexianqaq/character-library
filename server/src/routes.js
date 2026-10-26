@@ -89,17 +89,6 @@ function mergeTags(...lists) {
 }
 
 /**
- * 扁平库（表情库）：没有条目层级，图包才是真正的分类。
- * 这类库的媒体只带自己的标签 + 所属图包的标签，不加条目名 / 人物角色。
- */
-function isFlatChar(db, charId) {
-  const c = db
-    .prepare(`SELECT c.is_container, sh.kind FROM characters c LEFT JOIN shelves sh ON sh.id = c.shelf_id WHERE c.id = ?`)
-    .get(charId);
-  return !!(c && (c.is_container || c.kind === 'emoji'));
-}
-
-/**
  * 媒体继承的标签 = 条目「自身」的身份（条目名）+ 库类型（人物 / 角色）。
  *
  * 条目上手动加的通用标签（原神、米哈游、写真…）**不再下发**：
@@ -115,7 +104,7 @@ function mediaTagSet(db, charId) {
   return mergeTags([c.name, c.kind === 'work' ? '角色' : '人物']);
 }
 
-/** 表情库里图包标签会下发给包内每张图，标一次全包生效 */
+/** 图包标签：所有库都会下发给包内每张图，标一次全包生效（读时合并，不落库） */
 function packTagMap(db, charId) {
   const map = new Map();
   for (const r of db.prepare('SELECT id, tags FROM packs WHERE character_id = ?').all(charId)) {
@@ -1211,8 +1200,8 @@ export function createApp() {
       .prepare('SELECT * FROM media WHERE pack_id = ? ORDER BY sort_order, file_name')
       .all(packId);
     const base = pack ? mediaTagSet(db, pack.character_id) : [];
-    // 表情库：图包标签下发给包内每张图，标一次全包生效
-    const packTags = pack && isFlatChar(db, pack.character_id) ? safeJson(pack.tags) : [];
+    // 图包标签下发给包内每张图：标一次全包生效，读时合并所以改了立刻全包同步
+    const packTags = pack ? safeJson(pack.tags) : [];
     res.json({
       items: rows.map((r) => ({
         ...mapMedia(r),
@@ -1255,15 +1244,18 @@ export function createApp() {
       params.kind = kind;
     }
     if (q) {
-      // 条目名也算可搜内容：媒体会继承条目名标签，搜「纸悦」就该出她全部素材
-      where.push('(m.file_name LIKE @q OR m.tags LIKE @q OR c.name LIKE @q)');
+      // 条目名 / 图包标签也算可搜内容：媒体会继承它们，搜「纸悦」「原神」就该出对应素材
+      where.push('(m.file_name LIKE @q OR m.tags LIKE @q OR c.name LIKE @q OR p.tags LIKE @q)');
       params.q = `%${q}%`;
     }
     const clause = where.length ? where.join(' AND ') : '1=1';
 
     const total = db
       .prepare(
-        `SELECT COUNT(*) AS n FROM media m LEFT JOIN characters c ON c.id = m.character_id WHERE ${clause}`
+        `SELECT COUNT(*) AS n FROM media m
+         LEFT JOIN characters c ON c.id = m.character_id
+         LEFT JOIN packs p ON p.id = m.pack_id
+         WHERE ${clause}`
       )
       .get(params).n;
     const rows = db
@@ -1387,7 +1379,7 @@ export function createApp() {
       .prepare(`SELECT * FROM media WHERE ${where.join(' AND ')} ORDER BY sort_order DESC, id DESC`)
       .all(params);
     const base = mediaTagSet(db, charId);
-    const packTags = isFlatChar(db, charId) ? packTagMap(db, charId) : null;
+    const packTags = packTagMap(db, charId);
     res.json({
       items: rows.map((r) => ({
         ...mapMedia(r),
@@ -1519,13 +1511,15 @@ export function createApp() {
 
     const base = mediaTagSet(db, row.character_id);
     const own = safeJson(row.tags);
-    // 表情库：图包标签算继承标签，详情页要能看到
+    // 图包标签算继承标签，详情页要能看到（所有库一致）
     const packRow = row.pack_id ? db.prepare('SELECT tags FROM packs WHERE id = ?').get(row.pack_id) : null;
-    const inheritedPackTags = packRow && isFlatChar(db, row.character_id) ? safeJson(packRow.tags) : [];
+    const inheritedPackTags = packRow ? safeJson(packRow.tags) : [];
     res.json({
       ...mapMedia(row),
       tags: mergeTags(own, base, inheritedPackTags),
       ownTags: own,
+      // 来自图包的标签（前端据此区分「去图包上改」还是「去条目上改」）
+      packTags: inheritedPackTags,
       intro: row.intro || '',
       createdAt: row.created_at,
       thumb: `/t/${row.id}`,
