@@ -1,8 +1,9 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fadeIn, toast } from '../util.js';
+import { esc, fmtNum, fadeIn, toast, copyText } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
-import { openModal } from '../components/modal.js';
+import { openModal, confirmDialog } from '../components/modal.js';
 import { openTagPicker } from '../components/tag-picker.js';
+import { openContextMenu } from '../components/context-menu.js';
 import { RES_CATS } from './resources.js';
 
 /**
@@ -60,25 +61,27 @@ export async function ResourceView(root, id) {
     paintIntro();
   }
 
+  /** 编辑资源标签；资源名本身始终留在标签里，它是关联的依据 */
+  async function editTags() {
+    const own = (r.tags || []).filter((t) => t !== r.name);
+    const next = await openTagPicker({ title: `「${r.name}」的标签`, selected: own });
+    if (!next) return;
+    try {
+      await api.updateCharacter(r.id, { tags: [...new Set([...next, r.name])] });
+      r = (await api.resource(id)).resource;
+      paintHero();
+      toast(next.length ? `已保存 ${next.length} 个标签` : '已清空标签');
+    } catch (err) {
+      toast(err.message || '保存失败');
+    }
+  }
+
   function paintTags() {
     const box = root.querySelector('[data-tags]');
     box.innerHTML =
       (r.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join('') +
       '<button class="chip add" data-add-tag>+ 标签</button>';
-    box.querySelector('[data-add-tag]').addEventListener('click', async () => {
-      const next = await openTagPicker({ title: '编辑资源标签', selected: r.tags || [] });
-      if (!next) return;
-      // 资源名本身也是一个标签，用来挂关联条目
-      const tags = [...new Set([...next, r.name])];
-      try {
-        await api.updateCharacter(r.id, { tags });
-        r = (await api.resource(id)).resource;
-        paintHero();
-        toast(next.length ? `已保存 ${next.length} 个标签` : '已清空标签');
-      } catch (err) {
-        toast(err.message || '保存失败');
-      }
-    });
+    box.querySelector('[data-add-tag]').addEventListener('click', editTags);
   }
 
   function paintIntro() {
@@ -130,7 +133,7 @@ export async function ResourceView(root, id) {
       .map((c) => {
         const img = c.coverMediaId ? api.thumb(c.coverMediaId) : '';
         const kind = c.kind === 'work' ? '角色' : '人物';
-        return `<a class="char-card" href="/c/${c.id}?res=${encodeURIComponent(r.name)}" data-link>
+        return `<a class="char-card" href="/c/${c.id}?res=${encodeURIComponent(r.name)}" data-link data-entry="${c.id}">
           <div class="cover">
             ${img ? `<img src="${img}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : '<div class="cover-empty">待添加</div>'}
             <span class="badge">${fmtNum(c.mediaCount)}</span>
@@ -144,6 +147,76 @@ export async function ResourceView(root, id) {
       .join('');
     grid.querySelectorAll('img').forEach(fadeIn);
   }
+
+  /** 打开条目；withRes=true 时带上标签筛选 */
+  function gotoEntry(entryId, withRes) {
+    const q = withRes ? `?res=${encodeURIComponent(r.name)}` : '';
+    history.pushState({ from: location.pathname + location.search }, '', `/c/${entryId}${q}`);
+    window.dispatchEvent(new CustomEvent('app:route'));
+  }
+
+  async function copyName(text, label) {
+    const ok = await copyText(text);
+    toast(ok ? `已复制「${text}」` : '复制失败，请手动选中文字');
+  }
+
+  async function deleteResource() {
+    const ok = await confirmDialog(
+      `删除「${r.name}」？`,
+      '只删掉这张资源卡片，角色 / 人物和它们的媒体都不受影响。'
+    );
+    if (!ok) return;
+    try {
+      await api.deleteCharacter(r.id);
+      toast('已删除');
+      history.pushState({}, '', `/rs/${r.shelf.id}`);
+      window.dispatchEvent(new CustomEvent('app:route'));
+    } catch (err) {
+      toast(err.message || '删除失败');
+    }
+  }
+
+  function allMenu() {
+    return [
+      { label: '编辑资源', onClick: () => root.querySelector('[data-edit]').click() },
+      { label: '编辑标签', hint: '关联靠标签', onClick: editTags },
+      { label: '复制资源名', hint: '给条目打标签用', onClick: () => copyName(r.name) },
+      { separator: true },
+      { label: '删除资源', danger: true, onClick: deleteResource },
+    ];
+  }
+
+  function entryMenu(c) {
+    return [
+      { label: '打开条目', onClick: () => gotoEntry(c.id, false) },
+      {
+        label: `只看「${r.name}」的图包`,
+        hint: `${c.packCount} 个图包`,
+        onClick: () => gotoEntry(c.id, true),
+      },
+      { label: '打开本地文件夹', onClick: () => api.reveal('character', c.id).catch(() => toast('目录已丢失')) },
+      { separator: true },
+      { label: '复制条目名', onClick: () => copyName(c.name) },
+    ];
+  }
+
+  function bindContextMenus() {
+    const page = root.querySelector('.page');
+    if (!page) return;
+    page.addEventListener('contextmenu', (e) => {
+      const card = e.target.closest('[data-entry]');
+      if (card) {
+        const c = related.find((x) => x.id === Number(card.dataset.entry));
+        if (c) {
+          openContextMenu(e, entryMenu(c));
+          return;
+        }
+      }
+      openContextMenu(e, allMenu());
+    });
+  }
+
+  bindContextMenus();
 
   root.querySelector('[data-edit]').addEventListener('click', async () => {
     const v = await openModal({

@@ -874,11 +874,74 @@ try {
   const resShelf = shelves.find((s) => s.kind === 'resource');
   if (resShelf) {
     await goto(`${BASE}/rs/${resShelf.id}`, 2200);
-    const resList = await evaluate(`(() => ({
+    const readList = () => evaluate(`(() => ({
       cards: document.querySelectorAll('.res-card').length,
       tabs: [...document.querySelectorAll('[data-cat] button')].map((b) => b.textContent.trim()),
     }))()`);
+    let resList = await readList();
+    // 库是空的就自己造一张（跑完删掉），否则用例会被真实数据的增删带崩
+    let tempResId = 0;
+    if (!resList.cards) {
+      tempResId = await evaluate(`(async () => {
+        const r = await fetch('/api/characters', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shelfId: ${resShelf.id}, name: 'E2E 临时资源', category: '游戏' }),
+        });
+        const d = await r.json();
+        return d.id || 0;
+      })()`);
+      await goto(`${BASE}/rs/${resShelf.id}`, 1800);
+      resList = await readList();
+    }
     check('资源库按分类分组展示卡片', resList.cards > 0 && resList.tabs.some((t) => t.startsWith('游戏')), resList.tabs.join(' / '));
+
+    // 关联靠标签：造一个带同名标签 + 同名出处的条目，跑完删掉
+    const workShelf = shelves.find((s) => s.kind === 'work');
+    const link = workShelf
+      ? await evaluate(`(async () => {
+          const list = await (await fetch('/api/shelves/${resShelf.id}/resources')).json();
+          const res = list.items[0];
+          if (!res) return { ok: false };
+          const r = await fetch('/api/characters', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ shelfId: ${workShelf.id}, name: 'E2E 资源关联', tags: [res.name] }),
+          });
+          const c = await r.json();
+          await fetch('/api/characters/' + c.id, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ platforms: [{ platform: '游戏', handle: res.name, url: '' }] }),
+          });
+          return { ok: true, resName: res.name, charId: c.id };
+        })()`)
+      : { ok: false };
+
+    // 右键：资源卡片
+    if (await realRightClick('.res-card')) {
+      const labels = await readMenuAndClose();
+      check(
+        '资源卡片右键有菜单',
+        ['打开', '编辑资源', '编辑标签', '复制名称', '删除'].every((l) => labels.includes(l)),
+        labels.join(' / ')
+      );
+    }
+    const resBlank = await evaluate(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const page = document.querySelector('.page');
+      page.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 700 }));
+      await sleep(300);
+      const out = [...document.querySelectorAll('.ctx-menu .ctx-item > span')].map((s) => s.textContent.trim());
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await sleep(220);
+      return out;
+    })()`);
+    check(
+      '资源库空白处右键有菜单',
+      resBlank.includes('新建资源') && resBlank.includes('只看分类') && resBlank.includes('编辑库'),
+      resBlank.join(' / ')
+    );
 
     const resId = await evaluate(`Number(document.querySelector('.res-card').dataset.id)`);
     await evaluate(`document.querySelector('.res-card').click()`);
@@ -894,6 +957,31 @@ try {
       resDetail.path === `/r/${resId}` && resDetail.name.length > 0 && resDetail.related > 0 &&
         resDetail.stats.includes('相关条目'),
       `${resDetail.name} · ${resDetail.related} 个关联`
+    );
+
+    // 右键：关联卡片 / 空白处
+    if (await realRightClick('[data-entry]')) {
+      const labels = await readMenuAndClose();
+      check(
+        '资源详情关联卡片右键有菜单',
+        labels.includes('打开条目') && labels.some((l) => l.startsWith('只看「')) && labels.includes('复制条目名'),
+        labels.join(' / ')
+      );
+    }
+    const detailBlank = await evaluate(`(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const page = document.querySelector('.page');
+      page.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 700 }));
+      await sleep(300);
+      const out = [...document.querySelectorAll('.ctx-menu .ctx-item > span')].map((s) => s.textContent.trim());
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await sleep(220);
+      return out;
+    })()`);
+    check(
+      '资源详情空白处右键有菜单',
+      detailBlank.includes('编辑资源') && detailBlank.includes('编辑标签') && detailBlank.includes('删除资源'),
+      detailBlank.join(' / ')
     );
 
     const resName = resDetail.name;
@@ -926,6 +1014,14 @@ try {
       viaOrigin.ok && viaOrigin.path === `/r/${resId}`,
       viaOrigin.ok ? viaOrigin.path : '出处里没有这个名称'
     );
+
+    // 清理这一节造的数据
+    if (link.ok && link.charId) {
+      await evaluate(`fetch('/api/characters/${link.charId}', { method: 'DELETE' }).then((r) => r.status)`);
+    }
+    if (tempResId) {
+      await evaluate(`fetch('/api/characters/${tempResId}', { method: 'DELETE' }).then((r) => r.status)`);
+    }
   }
 
   // 9. 表情库：扁平库 = 图包 / 未分类 / 全部素材

@@ -1,8 +1,9 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fadeIn, toast } from '../util.js';
+import { esc, fmtNum, fadeIn, toast, copyText } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openContextMenu } from '../components/context-menu.js';
+import { openTagPicker } from '../components/tag-picker.js';
 
 /** 资源分类：游戏 / 动画 / 电影 / 剧集（可自由加） */
 export const RES_CATS = ['游戏', '动画', '电影', '剧集'];
@@ -132,23 +133,82 @@ export async function ResourcesView(root, shelfId) {
       }
     });
 
-    root.querySelector('[data-grid]').addEventListener('contextmenu', (e) => {
-      const card = e.target.closest('.res-card');
-      if (!card) return;
-      const item = items.find((x) => x.id === Number(card.dataset.id));
-      if (!item) return;
-      openContextMenu(e, [
-        {
-          label: '打开',
+    bindContextMenus();
+  }
+
+  /** 打开资源详情 */
+  function gotoResource(resId) {
+    history.pushState({ from: location.pathname + location.search }, '', `/r/${resId}`);
+    window.dispatchEvent(new CustomEvent('app:route'));
+  }
+
+  async function copyName(item) {
+    const ok = await copyText(item.name);
+    toast(ok ? `已复制「${item.name}」` : '复制失败，请手动选中文字');
+  }
+
+  /** 资源标签 = 卡片自己的标签 + 资源名（名字本身就是一个标签） */
+  async function editTags(item) {
+    const next = await openTagPicker({ title: `「${item.name}」的标签`, selected: item.tags || [] });
+    if (!next) return;
+    const tags = [...new Set([...next, item.name])];
+    try {
+      await api.updateCharacter(item.id, { tags });
+      toast(next.length ? `已保存 ${next.length} 个标签` : '已清空标签');
+      await reload();
+    } catch (err) {
+      toast(err.message || '保存失败');
+    }
+  }
+
+  function cardMenu(item) {
+    return [
+      { label: '打开', onClick: () => gotoResource(item.id) },
+      { label: '编辑资源', onClick: () => editOne(item) },
+      { label: '编辑标签', hint: '关联靠标签', onClick: () => editTags(item) },
+      { label: '复制名称', hint: '给条目打标签用', onClick: () => copyName(item) },
+      { separator: true },
+      { label: '删除', danger: true, hint: '只删卡片', onClick: () => removeOne(item) },
+    ];
+  }
+
+  function blankMenu() {
+    const n = counts();
+    const cats = ['', ...RES_CATS.filter((c) => n[c]), ...groups.map((g) => g.name).filter((g) => !RES_CATS.includes(g))];
+    return [
+      { label: '新建资源', onClick: () => root.querySelector('[data-new-res]').click() },
+      {
+        label: '只看分类',
+        hint: cat || '全部',
+        children: [...new Set(cats)].map((c) => ({
+          label: `${c || '全部'}${n[c] ? `（${n[c]}）` : ''}`,
+          hint: cat === c ? '当前' : '',
           onClick: () => {
-            history.pushState({}, '', `/r/${item.id}`);
-            window.dispatchEvent(new CustomEvent('app:route'));
+            cat = c;
+            root.querySelectorAll('[data-cat] button').forEach((b) => b.classList.toggle('on', b.dataset.c === c));
+            paintGrid();
           },
-        },
-        { label: '编辑', onClick: () => editOne(item) },
-        { separator: true },
-        { label: '删除', danger: true, onClick: () => removeOne(item) },
-      ]);
+        })),
+      },
+      { separator: true },
+      { label: '编辑库', onClick: () => root.querySelector('[data-edit-shelf]').click() },
+      { label: '刷新列表', onClick: () => reload() },
+    ];
+  }
+
+  function bindContextMenus() {
+    const page = root.querySelector('.page');
+    if (!page) return;
+    page.addEventListener('contextmenu', (e) => {
+      const card = e.target.closest('.res-card');
+      if (card) {
+        const item = items.find((x) => x.id === Number(card.dataset.id));
+        if (item) {
+          openContextMenu(e, cardMenu(item));
+          return;
+        }
+      }
+      openContextMenu(e, blankMenu());
     });
   }
 

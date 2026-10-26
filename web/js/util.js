@@ -49,6 +49,37 @@ export function toast(msg) {
   toastTimer = setTimeout(() => el.classList.remove('on'), 2200);
 }
 
+/**
+ * 复制文本。http 页面（非 secure context）没有 navigator.clipboard，
+ * 所以要留一条 textarea + execCommand 的降级路径。
+ */
+export async function copyText(text) {
+  const val = String(text == null ? '' : text);
+  if (!val) return false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(val);
+      return true;
+    }
+  } catch {
+    /* 走降级 */
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = val;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, val.length);
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 export function aspectStyle(w, h, fallback = 3 / 4) {
   const ar = w && h ? w / h : fallback;
   return `--ar:${ar.toFixed(5)}`;
