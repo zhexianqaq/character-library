@@ -131,6 +131,12 @@ function mediaTagSet(db, charId) {
   return mergeTags([c.name]);
 }
 
+/** 当前月份 'YYYY-MM'（散图库里没有日期的文件按入库月份归包，别用「未分类」这个名） */
+function currentMonth() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
 /**
  * 图包标签 = 名字拆出来的 + **所属条目名**。
  *
@@ -227,6 +233,8 @@ function normalizeShelfKind(v) {
   const k = String(v || '').toLowerCase();
   if (k === 'work') return 'work';
   if (k === 'emoji') return 'emoji';
+  // 散图库：扁平库，只有「图包 / 全部素材」，没有条目也没有未分类入口
+  if (k === 'loose') return 'loose';
   if (k === 'resource') return 'resource';
   if (k === 'novel') return 'novel';
   if (k === 'inbox') return 'inbox';
@@ -680,8 +688,8 @@ export function createApp() {
         )
         .lastInsertRowid
     );
-    // 表情库 / 全部库都没有条目层级，靠一个隐藏容器条目挂图包和未分类
-    if (kind === 'emoji' || kind === 'inbox') ensureShelfContainer(id);
+    // 表情库 / 散图库 / 全部库都没有条目层级，靠一个隐藏容器条目挂图包（和未分类）
+    if (kind === 'emoji' || kind === 'loose' || kind === 'inbox') ensureShelfContainer(id);
     // 库根目录建出来：否则资源管理器里少一个库，用户会以为数据没落盘
     await mkdirRel(shelfSlugOf(db, id));
     res.json({ id, name, kind, variant });
@@ -708,8 +716,8 @@ export function createApp() {
       nowIso(),
       id
     );
-    // 改成表情库 / 全部库时补一个容器条目，否则前端没有地方挂图包
-    if (nextKind === 'emoji' || nextKind === 'inbox') ensureShelfContainer(id);
+    // 改成表情库 / 散图库 / 全部库时补一个容器条目，否则前端没有地方挂图包
+    if (nextKind === 'emoji' || nextKind === 'loose' || nextKind === 'inbox') ensureShelfContainer(id);
     res.json({ ok: true, kind: nextKind, variant: nextVariant });
   });
 
@@ -2603,7 +2611,11 @@ export function createApp() {
         : forcedPackId
           ? db.prepare('SELECT id, title, category, kind FROM packs WHERE id = ?').get(forcedPackId)
           : char.is_container
-            ? null
+            ? // 散图库只有「图包 / 全部素材」两栏，落下就走未分类等于看不见；
+              // 所以按文件名月份自动建包（和普通条目一样），文件始终有归属
+              shelfKindOfChar === 'loose'
+              ? ensurePackFor(db, charId, month || currentMonth(), category)
+              : null
             : ensurePackFor(db, charId, month, category);
       if (!isDoc && forcedPackId && !pack) {
         await drop();

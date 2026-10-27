@@ -19,6 +19,8 @@ import { InboxView } from './inbox.js';
  */
 const FLAT_VIEW = {
   emoji: EmojiView,
+  // 散图库和表情库共用一套扁平视图（容器条目挂图包），只是少「未分类」和动图筛选
+  loose: EmojiView,
   resource: ResourcesView,
   novel: NovelView,
   inbox: InboxView,
@@ -36,7 +38,12 @@ const CARD_SORTS = [
 function tabsHtml(shelves, currentId) {
   const items = shelves
     .map((s) => {
-      const n = s.kind === 'emoji' ? s.packCount : s.kind === 'inbox' ? s.mediaCount : s.characterCount;
+      const n =
+        s.kind === 'emoji' || s.kind === 'loose'
+          ? s.packCount
+          : s.kind === 'inbox'
+            ? s.mediaCount
+            : s.characterCount;
       return `<button data-shelf="${s.id}" class="${s.id === currentId ? 'on' : ''}">${esc(s.name)}<i>${n}</i></button>`;
     })
     .join('');
@@ -112,7 +119,7 @@ export async function LibraryView(root, shelfId) {
     const v = await openModal({
       title: '新建库',
       description:
-        '人物库 / 角色库按「条目 → 图包 → 素材」组织；表情库没有条目；小说库按「归类文件夹 → 书 → 分卷」组织；全部库是收件箱 + 全库总览。',
+        '人物库 / 角色库按「条目 → 图包 → 素材」组织；散图库 / 表情库没有条目，只有「图包 + 全部素材」；小说库按「归类文件夹 → 书 → 分卷」组织；全部库是收件箱 + 全库总览。',
       fields: [
         { name: 'name', label: '名称', required: true, placeholder: '比如：人物库、原创库' },
         {
@@ -124,6 +131,7 @@ export async function LibraryView(root, shelfId) {
             { value: 'work', label: '角色库 · 虚拟角色，标出处' },
             { value: 'novel:original', label: '原创库 · 小说，按「小说类型」分文件夹' },
             { value: 'novel:fanfic', label: '同人库 · 同人小说，按「原作品名」分文件夹' },
+            { value: 'loose', label: '散图库 · 没有条目，只有图包和全部素材（散图 / 杂图）' },
             { value: 'emoji', label: '表情库 · 没有条目，直接放图包（gif / 表情包）' },
             { value: 'resource', label: '资源库 · 游戏 / 动画 / 电影 / 剧集，按标签串起角色' },
             { value: 'inbox', label: '全部库 · 收一堆杂图，再分发给人物 / 角色库' },

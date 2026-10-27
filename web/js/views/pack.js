@@ -52,7 +52,8 @@ export async function PackView(root, id) {
       return 0;
     }
   })();
-  const emoji = shelfKind === 'emoji';
+  // 散图库和表情库一样是扁平库：没有条目这一层，图包也不做跨列排版
+  const emoji = shelfKind === 'emoji' || shelfKind === 'loose';
   const resource = shelfKind === 'resource';
   const ownerNoun = shelfKind === 'work' ? '角色' : resource ? '资源' : '人物';
   // 资源库的图包回到资源详情（/r/:id），别把人带到条目页

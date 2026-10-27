@@ -44,6 +44,8 @@ export async function EmojiView(root, shelfId, opts = {}) {
   const embedded = !!opts.embedded;
   let data = await api.emojiShelf(shelfId);
   let shelf = data.shelf;
+  // 散图库：同一套扁平结构，但只保留「图包 / 全部素材」两栏，也没有动图 / 表情筛选
+  const isLoose = (shelf.kind || '') === 'loose';
   let packs = data.packs;
   let mediaAll = [];
   let mediaItems = [];
@@ -52,6 +54,8 @@ export async function EmojiView(root, shelfId, opts = {}) {
   // 现在库是嵌在首页 /s/:id 里打开的，一改 URL 就把人带出首页、刷新后还落到旧页面
   let mode =
     (history.state && history.state.emojiTab) || new URLSearchParams(location.search).get('tab') || 'packs';
+  // 散图库没有「未分类」这一栏，历史里存着也退回图包
+  if (isLoose && mode === 'loose') mode = 'packs';
   let selecting = false;
   const picked = new Set();
   const filters = { kind: '', tag: '', pack: '', q: '', sort: 'new' };
@@ -85,15 +89,19 @@ export async function EmojiView(root, shelfId, opts = {}) {
        <div class="toolbar">
          <div class="segmented" data-view>
            <button class="on" data-v="packs">图包<i>0</i></button>
-           <button data-v="loose">未分类<i>0</i></button>
+           ${isLoose ? '' : '<button data-v="loose">未分类<i>0</i></button>'}
            <button data-v="all">全部素材<i>0</i></button>
          </div>
          <div class="filter-bar" data-filter-bar hidden>
-           <div class="segmented" data-f-kind>
+           ${
+             isLoose
+               ? ''
+               : `<div class="segmented" data-f-kind>
              <button class="on" data-k="">全部</button>
              <button data-k="anim">动图</button>
              <button data-k="still">表情</button>
-           </div>
+           </div>`
+           }
            <span data-f-tag></span>
            <span data-f-pack></span>
            <label class="search filter-search">
@@ -137,7 +145,7 @@ export async function EmojiView(root, shelfId, opts = {}) {
       `${fmtNum(s.packs)} 个图包`,
       `${fmtNum(s.total)} 个素材`,
       s.anim ? `${fmtNum(s.anim)} 个动图` : '',
-      s.loose ? `${fmtNum(s.loose)} 个未分类` : '',
+      !isLoose && s.loose ? `${fmtNum(s.loose)} 个未分类` : '',
       fmtBytes(s.bytes),
     ].filter(Boolean);
     root.querySelector('[data-shelf-meta]').textContent = parts.join(' · ');
@@ -195,7 +203,11 @@ export async function EmojiView(root, shelfId, opts = {}) {
     syncCount();
     if (!packs.length) {
       bodyEl.innerHTML = `<div class="empty">
-        <b>还没有图包</b>点「＋ 图包」建一个，或者直接把表情包文件夹拖进来（会进未分类）
+        <b>还没有图包</b>${
+          isLoose
+            ? '点「＋ 图包」建一个，或者把图片 / 视频直接拖进来（会按月自动归包）'
+            : '点「＋ 图包」建一个，或者直接把表情包文件夹拖进来（会进未分类）'
+        }
       </div>`;
       return;
     }
@@ -255,7 +267,8 @@ export async function EmojiView(root, shelfId, opts = {}) {
     });
     bar.querySelector('[data-f-sort]').replaceWith(sortDD.el);
 
-    bar.querySelector('[data-f-kind]').addEventListener('click', (e) => {
+    // 散图库没有「动图 / 表情」这一段，绑定要可选
+    bar.querySelector('[data-f-kind]')?.addEventListener('click', (e) => {
       const btn = e.target.closest('button[data-k]');
       if (!btn) return;
       filters.kind = btn.dataset.k;
@@ -348,7 +361,9 @@ export async function EmojiView(root, shelfId, opts = {}) {
         ? '<div class="empty" style="flex:1"><b>未分类是空的</b>上传时没指定图包的表情会落在这里</div>'
         : mediaAll.length
           ? '<div class="empty" style="flex:1"><b>没有符合条件的素材</b>换个筛选条件试试</div>'
-          : '<div class="empty" style="flex:1"><b>还没有素材</b>把表情包拖进来，或者点右上角上传</div>';
+          : isLoose
+            ? '<div class="empty" style="flex:1"><b>还没有素材</b>把图片 / 视频拖进来，或者点右上角上传（会按月自动归包）</div>'
+            : '<div class="empty" style="flex:1"><b>还没有素材</b>把表情包拖进来，或者点右上角上传</div>';
       return;
     }
     requestAnimationFrame(() => {
@@ -762,7 +777,9 @@ export async function EmojiView(root, shelfId, opts = {}) {
   root.querySelector('[data-new-pack]').addEventListener('click', async () => {
     const v = await openModal({
       title: '新建图包',
-      description: '表情包按主题分堆放：猫猫、打工日常、表情大合集…',
+      description: isLoose
+        ? '散图按主题分堆放：壁纸、头像、随手存的图…'
+        : '表情包按主题分堆放：猫猫、打工日常、表情大合集…',
       fields: [{ name: 'title', label: '图包名称', required: true, placeholder: '比如：猫猫' }],
       submitText: '创建',
     });
@@ -846,7 +863,7 @@ export async function EmojiView(root, shelfId, opts = {}) {
   document.addEventListener('keydown', onPageKey);
 
   const wanted = new URLSearchParams(location.search).get('tab');
-  mode = wanted === 'loose' || wanted === 'all' ? wanted : 'packs';
+  mode = (wanted === 'loose' && !isLoose) || wanted === 'all' ? wanted : 'packs';
   const filterBar = root.querySelector('[data-filter-bar]');
   if (filterBar) filterBar.hidden = mode === 'packs';
   if (packDD) packDD.el.hidden = mode !== 'all';

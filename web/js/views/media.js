@@ -70,7 +70,8 @@ export async function MediaView(root, id) {
 
   /** 表情库：没有条目层级，标签 / 位置都按「库 + 图包」算 */
   /** 扁平库：没有条目层级（表情库 / 全部库），媒体直接挂在库的容器条目下面 */
-  const flatKind = () => (item.shelf && ['emoji', 'inbox'].includes(item.shelf.kind) ? item.shelf.kind : '');
+  const flatKind = () =>
+    item.shelf && ['emoji', 'loose', 'inbox'].includes(item.shelf.kind) ? item.shelf.kind : '';
   const isFlat = () => !!flatKind();
   /** 没有来源可退时回哪一页：表情库回 /e/，全部库回 /x/ */
   // 扁平库（表情 / 全部）现在都嵌在首页的 /s/:id 里，没有可退的历史时回那里

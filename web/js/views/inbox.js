@@ -125,6 +125,7 @@ export async function InboxView(root, shelfId, opts = {}) {
     novel: '小说',
     resource: '作品',
     emoji: '图包',
+    loose: '图包',
     inbox: '待分发',
   };
 
@@ -163,7 +164,12 @@ export async function InboxView(root, shelfId, opts = {}) {
       .map((s) => {
         const pct = t.bytes ? Math.round(((s.bytes || 0) / t.bytes) * 1000) / 10 : 0;
         // 主数字是「多少个」：人物 / 角色 / 小说 / 作品 / 图包；全部库没有条目，用待分发素材数
-        const cnt = s.kind === 'emoji' ? s.packCount : s.kind === 'inbox' ? s.mediaCount : s.characterCount;
+        const cnt =
+          s.kind === 'emoji' || s.kind === 'loose'
+            ? s.packCount
+            : s.kind === 'inbox'
+              ? s.mediaCount
+              : s.characterCount;
         const sub =
           s.kind === 'inbox' ? '待分发' : `${UNIT[s.kind] || '条目'} · ${fmtNum(s.mediaCount)} 个媒体`;
         return `<button class="ls-card${s.id === shelfInfo.id ? ' is-on' : ''}" data-goto="${s.id}"
