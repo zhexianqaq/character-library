@@ -18,7 +18,7 @@ import {
   pruneOrphanTags,
 } from './db.js';
 import { getDerivative, capturePoster, clearPoster, warmAll, warmState } from './thumbs.js';
-import { WEB_DIR, INBOX_DIR, DATA_DIR, slugify } from './config.js';
+import { WEB_DIR, INBOX_DIR, CACHE_DIR, DATA_DIR, slugify } from './config.js';
 import {
   absPathOf,
   adoptFile,
@@ -33,6 +33,7 @@ import {
 import { beginMove, logRecovery } from './file-journal.js';
 import { monthOfFileName, monthTitle } from './importer.js';
 import { splitTitleTags } from './pack-tags.js';
+import { extractArchive, isArchiveName } from './archive.js';
 
 const MIME = {
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
@@ -337,6 +338,42 @@ function ensurePackFor(db, charId, month, category = null) {
       .run(charId, title, month, category, JSON.stringify(packTagsFor(db, charId, title)), charId, nowIso()).lastInsertRowid
   );
   return { id, title };
+}
+
+/**
+ * 按名字取图包：已有同名包直接复用，没有才新建。
+ * 压缩包拖到条目首页时用它 —— 反复拖同一个包不该长出一堆重名图包。
+ */
+function ensureNamedPack(db, charId, rawTitle, category = null) {
+  const title = String(rawTitle || '').trim().slice(0, 100) || '未命名';
+  const dup = db
+    .prepare('SELECT id, title FROM packs WHERE character_id = ? AND title = ? ORDER BY id LIMIT 1')
+    .get(charId, title);
+  if (dup) return { id: dup.id, title: dup.title, created: false };
+  const id = Number(
+    db
+      .prepare(
+        `INSERT INTO packs(character_id, title, month, category, tags, sort_order, created_at)
+         VALUES(?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?)`
+      )
+      .run(charId, title, null, category, JSON.stringify(packTagsFor(db, charId, title)), charId, nowIso()).lastInsertRowid
+  );
+  return { id, title, created: true };
+}
+
+/** 「卡芙卡-泳装.part1.rar」「xxx.7z.001」→「卡芙卡-泳装」：去掉压缩包后缀当图包名 */
+function titleFromArchive(name) {
+  let s = String(name || '').trim();
+  for (let i = 0; i < 4; i += 1) {
+    const next = s
+      .replace(/\.(zip|rar|7z|tar|tgz|gz|bz2|xz|zst)$/i, '')
+      .replace(/\.part\d+$/i, '')
+      .replace(/\.\d{3}$/i, '') // 7z 分卷 .001
+      .trim();
+    if (next === s) break;
+    s = next;
+  }
+  return s || '压缩包';
 }
 
 /**
@@ -2550,29 +2587,22 @@ export function createApp() {
     });
   });
 
-  app.post('/api/characters/:id/media', upload.array('files', 400), async (req, res) => {
-    const db = getDb();
-    const charId = Number(req.params.id);
-    const char = db.prepare('SELECT * FROM characters WHERE id = ?').get(charId);
-    if (!char) return res.status(404).json({ error: '角色不存在' });
-    const files = req.files || [];
-    if (!files.length) return res.status(400).json({ error: '没有收到文件' });
-
-    const forcedPackId = req.body && req.body.packId ? Number(req.body.packId) : null;
-    const category = String((req.body && req.body.category) || '').trim().slice(0, 20) || null;
-    const shelfRow = db.prepare('SELECT kind FROM shelves WHERE id = ?').get(char.shelf_id);
-    const shelfKindOfChar = (shelfRow && shelfRow.kind) || '';
+  /**
+   * 把一批「已经落在临时目录里」的文件收进条目。
+   *
+   * 上传（multer 先落到 .cache/inbox）和解压（落到 .cache/unzip-*）走同一条链路：
+   * 算 sha 查重 → 定图包 / 目录 → adoptFile 落盘 → 插 media → 排队生成缩略图。
+   * files: [{ path, name }]，path 必须是本次请求自己的临时文件（会被删）。
+   */
+  async function ingestFiles(db, char, shelfKind, files, { forcedPackId = null, category = null } = {}) {
+    const charId = char.id;
     const added = [];
     const skipped = [];
-    /**
-     * 本次真正写入了媒体的图包。只刷新这几个包的封面就够了 ——
-     * 以前每次都 refreshCharacterPacks(charId)，把该角色所有包挨个查一遍，
-     * 连传 50 个文件等于同一个循环跑 50 遍（其他包的封面根本不会变）。
-     */
+    /** 本次真正写入了媒体的图包。只刷新这几个包的封面就够了 */
     const touchedPacks = new Set();
 
     for (const f of files) {
-      const originalName = decodeName(f.originalname);
+      const originalName = f.name;
       const drop = () => fsp.unlink(f.path).catch(() => {});
       const kind = kindOfExt(path.extname(originalName).toLowerCase());
       if (!kind) {
@@ -2581,7 +2611,7 @@ export function createApp() {
         continue;
       }
       // 正文文件只有小说库收：别的库里放 txt / pdf 只会变成一堆打不开的条目
-      if (kind === 'file' && shelfKindOfChar !== 'novel') {
+      if (kind === 'file' && shelfKind !== 'novel') {
         await drop();
         skipped.push({ name: originalName, reason: '正文文件只能放进小说库' });
         continue;
@@ -2613,7 +2643,7 @@ export function createApp() {
           : char.is_container
             ? // 散图库只有「图包 / 全部素材」两栏，落下就走未分类等于看不见；
               // 所以按文件名月份自动建包（和普通条目一样），文件始终有归属
-              shelfKindOfChar === 'loose'
+              shelfKind === 'loose'
               ? ensurePackFor(db, charId, month || currentMonth(), category)
               : null
             : ensurePackFor(db, charId, month, category);
@@ -2676,7 +2706,7 @@ export function createApp() {
       if (pack) touchedPacks.add(pack.id);
       // 正文文件没有缩略图，别往生成池里塞无解的活
       if (kind !== 'file') getDerivative(newId, 'thumb').catch(() => {});
-      // 入库成功：上传临时区那份「源文件」已经 moveFile 移走/复制完，
+      // 入库成功：临时区那份「源文件」已经 moveFile 移走/复制完，
       // 这里再补一刀 —— 跨盘复制后删源失败、或上面任何分支提前 continue，
       // 都不该把副本留在 .cache/inbox 里（曾经堆了 500MB / 582 个文件）
       await drop();
@@ -2686,9 +2716,146 @@ export function createApp() {
     await Promise.all(files.map((f) => fsp.unlink(f.path).catch(() => {})));
 
     for (const pid of touchedPacks) refreshPack(pid);
-    // 连续上传时同一角色的统计合并成「立刻一次 + 窗口结束补一次」
     refreshCharacterSoon(charId);
-    res.json({ added: added.length, skipped, ids: added });
+    return { added, skipped };
+  }
+
+  app.post('/api/characters/:id/media', upload.array('files', 400), async (req, res) => {
+    const db = getDb();
+    const charId = Number(req.params.id);
+    const char = db.prepare('SELECT * FROM characters WHERE id = ?').get(charId);
+    if (!char) return res.status(404).json({ error: '角色不存在' });
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: '没有收到文件' });
+
+    const forcedPackId = req.body && req.body.packId ? Number(req.body.packId) : null;
+    const category = String((req.body && req.body.category) || '').trim().slice(0, 20) || null;
+    const shelfRow = db.prepare('SELECT kind FROM shelves WHERE id = ?').get(char.shelf_id);
+    const shelfKind = (shelfRow && shelfRow.kind) || '';
+
+    const out = await ingestFiles(
+      db,
+      char,
+      shelfKind,
+      files.map((f) => ({ path: f.path, name: decodeName(f.originalname) })),
+      { forcedPackId, category }
+    );
+    res.json({ added: out.added.length, skipped: out.skipped, ids: out.added });
+  });
+
+  /**
+   * 压缩包 → 散图：解压后走和上传完全相同的入库链路。
+   *
+   * 拖到某个图包里（带 packId）就进那个图包；拖到条目 / 库首页（不带 packId）
+   * 就按压缩包名新建一个图包（同名图包已存在时直接复用，避免反复拖同一个包长出一堆重名包）。
+   * 「全部媒体」是收件箱，没有图包概念，解出来的直接落未分类。
+   */
+  app.post('/api/characters/:id/archive', upload.single('archive'), async (req, res) => {
+    const db = getDb();
+    const charId = Number(req.params.id);
+    const char = db.prepare('SELECT * FROM characters WHERE id = ?').get(charId);
+    const tmpArchive = req.file ? req.file.path : null;
+    let archivePath = tmpArchive;
+    let workDir = null;
+    const cleanup = async () => {
+      if (workDir) await fsp.rm(workDir, { recursive: true, force: true, maxRetries: 2 }).catch(() => {});
+      if (tmpArchive) await fsp.unlink(tmpArchive).catch(() => {});
+      if (archivePath && archivePath !== tmpArchive) await fsp.unlink(archivePath).catch(() => {});
+    };
+
+    try {
+      if (!char) {
+        await cleanup();
+        return res.status(404).json({ error: '角色不存在' });
+      }
+      if (!req.file) return res.status(400).json({ error: '没有收到压缩包' });
+
+      const originalName = decodeName(req.file.originalname);
+      if (!isArchiveName(originalName)) {
+        await cleanup();
+        return res.status(400).json({ error: '只支持 zip / rar / 7z / tar.gz 压缩包' });
+      }
+
+      const forcedPackId = req.body && req.body.packId ? Number(req.body.packId) : null;
+      const category = String((req.body && req.body.category) || '').trim().slice(0, 20) || null;
+      const shelfRow = db.prepare('SELECT kind FROM shelves WHERE id = ?').get(char.shelf_id);
+      const shelfKind = (shelfRow && shelfRow.kind) || '';
+
+      workDir = await fsp.mkdtemp(path.join(CACHE_DIR, 'unzip-'));
+      // multer 落的是无扩展名的随机名，而 UnRAR 之类会「按扩展名找文件」直接报
+      // 「找不到 xxx.rar」—— 解压前先把原扩展名补上
+      const ext = path.extname(originalName).toLowerCase();
+      if (/^\.[a-z0-9]{1,5}$/.test(ext)) {
+        const withExt = `${archivePath}${ext}`;
+        try {
+          await fsp.rename(archivePath, withExt);
+          archivePath = withExt;
+        } catch {
+          /* 改名失败就用原路径，zip 自己认魔数不受影响 */
+        }
+      }
+
+      let packed;
+      try {
+        packed = await extractArchive(archivePath, workDir);
+      } catch (err) {
+        await cleanup();
+        return res.status(400).json({ error: err.message || '解压失败' });
+      }
+
+      // 只要图片 / 视频：压缩包里通常还有 readme、种子、网址快捷方式
+      const media = packed.files.filter((f) => ['image', 'video'].includes(kindOfExt(path.extname(f.name))));
+      if (!media.length) {
+        await cleanup();
+        return res.status(400).json({
+          error: `压缩包里有 ${packed.files.length} 个文件，但没有图片或视频`,
+        });
+      }
+
+      let pack = null;
+      let created = false;
+      if (forcedPackId) {
+        pack = db.prepare('SELECT id, title, kind FROM packs WHERE id = ? AND character_id = ?').get(forcedPackId, charId);
+        if (!pack) {
+          await cleanup();
+          return res.status(404).json({ error: '图包不存在' });
+        }
+      } else if (!char.is_container || shelfKind === 'loose') {
+        pack = ensureNamedPack(db, charId, titleFromArchive(originalName), category);
+        created = !!pack.created;
+      }
+
+      const out = await ingestFiles(
+        db,
+        char,
+        shelfKind,
+        media.map((f) => ({ path: f.abs, name: f.name })),
+        { forcedPackId: pack ? pack.id : null, category }
+      );
+
+      // 刚建的包一个文件都没进（全是重复内容）→ 删掉，别在列表里留一个「0 项」的空壳
+      if (pack && created && !out.added.length) {
+        db.prepare('DELETE FROM packs WHERE id = ?').run(pack.id);
+        pack = null;
+        refreshCharacter(charId); // ingestFiles 里刚统计过，这里把包数改回来
+      }
+
+      const summary = {
+        added: out.added.length,
+        ids: out.added,
+        skipped: [...packed.skipped.map((s) => ({ name: s.name, reason: s.reason })), ...out.skipped],
+        pack: pack ? { id: pack.id, title: pack.title, created } : null,
+        format: packed.format,
+        tool: packed.tool || null,
+        entries: packed.files.length,
+      };
+      await cleanup();
+      res.json(summary);
+    } catch (err) {
+      await cleanup();
+      console.error('[archive] 解压导入失败', err);
+      res.status(500).json({ error: `解压导入失败：${err.message || err}` });
+    }
   });
 
   /** 单个媒体详情（详情页用）：带上所属条目 / 图包 / 库，标签是含继承的完整集合 */

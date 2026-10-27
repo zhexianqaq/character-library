@@ -118,7 +118,7 @@ export async function UploadsView(root) {
        <div class="up-list" data-list></div>
        <div class="up-empty" data-empty hidden>
          <b>队列是空的</b>
-         <span>把图片 / 视频（或整个文件夹）拖到这里，也可以点右上角「选择文件」</span>
+         <span>把图片 / 视频 / 压缩包（或整个文件夹）拖到这里，也可以点右上角「选择文件」</span>
        </div>
        <div class="up-foot">拖动文件到本页任意位置即可加入队列 · 上传在后台进行，可以随时切到别的页面继续浏览</div>
      </main>`;
@@ -134,7 +134,7 @@ export async function UploadsView(root) {
     const input = document.createElement('input');
     input.type = 'file';
     input.multiple = true;
-    input.accept = 'image/*,video/*';
+    input.accept = 'image/*,video/*,.zip,.rar,.7z,.tgz,.tar';
     input.style.display = 'none';
     document.body.appendChild(input);
     input.addEventListener('change', async () => {
@@ -169,7 +169,9 @@ export async function UploadsView(root) {
     el.dataset.id = String(t.id);
     el.innerHTML = `
       <div class="up-thumb">${
-        t.previewUrl ? `<img src="${t.previewUrl}" alt="" />` : `<span>${t.kind === 'video' ? '▶' : 'IMG'}</span>`
+        t.previewUrl
+          ? `<img src="${t.previewUrl}" alt="" />`
+          : `<span>${t.kind === 'video' ? '▶' : t.kind === 'archive' ? 'ZIP' : 'IMG'}</span>`
       }</div>
       <div class="up-main">
         <div class="up-line">
@@ -202,7 +204,7 @@ export async function UploadsView(root) {
     else if (t.state === 'skipped') ref.sub.textContent = `→ ${t.reason}${target ? `（目标 ${target}）` : ''}`;
     else if (t.state === 'done' && t.note) ref.sub.textContent = `→ ${t.note}`;
 
-    if (t.state === 'uploading') ref.status.textContent = `${STATE_TEXT.uploading} ${p}%`;
+    if (t.state === 'uploading') ref.status.textContent = t.unpacking ? '解压中…' : `${STATE_TEXT.uploading} ${p}%`;
     else ref.status.textContent = STATE_TEXT[t.state] || '';
     ref.status.className = `up-status is-${t.state}`;
   }

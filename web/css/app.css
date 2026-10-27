@@ -1329,6 +1329,7 @@ button.char-card {
 }
 .drop-card b { font-size: 17px; font-weight: 600; }
 .drop-card span { font-size: 12.5px; color: var(--text-3); max-width: 420px; }
+.drop-card .drop-tip { font-style: normal; font-size: 11.5px; color: var(--text-3); opacity: 0.7; }
 .drop-ico {
   width: 46px;
   height: 46px;

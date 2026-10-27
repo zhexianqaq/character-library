@@ -157,15 +157,10 @@ export const api = {
 };
 
 /** 大文件上传走 XHR，才能拿到进度 */
-export function uploadMedia(charId, files, { packId = null, category = null, onProgress } = {}) {
+function sendForm(url, form, onProgress) {
   return new Promise((resolve, reject) => {
-    const form = new FormData();
-    for (const f of files) form.append('files', f, f.name);
-    if (packId) form.append('packId', String(packId));
-    if (category) form.append('category', category);
-
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', `/api/characters/${charId}/media`);
+    xhr.open('POST', url);
     xhr.upload.onprogress = (e) => {
       if (onProgress && e.lengthComputable) onProgress(e.loaded, e.total);
     };
@@ -192,4 +187,24 @@ export function uploadMedia(charId, files, { packId = null, category = null, onP
     xhr.onerror = () => reject(new Error('网络错误，上传中断'));
     xhr.send(form);
   });
+}
+
+export function uploadMedia(charId, files, { packId = null, category = null, onProgress } = {}) {
+  const form = new FormData();
+  for (const f of files) form.append('files', f, f.name);
+  if (packId) form.append('packId', String(packId));
+  if (category) form.append('category', category);
+  return sendForm(`/api/characters/${charId}/media`, form, onProgress);
+}
+
+/**
+ * 压缩包上传：服务端解压后按图片 / 视频入库。
+ * 带 packId 就进那个图包；不带就按压缩包名新建一个（同名包复用）。
+ */
+export function uploadArchive(charId, file, { packId = null, category = null, onProgress } = {}) {
+  const form = new FormData();
+  form.append('archive', file, file.name);
+  if (packId) form.append('packId', String(packId));
+  if (category) form.append('category', category);
+  return sendForm(`/api/characters/${charId}/archive`, form, onProgress);
 }

@@ -1669,10 +1669,10 @@ export async function CharacterView(root, id) {
     const input = document.createElement('input');
     input.type = 'file';
     input.multiple = true;
-    // 小说库额外收正文文件（txt / epub / pdf …），其他库只收图片视频
+    // 小说库额外收正文文件（txt / epub / pdf …），其他库收图片视频和压缩包
     input.accept = isNovelShelf()
       ? 'image/*,video/*,.txt,.epub,.pdf,.md,.doc,.docx'
-      : 'image/*,video/*';
+      : 'image/*,video/*,.zip,.rar,.7z,.tgz,.tar';
     input.style.display = 'none';
     root.appendChild(input);
     input.addEventListener('change', () => {

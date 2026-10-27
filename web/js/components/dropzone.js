@@ -69,6 +69,7 @@ export function bindDropUpload(el, getTarget, opts = {}) {
         </div>
         <b>松手开始上传</b>
         <span>${hint}</span>
+        ${opts.noArchive ? '' : '<em class="drop-tip">压缩包（zip / rar / 7z）会自动解压</em>'}
       </div>`;
     document.body.appendChild(mask);
     requestAnimationFrame(() => mask && mask.classList.add('on'));

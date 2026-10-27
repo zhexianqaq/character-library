@@ -449,7 +449,7 @@ export async function PackView(root, id) {
     const input = document.createElement('input');
     input.type = 'file';
     input.multiple = true;
-    input.accept = 'image/*,video/*';
+    input.accept = 'image/*,video/*,.zip,.rar,.7z,.tgz,.tar';
     input.style.display = 'none';
     root.appendChild(input);
     input.addEventListener('change', () => {

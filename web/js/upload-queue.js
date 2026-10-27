@@ -1,4 +1,4 @@
-import { uploadMedia } from './api.js';
+import { uploadMedia, uploadArchive } from './api.js';
 
 /**
  * 上传队列（全局单例）。
@@ -86,11 +86,16 @@ function notify() {
   });
 }
 
+/** 压缩包：服务端解压成散图再入库（zip 自己解，rar / 7z 交给本机 7-Zip / UnRAR / bsdtar） */
+const ARCHIVE_RE = /\.(zip|rar|7z|tgz|tar|tar\.gz|tar\.bz2|tar\.xz)$/i;
+
 function kindOf(file) {
+  const name = String(file.name || '');
+  if (ARCHIVE_RE.test(name)) return 'archive';
   const t = String(file.type || '');
   if (t.startsWith('image/')) return 'image';
   if (t.startsWith('video/')) return 'video';
-  return /\.(png|jpe?g|webp|gif|bmp|avif|heic|tiff?)$/i.test(file.name || '') ? 'image' : 'video';
+  return /\.(png|jpe?g|webp|gif|bmp|avif|heic|tiff?)$/i.test(name) ? 'image' : 'video';
 }
 
 function isSameFile(a, b) {
@@ -110,19 +115,45 @@ function start(t) {
   t.loaded = 0;
   t.startedAt = Date.now();
   t.error = '';
+  t.unpacking = false;
   running += 1;
   notify();
 
-  uploadMedia(t.charId, [t.file], {
+  const opts = {
     packId: t.packId,
     category: t.category,
     onProgress: (loaded, total) => {
       t.loaded = loaded;
       t.total = total;
+      // 压缩包传完之后服务端才开始解压，这一步可能很久，界面上要能看出来在干嘛
+      if (t.kind === 'archive' && total && loaded >= total) t.unpacking = true;
       notify();
     },
-  })
+  };
+  const job =
+    t.kind === 'archive'
+      ? uploadArchive(t.charId, t.file, opts)
+      : uploadMedia(t.charId, [t.file], opts);
+
+  job
     .then((res) => {
+      if (t.kind === 'archive') {
+        const added = Number(res && res.added) || 0;
+        const skipped = (res && res.skipped) || [];
+        const packTitle = res && res.pack ? res.pack.title : '';
+        if (packTitle) t.packTitle = packTitle;
+        if (added > 0) {
+          t.state = 'done';
+          t.loaded = t.size;
+          t.total = t.size;
+          t.ids = (res && res.ids) || [];
+          t.note = `解压入库 ${added} 个${skipped.length ? ` · 跳过 ${skipped.length}` : ''}`;
+        } else {
+          t.state = 'skipped';
+          t.reason = (skipped[0] && skipped[0].reason) || '压缩包里没有可导入的图片或视频';
+        }
+        return;
+      }
       const added = Number(res && res.added) || 0;
       const skipped = (res && res.skipped) || [];
       if (added > 0) {
@@ -141,6 +172,7 @@ function start(t) {
     })
     .finally(() => {
       running -= 1;
+      t.unpacking = false;
       t.endedAt = Date.now();
       pump();
       notify();
