@@ -206,6 +206,20 @@ export function splitAliases(v) {
   return out;
 }
 
+/**
+ * 图包改名后，后端会顺手改磁盘目录（`dirRename`）。
+ * 只处理「整包在一个目录」的简单情况；散包 / 重名 / 层级不一致时给一句人话提示。
+ */
+export function dirRenameNote(dirRename) {
+  if (!dirRename || dirRename.ok) return '';
+  const why = dirRename.reason;
+  if (why === 'scattered') return '磁盘上这个图包散在多个目录，点「同步文件夹」合并一次';
+  if (why === 'exists') return '磁盘上已有同名目录，点「同步文件夹」处理一下';
+  if (why === 'parent') return '目录层级对不上，点「同步文件夹」处理一下';
+  if (why === 'empty') return '';
+  return '磁盘目录没跟上，点「同步文件夹」处理一下';
+}
+
 /** 让图片淡入，避免加载完成时闪一下 */
 /**
  * 重画列表时保住滚动位置。

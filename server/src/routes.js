@@ -34,6 +34,7 @@ import { beginMove, logRecovery } from './file-journal.js';
 import { monthOfFileName, monthTitle } from './importer.js';
 import { splitTitleTags } from './pack-tags.js';
 import { extractArchive, isArchiveName } from './archive.js';
+import { syncPackDirs, renamePackDir, pruneDirsOf } from './pack-sync.js';
 
 const MIME = {
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
@@ -1972,16 +1973,18 @@ export function createApp() {
     });
   });
 
-  app.patch('/api/packs/:id', (req, res) => {
+  app.patch('/api/packs/:id', async (req, res) => {
     const db = getDb();
     const id = Number(req.params.id);
     const row = db.prepare('SELECT * FROM packs WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ error: '图包不存在' });
     const b = req.body || {};
+    let titleChanged = false;
     try {
       if (typeof b.title === 'string' && b.title.trim()) {
         const nextTitle = b.title.trim().slice(0, 100);
         db.prepare('UPDATE packs SET title = ? WHERE id = ?').run(nextTitle, id);
+        titleChanged = nextTitle !== row.title;
         // 名字变了，那条同名标签跟着改；用户自己加的其他标签保留
         const tags = withOwnerTag(db, row.character_id, packTagsKeepingName(safeJson(row.tags), row.title, nextTitle));
         db.prepare('UPDATE packs SET tags = ? WHERE id = ?').run(JSON.stringify(tags), id);
@@ -2010,6 +2013,16 @@ export function createApp() {
       return res.status(400).json({ error: String(err.message || '保存失败') });
     }
     const fresh = db.prepare('SELECT * FROM packs WHERE id = ?').get(id);
+    // 改名顺带把磁盘目录也改了：以前只改数据库，目录还留着旧名，越用越对不上。
+    // 只处理「整包在一个目录」的简单情况；散包留给「同步文件夹」一次合并。
+    let dirRename = null;
+    if (titleChanged) {
+      try {
+        dirRename = await renamePackDir(db, id);
+      } catch (err) {
+        dirRename = { ok: false, reason: String(err.message || err) };
+      }
+    }
     res.json({
       ok: true,
       id,
@@ -2017,6 +2030,7 @@ export function createApp() {
       month: fresh.month,
       createdAt: fresh.created_at,
       coverMediaId: fresh.cover_media_id || null,
+      dirRename,
     });
   });
 
@@ -2076,6 +2090,11 @@ export function createApp() {
     const row = db.prepare('SELECT * FROM packs WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ error: '图包不存在' });
     const withMedia = String(req.query.withMedia || '') === '1';
+    const dirsBefore = [
+      ...new Set(
+        db.prepare('SELECT rel_path FROM media WHERE pack_id = ?').all(id).map((m) => m.rel_path.split('/').slice(0, -1).join('/'))
+      ),
+    ];
     let removed = 0;
     const failed = [];
     if (withMedia) {
@@ -2097,7 +2116,14 @@ export function createApp() {
     }
     db.prepare('DELETE FROM packs WHERE id = ?').run(id);
     refreshCharacter(row.character_id);
-    res.json({ ok: true, removed, failed });
+    // 图包没了，把空掉的目录收走（只删空目录，其他文件一个不动）
+    let dirsRemoved = 0;
+    try {
+      dirsRemoved = pruneDirsOf(dirsBefore, db);
+    } catch {
+      /* ignore */
+    }
+    res.json({ ok: true, removed, failed, dirsRemoved });
   });
 
   /**
@@ -2118,6 +2144,7 @@ export function createApp() {
     let removed = 0;
     const failed = [];
     const chars = new Set();
+    const dirsToPrune = [];
     const delOneMedia = db.prepare('DELETE FROM media WHERE id = ?');
     const looseMedia = db.prepare('UPDATE media SET pack_id = NULL WHERE id = ?');
     for (const id of ids) {
@@ -2127,6 +2154,7 @@ export function createApp() {
       if (action === 'delete') {
         const rows = db.prepare('SELECT id, rel_path FROM media WHERE pack_id = ?').all(id);
         for (const r of rows) {
+          dirsToPrune.push(r.rel_path.split('/').slice(0, -1).join('/'));
           const del = await removeLibraryFile(r.rel_path);
           if (del.ok || del.alreadyGone) {
             delOneMedia.run(r.id);
@@ -2145,7 +2173,37 @@ export function createApp() {
       refreshCharacterPacks(cid);
       refreshCharacter(cid);
     }
-    res.json({ ok: true, done, removed, failed });
+    // 删完把空掉的图包目录收走（只删空目录，磁盘上的文件一个不动）
+    let dirsRemoved = 0;
+    try {
+      dirsRemoved = pruneDirsOf(dirsToPrune, db);
+    } catch {
+      /* 清目录失败不影响删除结果 */
+    }
+    res.json({ ok: true, done, removed, failed, dirsRemoved });
+  });
+
+  /**
+   * 同步磁盘：让图包目录名跟上数据库里的图包名。
+   *
+   * GET  .../preview  只算不动（前端弹确认框用）
+   * POST              真跑（会移动文件，但不删任何文件；空目录才回收）
+   */
+  app.get('/api/sync/packs/preview', async (req, res) => {
+    try {
+      res.json(await syncPackDirs(getDb(), { dryRun: true }));
+    } catch (err) {
+      res.status(400).json({ error: String(err.message || '同步预览失败') });
+    }
+  });
+
+  app.post('/api/sync/packs', async (req, res) => {
+    try {
+      const r = await syncPackDirs(getDb(), { dryRun: false });
+      res.json(r);
+    } catch (err) {
+      res.status(400).json({ error: String(err.message || '同步失败') });
+    }
   });
 
   /** 媒体批量操作：delete 删记录和磁盘文件；move 只改分组（限同一批条目） */

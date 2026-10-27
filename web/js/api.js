@@ -106,6 +106,9 @@ export const api = {
   shelves: () => api.overview().then((d) => d.shelves),
 
   shelfCharacters: (shelfId, params) => req(`/api/shelves/${shelfId}/characters${qs(params)}`),
+  /** 磁盘同步：preview 只算不动，run 会移动文件（不删文件） */
+  syncPreview: () => req('/api/sync/packs/preview'),
+  syncRun: () => json('POST')('/api/sync/packs', {}),
   novelShelf: (shelfId, params) => req(`/api/shelves/${shelfId}/novel${qs(params)}`),
   novelBags: (shelfId) => req(`/api/shelves/${shelfId}/novelbags`),
   createNovelBag: (shelfId, title) => json('POST')(`/api/shelves/${shelfId}/novelbags`, { title }),

@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fmtBytes, fadeIn, toast, debounce, deleteSummary, keepScroll, isSelectAllKey, isTypingTarget } from '../util.js';
+import { esc, fmtNum, fmtBytes, fadeIn, toast, debounce, deleteSummary, keepScroll, isSelectAllKey, isTypingTarget, dirRenameNote } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { openModal, confirmDialog } from '../components/modal.js';
@@ -690,8 +690,9 @@ export async function EmojiView(root, shelfId, opts = {}) {
       submitText: '保存',
     });
     if (!v) return;
-    await api.updatePack(pack.id, { title: v.title });
-    toast('已重命名');
+    const res = await api.updatePack(pack.id, { title: v.title });
+    const note = dirRenameNote(res && res.dirRename);
+    toast(note ? `已重命名 · ${note}` : '已重命名');
     reload();
   }
 

@@ -182,6 +182,59 @@ export async function LibraryView(root, shelfId) {
    * 子视图（emoji / resources / novel / inbox）传 embedded 后不再画自己的顶栏，
    * 也不会把「返回」绑到它们内部的元素上 —— 这里由 LibraryView 统一提供。
    */
+  /**
+   * 同步文件夹：把磁盘上的图包目录改成数据库里的名字（单向：库 → 磁盘）。
+   *
+   * 先预览（只算不动），真有差异才弹确认，再真跑。**整个流程不删任何文件**，
+   * 重名的文件自动加后缀，只有空出来的目录才会被回收。
+   */
+  async function syncFolders(btn) {
+    const label = btn ? btn.textContent : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '检查中…';
+    }
+    try {
+      const p = await api.syncPreview();
+      const rename = p.packs.renamed || 0;
+      const merge = p.packs.merged || 0;
+      const loose = p.loose.items || 0;
+      const files = (p.filesMoved || 0) + (p.loose.filesMoved || 0);
+      if (!rename && !merge && !loose) {
+        toast('磁盘已经是同步的');
+        return;
+      }
+      const ok = await openModal({
+        title: '同步文件夹？',
+        description:
+          `按数据库里的图包名整理磁盘：\n` +
+          `· 改名 ${rename} 个图包目录\n` +
+          `· 合并 ${merge} 个散开的图包（文件搬到一起）\n` +
+          `· ${loose} 个「未归包」素材收进「未分类」\n` +
+          `共移动 ${files} 个文件。\n` +
+          `不会删除任何文件；重名自动加后缀，空出来的目录才会清掉。`,
+        submitText: '开始同步',
+      });
+      if (!ok) return;
+      if (btn) btn.textContent = '同步中…';
+      const r = await api.syncRun();
+      const moved = (r.filesMoved || 0) + (r.loose.filesMoved || 0);
+      const bad = (r.errors || []).length;
+      toast(
+        `同步完成：改名 ${r.packs.renamed} · 合并 ${r.packs.merged} · 移动 ${moved} 个文件` +
+          (bad ? ` · ${bad} 个失败` : '')
+      );
+      await render();
+    } catch (err) {
+      toast(err.message || '同步失败');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = label;
+      }
+    }
+  }
+
   async function renderEmbedded(active, shelves, ov) {
     // 顶栏是这一层画的，所以嵌入视图的搜索也得挂在这儿：
     // 目前只有资源库有搜索（表情 / 散图 / 小说 / 全部库先按原样）
@@ -193,7 +246,8 @@ export async function LibraryView(root, shelfId) {
         search: searchable,
         placeholder: '搜索资源名称 / 标签',
         searchValue: state.embedQ,
-        actions: `<button class="tb-btn" data-edit-shelf>编辑库</button>`,
+        actions: `<button class="tb-btn" data-sync-packs title="把磁盘上的图包目录改成数据库里的名字">同步文件夹</button>
+          <button class="tb-btn" data-edit-shelf>编辑库</button>`,
       }) +
       `<div class="lib-bar"><div class="segmented" data-tabs>${tabsHtml(shelves, active.id)}</div></div>
        <div data-embed></div>`;
@@ -202,6 +256,7 @@ export async function LibraryView(root, shelfId) {
     root.querySelector('[data-tabs]').addEventListener('click', onTabClick);
     root.querySelector('[data-new-shelf]').addEventListener('click', openNewShelf);
     root.querySelector('[data-edit-shelf]').addEventListener('click', () => editShelf(active));
+    root.querySelector('[data-sync-packs]').addEventListener('click', (e) => syncFolders(e.currentTarget));
 
     const embed = root.querySelector('[data-embed]');
     if (searchable) {
@@ -251,7 +306,8 @@ export async function LibraryView(root, shelfId) {
         placeholder: '搜索名称 / 别名 / 标签',
         search: true,
         searchValue: state.q,
-        actions: `<button class="tb-btn primary" data-new-char>＋ 新建${noun}</button>`,
+        actions: `<button class="tb-btn" data-sync-packs title="把磁盘上的图包目录改成数据库里的名字">同步文件夹</button>
+          <button class="tb-btn primary" data-new-char>＋ 新建${noun}</button>`,
       }) +
       `<main class="page">
          <div class="toolbar">
@@ -266,6 +322,7 @@ export async function LibraryView(root, shelfId) {
        </main>`;
 
     bindTopbar(root);
+    root.querySelector('[data-sync-packs]').addEventListener('click', (e) => syncFolders(e.currentTarget));
 
     // 排序切换（紧贴计数右边）
     const sortDD = createDropdown({

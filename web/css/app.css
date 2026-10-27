@@ -1029,7 +1029,7 @@ button.char-card {
   to { opacity: 1; transform: none; }
 }
 .modal h3 { margin: 0 0 4px; font-size: 17px; font-weight: 600; letter-spacing: 0.1px; }
-.modal-desc { margin: 0 0 16px; font-size: 12.5px; line-height: 1.65; color: var(--text-3); }
+.modal-desc { margin: 0 0 16px; font-size: 12.5px; line-height: 1.65; color: var(--text-3); white-space: pre-line; }
 
 .field { display: block; margin-bottom: 13px; }
 .field > span { display: block; margin-bottom: 6px; font-size: 12px; color: var(--text-2); }

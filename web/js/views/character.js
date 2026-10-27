@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fmtBytes, fadeIn, toast, copyText, deleteSummary, splitAliases, keepScroll, isSelectAllKey, isTypingTarget } from '../util.js';
+import { esc, fmtNum, fmtBytes, fadeIn, toast, copyText, deleteSummary, splitAliases, keepScroll, isSelectAllKey, isTypingTarget, dirRenameNote } from '../util.js';
 import { topbarHtml, bindTopbar, bindTopbarSearch } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { openModal, confirmDialog } from '../components/modal.js';
@@ -758,8 +758,9 @@ export async function CharacterView(root, id) {
       submitText: '保存',
     });
     if (!v) return;
-    await api.updatePack(pack.id, { title: v.title });
-    toast('已重命名');
+    const res = await api.updatePack(pack.id, { title: v.title });
+    const note = dirRenameNote(res && res.dirRename);
+    toast(note ? `已重命名 · ${note}` : '已重命名');
     loadPacks();
   }
 
@@ -791,8 +792,9 @@ export async function CharacterView(root, id) {
     });
     if (!v) return;
     try {
-      await api.updatePack(p.id, { title: v.title, month: v.month || null });
-      toast('已保存');
+      const res = await api.updatePack(p.id, { title: v.title, month: v.month || null });
+      const note = dirRenameNote(res && res.dirRename);
+      toast(note ? `已保存 · ${note}` : '已保存');
       await loadPacks();
     } catch (err) {
       toast(err.message || '保存失败');
