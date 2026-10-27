@@ -139,7 +139,7 @@ export async function renderRoute() {
       app.innerHTML = '';
       const ret = await fn(m);
       if (typeof ret === 'function') cleanup = ret;
-      if (!/^\/(c|p|i|e|r|rs|n|x)\/|^\/uploads/.test(path)) document.title = '资料库';
+      if (!/^\/(c|p|i|e|r|rs|n|x|cm|read)\/|^\/uploads/.test(path)) document.title = '资料库';
       lastPath = here;
       if (shouldRestore || sameRoute) {
         restoreScroll(here);

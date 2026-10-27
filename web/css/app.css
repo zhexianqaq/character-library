@@ -2698,9 +2698,125 @@ button.char-card {
 .rt-list a.on i { color: rgba(255, 255, 255, 0.7); }
 .rt-list a span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* 漫画：上下连续滚动，页间 8px */
-.comic { background: #f0f0f1; min-height: 100vh; padding: var(--gap) var(--gap) 90px; }
-.comic .reader-bar { background: rgba(255, 255, 255, 0.9); }
+/* ============ 漫画阅读器 ============
+   三种模式共用一套壳：顶栏玻璃胶囊 + 舞台 + 底部进度条。
+   滚动模式让整页跟着滚；单页 / 双页把 body 锁住，舞台占满剩余高度。 */
+.comic {
+  background: #f0f0f1;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: var(--gap) var(--gap) 90px;
+}
+.comic[data-mode="single"],
+.comic[data-mode="spread"] { height: 100vh; overflow: hidden; padding-bottom: 0; }
+body.cm-locked { overflow: hidden; }
+
+.comic .reader-bar {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 820px;
+  background: rgba(255, 255, 255, 0.9);
+  transition: opacity 0.24s var(--ease);
+}
+.comic .rb-meta b { color: var(--text-2); font-weight: 600; }
+
+/* 模式切换：三段式，和站内 segmented 一套语言，只是小一号 */
+.cm-seg {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-pill);
+  background: var(--fill);
+}
+.cm-seg button {
+  height: 26px;
+  padding: 0 11px;
+  border-radius: var(--r-pill);
+  font-size: 12px;
+  color: var(--text-2);
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
+.cm-seg button:hover { color: var(--text); }
+.cm-seg button.on { background: var(--card); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+
+/* 舞台 */
+.cm-stage { flex: 1 1 auto; min-height: 0; }
+.cm-stage.is-paged {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 12px 6px;
+  overflow: auto;
+}
+.cm-spread {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+}
+/* 右 → 左：第一页放右边（日漫对开就是这个顺序） */
+.cm-spread[data-dir="rtl"] { flex-direction: row-reverse; }
+.cm-shot {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cm-shot img { display: block; border-radius: 4px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); }
+
+/* 适应方式：适高 = 整页进屏；适宽 = 顶到两侧，超出就上下滚 */
+[data-fit="height"] .cm-shot img { max-width: 100%; max-height: 100%; width: auto; height: auto; }
+[data-fit="width"] .cm-stage.is-paged { align-items: flex-start; }
+[data-fit="width"] .cm-spread { align-items: flex-start; }
+[data-fit="width"] .cm-shot { height: auto; }
+[data-fit="width"] .cm-shot img { width: 100%; height: auto; max-height: none; }
+
+/* 单页时顶栏已经有页码，页角的小数字就是噪音 */
+[data-mode="single"] .cm-shot .cm-no { display: none; }
+
+/* 底部进度条：固定在视口下方中央，和顶栏一起在走动时淡出 */
+.cm-hud {
+  position: fixed;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  box-shadow: var(--s1);
+  transition: opacity 0.24s var(--ease);
+}
+/* 单页 / 双页：进度条回到底部正常流里，别浮在画面上挡内容 */
+.comic[data-mode="single"] .cm-hud,
+.comic[data-mode="spread"] .cm-hud {
+  position: static;
+  transform: none;
+  flex: 0 0 auto;
+  margin: 2px auto 10px;
+}
+.cm-hud input[type="range"] { width: min(420px, 44vw); accent-color: var(--text); cursor: pointer; }
+.cm-hud-n { font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.cm-hud-n b { color: var(--text); font-weight: 600; }
+
+/* 全屏：没有浏览器的边，留一点呼吸位；静止 2.4s 淡出控件 */
+.comic:fullscreen { height: 100vh; background: #f0f0f1; }
+.comic.is-fs[data-mode="scroll"] { padding-bottom: 74px; }
+.comic.is-idle .reader-bar,
+.comic.is-idle .cm-hud { opacity: 0; pointer-events: none; }
+.comic.is-idle { cursor: none; }
 .cm-strip {
   display: flex;
   flex-direction: column;
