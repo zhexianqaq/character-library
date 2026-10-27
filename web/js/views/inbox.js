@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fmtBytes, toast, debounce, deleteSummary } from '../util.js';
+import { esc, fmtNum, fmtBytes, toast, debounce, deleteSummary, keepScroll } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { createDropdown } from '../components/dropdown.js';
@@ -452,43 +452,48 @@ export async function InboxView(root, shelfId, opts = {}) {
   }
 
   function enterSelect(firstId = null, ev = null) {
-    selecting = true;
-    picked.clear();
-    anchorId = null;
-    root.classList.add('is-selecting');
-    const t = root.querySelector('[data-select-toggle]');
-    if (t) t.textContent = '完成';
-    renderGrid();
-    const bar = selBar();
-    if (bar) {
-      bar.hidden = false;
-      bar.innerHTML = `
-        <span class="sel-n">已选 <b>0</b> 个素材</span>
-        <button data-sel="all">全选</button>
-        <button data-sel="move" class="primary" disabled>分发到…</button>
-        <button data-sel="del" class="danger">删除</button>
-        <button data-sel="exit">完成</button>`;
-      bar.querySelectorAll('button[data-sel]').forEach((b) =>
-        b.addEventListener('click', () => onSelAction(b.dataset.sel))
-      );
-    }
+    // 重画网格会丢滚动位置，先记下来
+    keepScroll(() => {
+      selecting = true;
+      picked.clear();
+      anchorId = null;
+      root.classList.add('is-selecting');
+      const t = root.querySelector('[data-select-toggle]');
+      if (t) t.textContent = '完成';
+      renderGrid();
+      const bar = selBar();
+      if (bar) {
+        bar.hidden = false;
+        bar.innerHTML = `
+          <span class="sel-n">已选 <b>0</b> 个素材</span>
+          <button data-sel="all">全选</button>
+          <button data-sel="move" class="primary" disabled>分发到…</button>
+          <button data-sel="del" class="danger">删除</button>
+          <button data-sel="exit">完成</button>`;
+        bar.querySelectorAll('button[data-sel]').forEach((b) =>
+          b.addEventListener('click', () => onSelAction(b.dataset.sel))
+        );
+      }
+    });
     // Ctrl+点击进来时顺手把这一张选上：renderGrid 的瓦片是下一帧画的，等一帧再勾
     if (firstId) requestAnimationFrame(() => pickByClick(firstId, ev || {}));
   }
 
   function exitSelect() {
-    selecting = false;
-    picked.clear();
-    anchorId = null;
-    root.classList.remove('is-selecting');
-    const t = root.querySelector('[data-select-toggle]');
-    if (t) t.textContent = '选取';
-    const bar = selBar();
-    if (bar) {
-      bar.hidden = true;
-      bar.innerHTML = '';
-    }
-    renderGrid();
+    keepScroll(() => {
+      selecting = false;
+      picked.clear();
+      anchorId = null;
+      root.classList.remove('is-selecting');
+      const t = root.querySelector('[data-select-toggle]');
+      if (t) t.textContent = '选取';
+      const bar = selBar();
+      if (bar) {
+        bar.hidden = true;
+        bar.innerHTML = '';
+      }
+      renderGrid();
+    });
   }
 
   function onSelAction(action) {

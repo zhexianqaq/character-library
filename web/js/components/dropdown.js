@@ -74,6 +74,8 @@ export function createDropdown({
 
   function open() {
     if (!panel.hidden) return;
+    // 没有可选项就干脆不弹：空面板会盖在弹窗底部按钮上
+    if (!items.length && !allowEmpty) return;
     view = items.slice();
     active = -1;
     render();
@@ -87,7 +89,7 @@ export function createDropdown({
     offEsc = pushEsc(() => close(), () => el.isConnected && !panel.hidden, 'dd:' + (name || 'x'));
   }
 
-  function close() {
+  function close(keepInput = false) {
     if (panel.hidden) return;
     panel.hidden = true;
     el.classList.remove('is-open', 'drop-up');
@@ -99,7 +101,7 @@ export function createDropdown({
     }
     // searchable 只是筛选框：关掉时把输入框恢复成「当前选中项」，
     // 否则里面留着半截搜索词，看着像选中了别的东西
-    if (searchable) {
+    if (searchable && !keepInput) {
       input.value = labelOf(current);
       input.dataset.ddValue = current;
       view = items.slice();
@@ -165,6 +167,11 @@ export function createDropdown({
     const q = input.value.trim().toLowerCase();
     view = q ? items.filter((o) => o.label.toLowerCase().includes(q)) : items.slice();
     active = -1;
+    // 没有匹配项就收起面板（留着空面板会挡住弹窗按钮），但不动输入框里的字
+    if (!view.length) {
+      close(true);
+      return;
+    }
     render();
   });
 

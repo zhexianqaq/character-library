@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fmtBytes, fadeIn, toast, debounce, deleteSummary } from '../util.js';
+import { esc, fmtNum, fmtBytes, fadeIn, toast, debounce, deleteSummary, keepScroll } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { openModal, confirmDialog } from '../components/modal.js';
@@ -480,20 +480,24 @@ export async function EmojiView(root, shelfId, opts = {}) {
   }
 
   function enterSelect() {
-    selecting = true;
-    picked.clear();
-    root.classList.add('is-selecting');
-    const t = root.querySelector('[data-select-toggle]');
-    if (t) t.textContent = '完成';
-    if (mode === 'packs') renderPacks();
-    else renderMedia();
-    buildSelBar();
+    keepScroll(() => {
+      selecting = true;
+      picked.clear();
+      root.classList.add('is-selecting');
+      const t = root.querySelector('[data-select-toggle]');
+      if (t) t.textContent = '完成';
+      if (mode === 'packs') renderPacks();
+      else renderMedia();
+      buildSelBar();
+    });
   }
 
   function exitSelect() {
-    resetSelection();
-    if (mode === 'packs') renderPacks();
-    else renderMedia();
+    keepScroll(() => {
+      resetSelection();
+      if (mode === 'packs') renderPacks();
+      else renderMedia();
+    });
   }
 
   /** 勾选锚点：Shift 连选从它算起 */

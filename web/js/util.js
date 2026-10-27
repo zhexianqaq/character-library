@@ -207,8 +207,29 @@ export function splitAliases(v) {
 }
 
 /** 让图片淡入，避免加载完成时闪一下 */
-export function fadeIn(img) {
-  if (!img) return;
+/**
+ * 重画列表时保住滚动位置。
+ *
+ * 进入 / 退出选取会整块重画，分片渲染又是分几帧插卡片的：
+ * 先等两帧（容器高度已经撑好）对齐一次，再兜底一次。
+ */
+export function keepScroll(fn) {
+  const y = window.scrollY;
+  const restore = () => {
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => window.scrollTo(0, y))
+    );
+  };
+  const ret = fn();
+  if (ret && typeof ret.then === 'function') ret.then(restore, restore);
+  else restore();
+  // 分片渲染要几帧才铺完，最后再兜底对齐一次
+  setTimeout(() => {
+    if (Math.abs(window.scrollY - y) > 2) window.scrollTo(0, y);
+  }, 160);
+}
+
+export function fadeIn(img) {  if (!img) return;
   const mark = () => img.classList.add('loaded');
   if (img.complete && img.naturalWidth) mark();
   else {

@@ -118,6 +118,8 @@ export const api = {
   tags: () => req('/api/tags'),
   reveal: (kind, id) => json('POST')('/api/reveal', { kind, id }),
   packs: (charId) => req(`/api/characters/${charId}/packs`),
+  /** 别的库里标签带上这个条目名的图包（只读入口） */
+  linkedPacks: (charId) => req(`/api/characters/${charId}/linked-packs`),
   createPack: (charId, data) => json('POST')(`/api/characters/${charId}/packs`, data),
   pack: (id) => req(`/api/packs/${id}`),
   updatePack: (id, patch) => json('PATCH')(`/api/packs/${id}`, patch),

@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fmtBytes, fadeIn, toast, debounce, copyText, deleteSummary, splitAliases } from '../util.js';
+import { esc, fmtNum, fmtBytes, fadeIn, toast, debounce, copyText, deleteSummary, splitAliases, keepScroll } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { openModal, confirmDialog } from '../components/modal.js';
@@ -912,20 +912,24 @@ export async function CharacterView(root, id) {
   }
 
   function enterSelect() {
-    selecting = true;
-    picked.clear();
-    root.classList.add('is-selecting');
-    const t = root.querySelector('[data-select-toggle]');
-    if (t) t.textContent = '完成';
-    if (mode === 'packs') loadPacks();
-    else loadMedia();
-    buildSelBar();
+    // 列表要整个重画一遍，先把滚动位置记住，别把人弹回顶部
+    keepScroll(() => {
+      selecting = true;
+      picked.clear();
+      root.classList.add('is-selecting');
+      const t = root.querySelector('[data-select-toggle]');
+      if (t) t.textContent = '完成';
+      const done = mode === 'packs' ? loadPacks() : loadMedia();
+      buildSelBar();
+      return done;
+    });
   }
 
   function exitSelect() {
-    resetSelection();
-    if (mode === 'packs') loadPacks();
-    else loadMedia();
+    keepScroll(() => {
+      resetSelection();
+      return mode === 'packs' ? loadPacks() : loadMedia();
+    });
   }
 
   /** 勾选锚点：Shift 连选从它算起 */
@@ -1155,9 +1159,50 @@ export async function CharacterView(root, id) {
     });
   }
 
+  /**
+   * 跨库「关联图包」：只读入口，图包还在原来的库里。
+   * 匹配靠标签精确等于本条目名（别人给图包打上「卡芙卡」就能挂过来）。
+   */
+  let linkedPacks = [];
+  async function loadLinked() {
+    try {
+      linkedPacks = (await api.linkedPacks(c.id)).items || [];
+    } catch {
+      linkedPacks = [];
+    }
+    paintLinked();
+  }
+
+  function paintLinked() {
+    const slot = root.querySelector('[data-linked-packs]');
+    if (!slot) return;
+    if (!linkedPacks.length) {
+      slot.innerHTML = '';
+      return;
+    }
+    slot.innerHTML = `<div class="linked-head"><b>关联图包</b><i>${linkedPacks.length}</i><span>来自其他库 · 只读入口</span></div>
+      <div class="pack-grid">${linkedPacks
+        .map((p) => {
+          const img = p.coverMediaId ? api.thumb(p.coverMediaId) : '';
+          return `<div class="pack-card is-linked" data-pack="${p.id}">
+            <a class="pack-hit" href="/p/${p.id}" data-link aria-label="${esc(p.title)}"></a>
+            <div class="cover single">
+              ${img ? `<img src="${img}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : '<div class="cover-empty">空</div>'}
+              <span class="linked-from">${esc(p.shelf.name || '其他库')}</span>
+            </div>
+            <div class="info">
+              <div class="t">${esc(p.title)}</div>
+              <div class="m">${esc(p.owner.name)} · ${p.mediaCount || 0} 项</div>
+            </div>
+          </div>`;
+        })
+        .join('')}</div>`;
+    slot.querySelectorAll('img').forEach(fadeIn);
+  }
+
   async function loadPacks() {
     const body = root.querySelector('[data-body]');
-    body.innerHTML = '<div class="pack-grid" data-packs></div>';
+    body.innerHTML = '<div data-linked-packs></div><div class="pack-grid" data-packs></div>';
     const data = await api.packs(c.id);
     packsCache = data.items;
     paintCats();
@@ -1165,6 +1210,7 @@ export async function CharacterView(root, id) {
     if (resFilter) items = items.filter((p) => (p.tags || []).includes(resFilter));
     packsShown = items;
     renderPacks();
+    loadLinked();
   }
 
   /** 只重画图包网格：换排序、勾选态变化都走这里，不重新拉数据 */
@@ -1230,7 +1276,8 @@ export async function CharacterView(root, id) {
   }
 
   // ---------- 全部媒体的筛选 ----------
-  const filters = { kind: '', tag: '', pack: '', cat: '', q: '', sort: 'new' };
+  // 默认只看「未归包」：进全部媒体通常是想整理还没归包的东西
+  const filters = { kind: '', tag: '', pack: '__none__', cat: '', q: '', sort: 'new' };
   let mediaAll = [];
   let tagDD = null;
   let packDD = null;
@@ -1253,6 +1300,7 @@ export async function CharacterView(root, id) {
     packDD = createDropdown({
       allowEmpty: true,
       emptyLabel: '全部图包',
+      value: filters.pack,
       onChange: (v) => {
         filters.pack = v;
         renderMedia();
@@ -1329,6 +1377,8 @@ export async function CharacterView(root, id) {
         label: `${p.category ? `${p.category} / ` : ''}${p.title}（${p.mediaCount}）`,
       })),
     ]);
+    // 选项换完把显示同步回当前值（默认是「未归包」，不能停在裸 value 上）
+    packDD.setValue(filters.pack);
   }
 
   function packCategoryOf(packId) {

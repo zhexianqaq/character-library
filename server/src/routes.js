@@ -803,6 +803,50 @@ export function createApp() {
    * 小说库的「袋子」：把不同的类型 / 原作实体化成一条 pack（kind='novel'）。
    * 书和袋子的关系仍用 characters.novel_group（= 袋子名），袋子挂在库的容器条目下。
    */
+  /**
+   * 跨库「关联图包」：别的库里那些标签里带着这个条目名的图包。
+   *
+   * 只是入口，不复制不移动 —— 图包仍然留在原来的库里，点进去还是 /p/:id。
+   * 匹配用**标签精确等于条目名**，不做模糊：图包叫「卡芙卡-泳装」、标签加「卡芙卡」「泳装」，
+   * 就会被卡芙卡收进来；只叫「卡芙卡泳装」而标签也只有一个整串的，不会误归。
+   */
+  app.get('/api/characters/:id/linked-packs', (req, res) => {
+    const db = getDb();
+    const id = Number(req.params.id);
+    const c = db.prepare('SELECT id, name FROM characters WHERE id = ?').get(id);
+    if (!c) return res.status(404).json({ error: '条目不存在' });
+    const name = String(c.name || '').trim();
+    if (!name) return res.json({ items: [] });
+
+    const rows = db
+      .prepare(
+        `SELECT p.*, ch.name AS owner_name, sh.name AS shelf_name, sh.kind AS shelf_kind,
+                (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id) AS media_count
+           FROM packs p
+           JOIN characters ch ON ch.id = p.character_id
+           LEFT JOIN shelves sh ON sh.id = ch.shelf_id
+          WHERE p.character_id <> @id
+            AND COALESCE(p.kind, 'pack') = 'pack'
+            AND EXISTS (SELECT 1 FROM json_each(p.tags) t WHERE t.value = @name)
+          ORDER BY p.created_at DESC`
+      )
+      .all({ id, name });
+
+    res.json({
+      items: rows.map((p) => ({
+        id: p.id,
+        title: p.title,
+        category: p.category || '',
+        month: p.month,
+        tags: safeJson(p.tags),
+        mediaCount: p.media_count || 0,
+        coverMediaId: p.cover_media_id || null,
+        owner: { id: p.character_id, name: p.owner_name },
+        shelf: { name: p.shelf_name || '', kind: p.shelf_kind || '' },
+      })),
+    });
+  });
+
   app.get('/api/shelves/:id/novelbags', (req, res) => {
     const db = getDb();
     const shelfId = Number(req.params.id);

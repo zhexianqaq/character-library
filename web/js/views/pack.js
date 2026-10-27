@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, toast, deleteSummary } from '../util.js';
+import { esc, fmtNum, toast, deleteSummary, keepScroll } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { openModal, confirmDialog } from '../components/modal.js';
@@ -195,17 +195,22 @@ export async function PackView(root, id) {
   }
 
   function enterSelect() {
-    selecting = true;
-    picked.clear();
-    const t = root.querySelector('[data-select-toggle]');
-    if (t) t.textContent = '完成';
-    paintMedia();
-    buildSelBar();
+    // 重画会清空重建整个网格，先记住滚动位置，不然会跳回页面顶部
+    keepScroll(() => {
+      selecting = true;
+      picked.clear();
+      const t = root.querySelector('[data-select-toggle]');
+      if (t) t.textContent = '完成';
+      paintMedia();
+      buildSelBar();
+    });
   }
 
   function exitSelect() {
-    resetSelection();
-    paintMedia();
+    keepScroll(() => {
+      resetSelection();
+      paintMedia();
+    });
   }
 
   /** 勾选锚点：Shift 连选从它算起 */
