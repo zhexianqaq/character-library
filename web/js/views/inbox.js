@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fmtBytes, toast, debounce, deleteSummary, keepScroll } from '../util.js';
+import { esc, fmtNum, fmtBytes, toast, debounce, deleteSummary, keepScroll, isSelectAllKey, isTypingTarget } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { createDropdown } from '../components/dropdown.js';
@@ -457,12 +457,17 @@ export async function InboxView(root, shelfId, opts = {}) {
     return root.querySelector('[data-selbar]');
   }
 
-  function enterSelect(firstId = null, ev = null) {
+  function enterSelect(firstId = null, ev = null, all = false) {
     // 重画网格会丢滚动位置，先记下来
     keepScroll(() => {
       selecting = true;
       picked.clear();
       anchorId = null;
+      // all=true：进选取的同时把已加载的都选上（Ctrl+A 用）
+      if (all) {
+        items.forEach((m) => picked.add(m.id));
+        anchorId = items.length ? items[items.length - 1].id : null;
+      }
       root.classList.add('is-selecting');
       const t = root.querySelector('[data-select-toggle]');
       if (t) t.textContent = '完成';
@@ -479,10 +484,30 @@ export async function InboxView(root, shelfId, opts = {}) {
         bar.querySelectorAll('button[data-sel]').forEach((b) =>
           b.addEventListener('click', () => onSelAction(b.dataset.sel))
         );
+        syncSelCount();
       }
     });
     // Ctrl+点击进来时顺手把这一张选上：renderGrid 的瓦片是下一帧画的，等一帧再勾
     if (firstId) requestAnimationFrame(() => pickByClick(firstId, ev || {}));
+  }
+
+  /**
+   * Ctrl+A：全选当前已加载的素材（连没滚到的分片一起，只要它在 items 里）。
+   * 不在选取态就先自动进入；已在选取态只补选，不做反选。
+   */
+  function selectAllViaKeyboard() {
+    if (!items.length) return false;
+    if (selecting) {
+      items.forEach((m) => picked.add(m.id));
+      anchorId = items.length ? items[items.length - 1].id : null;
+      root.querySelectorAll('.tile[data-id]').forEach((el) => {
+        el.classList.toggle('is-sel', picked.has(Number(el.dataset.id)));
+      });
+      syncSelCount();
+      return true;
+    }
+    enterSelect(null, null, true);
+    return true;
   }
 
   function exitSelect() {
@@ -832,17 +857,17 @@ export async function InboxView(root, shelfId, opts = {}) {
 
   /** Esc 退出选取、Ctrl+A 全选、Delete 删除（弹窗 / 下拉开着时归它们管） */
   const onKey = (e) => {
-    if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+    if (isTypingTarget(e.target)) return;
     if (escDepth() > 0) return;
+    // Ctrl+A：不在选取态也能用（以前必须先点「选取」，按了没反应）
+    if (isSelectAllKey(e) && selectAllViaKeyboard()) {
+      e.preventDefault();
+      return;
+    }
     if (!selecting) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       exitSelect();
-      return;
-    }
-    if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
-      e.preventDefault();
-      onSelAction('all');
       return;
     }
     if (e.key === 'Delete' || e.key === 'Backspace') {

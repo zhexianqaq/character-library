@@ -230,6 +230,28 @@ export function keepScroll(fn) {
 }
 
 /**
+ * Ctrl+A / Cmd+A（不带 Shift / Alt）：全选快捷键。
+ *
+ * 各视图的选取态是自己一套（图包 / 素材），这个函数只认键，不认状态。
+ */
+export function isSelectAllKey(e) {
+  return !!e && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'a' || e.key === 'A');
+}
+
+/**
+ * 焦点是不是在「能打字」的元素里？
+ *
+ * 是的话快捷键要整套让位 —— 搜索框里按 Ctrl+A 应该是全选文字，
+ * 而不是把整页素材选上。
+ */
+export function isTypingTarget(el) {
+  if (!el) return false;
+  const tag = String(el.tagName || '').toUpperCase();
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  return !!(el.isContentEditable || el.closest?.('[contenteditable="true"]'));
+}
+
+/**
  * 「角色-服装」式的名字拆成多个标签（和服务端 pack-tags.js 同一套规则）。
  * 纯日期（2026-10）与含纯数字段的名字（花兮-20240101）原样保留，避免拆错。
  */

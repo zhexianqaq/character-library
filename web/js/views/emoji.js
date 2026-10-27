@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fmtBytes, fadeIn, toast, debounce, deleteSummary, keepScroll } from '../util.js';
+import { esc, fmtNum, fmtBytes, fadeIn, toast, debounce, deleteSummary, keepScroll, isSelectAllKey, isTypingTarget } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { openModal, confirmDialog } from '../components/modal.js';
@@ -533,10 +533,10 @@ export async function EmojiView(root, shelfId, opts = {}) {
     syncPickMarks();
   }
 
-  function selectAllShown() {
+  function selectAllShown(toggle = true) {
     const ids = mode === 'packs' ? packs.map((p) => p.id) : mediaItems.map((m) => m.id);
     const allOn = ids.length > 0 && ids.every((id) => picked.has(id));
-    if (allOn) picked.clear();
+    if (toggle && allOn) picked.clear();
     else ids.forEach((id) => picked.add(id));
     anchorId = ids.length ? ids[ids.length - 1] : null;
     root.querySelectorAll('.emoji-card, .tile').forEach((el) => {
@@ -544,6 +544,32 @@ export async function EmojiView(root, shelfId, opts = {}) {
       el.classList.toggle('is-sel', picked.has(id));
     });
     syncSelCount();
+  }
+
+  /**
+   * Ctrl+A：全选当前视图里看到的图包 / 素材。
+   * 不在选取态就先自动进入；已在选取态只补选，不做反选。
+   */
+  function selectAllViaKeyboard() {
+    const ids = mode === 'packs' ? packs.map((p) => p.id) : mediaItems.map((m) => m.id);
+    if (!ids.length) return false;
+    if (selecting) {
+      selectAllShown(false);
+      return true;
+    }
+    keepScroll(() => {
+      selecting = true;
+      picked.clear();
+      ids.forEach((id) => picked.add(id));
+      anchorId = ids[ids.length - 1];
+      root.classList.add('is-selecting');
+      const t = root.querySelector('[data-select-toggle]');
+      if (t) t.textContent = '完成';
+      if (mode === 'packs') renderPacks();
+      else renderMedia();
+      buildSelBar();
+    });
+    return true;
   }
 
   function onSelAction(action) {
@@ -839,8 +865,13 @@ export async function EmojiView(root, shelfId, opts = {}) {
 
   /** Esc 退出选取。弹窗 / 右键菜单 / 下拉开着时，esc 栈会先把事件吃掉，轮不到这里 */
   const onPageKey = (e) => {
-    if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+    if (isTypingTarget(e.target)) return;
     if (escDepth() > 0) return;
+    // Ctrl+A：不在选取态也能用
+    if (isSelectAllKey(e) && selectAllViaKeyboard()) {
+      e.preventDefault();
+      return;
+    }
     if (!selecting) return;
     if (e.key === 'Escape') {
       e.preventDefault();
