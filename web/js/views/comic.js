@@ -472,6 +472,38 @@ export async function ComicView(root, packId) {
     else if (backward) goto(cur - (mode === 'spread' ? prevSpreadLen() : 1));
   });
 
+  /* 滚轮 / 触控板：单页、双页里按页翻。
+     一屏一页的时候「滚了没反应」最容易被当成坏了；适宽时页面比舞台高，
+     先把这一页滚完，滚到边缘再翻下一页（触控板惯性会被 420ms 的冷却挡住）。 */
+  let wheelAcc = 0;
+  let wheelAt = 0;
+  const onWheel = (e) => {
+    if (mode === 'scroll' || e.ctrlKey) return;
+    const main = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+    if (!main) return;
+    // 这一页还有没滚完的部分：让浏览器先滚它
+    if (stage.scrollHeight > stage.clientHeight + 2) {
+      const atTop = stage.scrollTop <= 1;
+      const atBottom = stage.scrollTop + stage.clientHeight >= stage.scrollHeight - 2;
+      if ((main > 0 && !atBottom) || (main < 0 && !atTop)) return;
+    }
+    e.preventDefault();
+    const now = performance.now();
+    if (now - wheelAt < 420) {
+      wheelAcc = 0;
+      return;
+    }
+    // deltaMode: 0 像素 / 1 行 / 2 页
+    wheelAcc += main * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
+    if (Math.abs(wheelAcc) < 60) return;
+    const forward = wheelAcc > 0;
+    wheelAcc = 0;
+    wheelAt = now;
+    if (mode === 'spread') goto(cur + (forward ? currentSpread().length : -prevSpreadLen()));
+    else goto(cur + (forward ? 1 : -1));
+  };
+  stage.addEventListener('wheel', onWheel, { passive: false });
+
   // 触屏左右滑
   let touchX = 0;
   let touchY = 0;
@@ -612,6 +644,7 @@ export async function ComicView(root, packId) {
     window.removeEventListener('scroll', onScrollThrottled);
     window.removeEventListener('resize', onResize);
     window.removeEventListener('mousemove', wake);
+    stage.removeEventListener('wheel', onWheel);
     window.removeEventListener('pointermove', onVbarMove);
     window.removeEventListener('pointerup', onVbarUp);
     clearTimeout(scrollTimer);
