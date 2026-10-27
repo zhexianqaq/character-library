@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { esc, fmtNum, fadeIn, toast, copyText, charDeleteMessage, splitAliases } from '../util.js';
-import { topbarHtml, bindTopbar } from '../components/topbar.js';
+import { topbarHtml, bindTopbar, bindTopbarSearch } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openContextMenu } from '../components/context-menu.js';
 import { openTagPicker } from '../components/tag-picker.js';
@@ -60,6 +60,8 @@ export async function ResourcesView(root, shelfId, opts = {}) {
   let items = data.items;
   let groups = data.groups;
   let cat = '';
+  // 顶栏搜索词：名称 / 别名 / 分类 / 简介 / 标签都能命中
+  let q = String(opts.q || '');
   // 卡片排序：默认按关联数量（卡片副标题里那个「N 个条目」）从多到少
   let sort = 'linked';
 
@@ -69,9 +71,16 @@ export async function ResourcesView(root, shelfId, opts = {}) {
     { value: 'category', label: '分类' },
   ];
 
-  /** 分类筛选 + 排序后的列表（不动 items 本身） */
+  /** 分类筛选 + 关键词 + 排序后的列表（不动 items 本身） */
   function visibleItems() {
-    const list = cat ? items.filter((x) => (x.category || '') === cat) : items.slice();
+    let list = cat ? items.filter((x) => (x.category || '') === cat) : items.slice();
+    const kw = q.trim().toLowerCase();
+    if (kw) {
+      list = list.filter((x) => {
+        const hay = [x.name, x.category, x.intro, ...(x.aliases || []), ...(x.tags || [])];
+        return hay.some((s) => String(s || '').toLowerCase().includes(kw));
+      });
+    }
     if (sort === 'name') {
       list.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
     } else if (sort === 'category') {
@@ -103,6 +112,9 @@ export async function ResourcesView(root, shelfId, opts = {}) {
             back: true,
             title: shelf.name,
             sub: '',
+            search: true,
+            placeholder: '搜索资源名称 / 别名 / 标签',
+            searchValue: q,
             actions: `<button class="tb-btn" data-edit-shelf>编辑库</button>`,
           })) +
       `<main class="page">
@@ -132,6 +144,8 @@ export async function ResourcesView(root, shelfId, opts = {}) {
        </main>`;
 
     if (!embedded) bindTopbar(root);
+
+    if (!embedded) bindTopbarSearch(root, applySearch);
 
     const sortDD = createDropdown({
       options: CARD_SORTS,
@@ -310,16 +324,26 @@ export async function ResourcesView(root, shelfId, opts = {}) {
   function paintGrid() {
     const grid = root.querySelector('[data-grid]');
     const list = visibleItems();
-    root.querySelector('[data-count]').textContent = list.length === items.length ? '' : `${list.length} 个`;
+    const kw = q.trim();
+    // 搜索时把命中数显示出来，光看空列表不知道是没搜到还是库是空的
+    root.querySelector('[data-count]').textContent = kw
+      ? `${list.length} / ${items.length}`
+      : list.length === items.length
+        ? ''
+        : `${list.length} 个`;
     if (!list.length) {
-      grid.innerHTML = `<div class="empty" style="grid-column:1/-1">
-        <b>${items.length ? '这个分类下还没有资源' : '还没有资源'}</b>
-        ${
-          items.length
-            ? '换个分类看看'
-            : '点右上角「＋ 资源」建一个，比如「原神」，再给角色 / 人物打上同名标签'
-        }
-      </div>`;
+      grid.innerHTML = kw
+        ? `<div class="empty" style="grid-column:1/-1">
+             <b>没有匹配「${esc(kw)}」的资源</b>名称、别名、分类、简介和标签都会参与匹配，换个关键词试试
+           </div>`
+        : `<div class="empty" style="grid-column:1/-1">
+             <b>${items.length ? '这个分类下还没有资源' : '还没有资源'}</b>
+             ${
+               items.length
+                 ? '换个分类看看'
+                 : '点右上角「＋ 资源」建一个，比如「原神」，再给角色 / 人物打上同名标签'
+             }
+           </div>`;
       return;
     }
     grid.innerHTML = list
@@ -343,6 +367,20 @@ export async function ResourcesView(root, shelfId, opts = {}) {
     grid.querySelectorAll('img').forEach(fadeIn);
   }
 
+  /**
+   * 顶栏搜索（两处入口共用）：
+   * 自带顶栏时来自 bindTopbarSearch，嵌入首页时来自 LibraryView 派发的 cl-search。
+   */
+  function applySearch(val) {
+    q = String(val || '').trim();
+    // 搜索是全局的：被分类卡住会让人以为「库里没有」，所以有关键词就回到「全部」
+    if (q && cat) {
+      cat = '';
+      root.querySelectorAll('[data-cat] button').forEach((b) => b.classList.toggle('on', b.dataset.c === ''));
+    }
+    paintGrid();
+  }
+
   async function reload() {
     data = await api.resources(shelfId);
     shelf = data.shelf;
@@ -350,7 +388,6 @@ export async function ResourcesView(root, shelfId, opts = {}) {
     groups = data.groups;
     paintShell();
   }
-
   async function editOne(item) {
     const v = await editResourceModal(item);
     if (!v) return;
@@ -382,6 +419,12 @@ export async function ResourcesView(root, shelfId, opts = {}) {
     } catch (err) {
       toast(err.message || '删除失败');
     }
+  }
+
+  // 嵌入首页时顶栏由 LibraryView 画，搜索词通过 cl-search 事件传进来。
+  // 只挂一次：paintShell 会重画内容，但 root 这个容器本身不动。
+  if (embedded) {
+    root.addEventListener('cl-search', (e) => applySearch(e.detail && e.detail.q));
   }
 
   paintShell();

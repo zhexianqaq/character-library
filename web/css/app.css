@@ -2995,6 +2995,15 @@ body.cm-locked { overflow: hidden; }
 .tf-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tf-sub { font-size: 11px; color: var(--text-3); }
 .tf-row .tb-btn { flex: 0 0 auto; }
+/* 顶栏搜索在正文区筛不到时的一行提示（不占整块空态，正文区通常在图包下面） */
+.tf-empty {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--fill);
+  font-size: 12px;
+  color: var(--text-3);
+}
 
 /* ============ 标签页（/tag/:name） ============ */
 .tag-sec { margin-bottom: 24px; }

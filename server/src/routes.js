@@ -938,7 +938,11 @@ export function createApp() {
     const where = ['c.shelf_id = @shelfId', 'c.is_container = 0'];
     const params = { shelfId };
     if (q) {
-      where.push('(c.name LIKE @q OR c.account LIKE @q OR c.author LIKE @q OR c.aliases LIKE @q)');
+      // 标签也算：人物库/角色库里搜「原神」应该把打了这个标签的条目都找出来，
+      // 而不是只有名字里带「原神」的那几个
+      where.push(`(c.name LIKE @q OR c.account LIKE @q OR c.author LIKE @q OR c.aliases LIKE @q
+        OR EXISTS (SELECT 1 FROM character_tags ct JOIN tags t ON t.id = ct.tag_id
+                   WHERE ct.character_id = c.id AND t.name LIKE @q))`);
       params.q = `%${q}%`;
     }
     const order =
@@ -1416,6 +1420,8 @@ export function createApp() {
         intro: r.intro || '',
         dirSlug: r.dir_slug,
         tags: tagsOf(db, r.id).filter((t) => t !== r.name),
+        // 别名要给：列表页的「编辑资源」会把这一栏回填，缺了它一保存就把别名清空了
+        aliases: safeJson(r.aliases),
         coverMediaId: r.cover || null,
         linked: r.linked || 0,
       })),
@@ -1539,6 +1545,7 @@ export function createApp() {
         kind: r.shelf_kind,
         shelfName: r.shelf_name,
         account: r.account || '',
+        aliases: safeJson(r.aliases),
         mediaCount: r.media_count || 0,
         packCount: r.pack_count || 0,
         coverMediaId: r.cover_media_id,

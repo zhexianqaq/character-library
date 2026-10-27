@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { esc, fmtNum, fmtBytes, fadeIn, toast, charDeleteMessage } from '../util.js';
-import { topbarHtml, bindTopbar } from '../components/topbar.js';
+import { topbarHtml, bindTopbar, bindTopbarSearch } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openContextMenu } from '../components/context-menu.js';
 import { createDropdown } from '../components/dropdown.js';
@@ -51,7 +51,7 @@ function tabsHtml(shelves, currentId) {
 }
 
 export async function LibraryView(root, shelfId) {
-  const state = { q: '', shelfId: Number(shelfId) || null, sort: 'media' };
+  const state = { q: '', shelfId: Number(shelfId) || null, sort: 'media', embedQ: '' };
   // 列表数据放在视图层：搜索时只重画列表，不重建顶栏 —— 顶栏一重建，输入框就失焦了
   let chars = { items: [], total: 0 };
   let activeShelf = null;
@@ -111,6 +111,9 @@ export async function LibraryView(root, shelfId) {
     const tab = e.target.closest('button[data-shelf]');
     if (!tab) return;
     state.shelfId = Number(tab.dataset.shelf);
+    // 换库就换上下文：上一个库的搜索词留着只会让人「怎么什么都没有」
+    state.q = '';
+    state.embedQ = '';
     render({ push: true });
   }
 
@@ -180,10 +183,16 @@ export async function LibraryView(root, shelfId) {
    * 也不会把「返回」绑到它们内部的元素上 —— 这里由 LibraryView 统一提供。
    */
   async function renderEmbedded(active, shelves, ov) {
+    // 顶栏是这一层画的，所以嵌入视图的搜索也得挂在这儿：
+    // 目前只有资源库有搜索（表情 / 散图 / 小说 / 全部库先按原样）
+    const searchable = active.kind === 'resource';
     root.innerHTML =
       topbarHtml({
         title: ov.library.name,
         sub: active.name,
+        search: searchable,
+        placeholder: '搜索资源名称 / 标签',
+        searchValue: state.embedQ,
         actions: `<button class="tb-btn" data-edit-shelf>编辑库</button>`,
       }) +
       `<div class="lib-bar"><div class="segmented" data-tabs>${tabsHtml(shelves, active.id)}</div></div>
@@ -194,8 +203,21 @@ export async function LibraryView(root, shelfId) {
     root.querySelector('[data-new-shelf]').addEventListener('click', openNewShelf);
     root.querySelector('[data-edit-shelf]').addEventListener('click', () => editShelf(active));
 
+    const embed = root.querySelector('[data-embed]');
+    if (searchable) {
+      bindTopbarSearch(root, (q) => {
+        state.embedQ = q;
+        // 视图自己知道怎么过滤（资源：名称 / 分类 / 别名 / 标签）
+        embed.dispatchEvent(new CustomEvent('cl-search', { detail: { q } }));
+      });
+    }
+
     // 总览已经拿过了，顺手传给嵌入视图：全部库的「库总览」不用再请求一遍
-    await FLAT_VIEW[active.kind](root.querySelector('[data-embed]'), active.id, { embedded: true, overview: ov });
+    await FLAT_VIEW[active.kind](embed, active.id, {
+      embedded: true,
+      overview: ov,
+      q: state.embedQ,
+    });
   }
 
   async function render({ push = false } = {}) {
@@ -226,8 +248,9 @@ export async function LibraryView(root, shelfId) {
       topbarHtml({
         title: ov.library.name,
         sub: active ? active.name : '资料库',
-        placeholder: '搜索名称',
+        placeholder: '搜索名称 / 别名 / 标签',
         search: true,
+        searchValue: state.q,
         actions: `<button class="tb-btn primary" data-new-char>＋ 新建${noun}</button>`,
       }) +
       `<main class="page">
@@ -387,22 +410,14 @@ export async function LibraryView(root, shelfId) {
 
     // 搜索：只重画列表和计数，顶栏保持不动。
     // 以前这里是整页 render()，顶栏跟着重建 → 输入框被换掉、焦点丢失，只能打进去两三个字母。
-    const input = root.querySelector('.search input');
-    if (input) {
-      input.value = state.q;
-      let timer = null;
-      input.addEventListener('input', () => {
-        state.q = input.value;
-        clearTimeout(timer);
-        timer = setTimeout(async () => {
-          try {
-            await refreshList();
-          } catch {
-            /* 搜索失败就保持上一次结果 */
-          }
-        }, 240);
-      });
-    }
+    bindTopbarSearch(root, async (q) => {
+      state.q = q;
+      try {
+        await refreshList();
+      } catch {
+        /* 搜索失败就保持上一次结果 */
+      }
+    });
   }
 
   await render();

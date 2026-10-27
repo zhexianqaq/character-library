@@ -1,6 +1,6 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fmtBytes, fadeIn, toast, debounce, copyText, deleteSummary, splitAliases, keepScroll } from '../util.js';
-import { topbarHtml, bindTopbar } from '../components/topbar.js';
+import { esc, fmtNum, fmtBytes, fadeIn, toast, copyText, deleteSummary, splitAliases, keepScroll } from '../util.js';
+import { topbarHtml, bindTopbar, bindTopbarSearch } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openTagPicker } from '../components/tag-picker.js';
@@ -134,7 +134,13 @@ export async function CharacterView(root, id) {
 
   function shellHtml() {
     return (
-      topbarHtml({ back: true, sub: '', actions: `<button class="tb-btn" data-edit>编辑资料</button>` }) +
+      topbarHtml({
+        back: true,
+        sub: '',
+        search: true,
+        placeholder: '搜索图包 / 素材名称或标签',
+        actions: `<button class="tb-btn" data-edit>编辑资料</button>`,
+      }) +
       `<main class="page">
          <div data-hero></div>
          <div class="toolbar">
@@ -152,12 +158,6 @@ export async function CharacterView(root, id) {
              <span data-f-tag></span>
              <span data-f-pack></span>
              <span data-f-cat></span>
-             <label class="search filter-search">
-               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-                 <circle cx="7" cy="7" r="4.6"/><path d="M10.6 10.6L14 14"/>
-               </svg>
-               <input type="search" placeholder="搜索名称或标签" autocomplete="off" spellcheck="false" />
-             </label>
              <span data-f-sort></span>
            </div>
            <span class="spacer"></span>
@@ -1274,8 +1274,26 @@ export async function CharacterView(root, id) {
   let linkedPacks = [];
   const showLinked = () => !isWorkShelf() || cat === 'cosplay';
 
-  function linkedCardsHtml() {
-    return linkedPacks
+  // 顶栏搜索词：图包视图过滤图包（标题 / 小库 / 标签），
+  // 全部媒体视图过滤素材（文件名 / 标签），正文区也会跟着过滤
+  let topQuery = '';
+
+  /** 关键词是否命中（不区分大小写，空词恒真） */
+  function hitQuery(...vals) {
+    const kw = topQuery.trim().toLowerCase();
+    if (!kw) return true;
+    return vals.some((v) => String(v === null || v === undefined ? '' : v).toLowerCase().includes(kw));
+  }
+
+  /** 当前视图下该显示的图包：小库分类 → 资源标签 → 搜索词 */
+  function packsForView() {
+    let out = isWorkShelf() ? packsCache.filter((p) => (p.category || '未分类') === cat) : packsCache.slice();
+    if (resFilter) out = out.filter((p) => (p.tags || []).includes(resFilter));
+    return out.filter((p) => hitQuery(p.title, p.category, ...(p.tags || [])));
+  }
+
+  function linkedCardsHtml(list = linkedPacks) {
+    return list
       .map((p) => {
         const img = p.coverMediaId ? api.thumb(p.coverMediaId) : '';
         return `<div class="pack-card is-linked" data-linked="1" data-pack="${p.id}">
@@ -1304,9 +1322,7 @@ export async function CharacterView(root, id) {
     linkedPacks = linked.items || [];
     packsCache = data.items;
     paintCats();
-    let items = isWorkShelf() ? data.items.filter((p) => (p.category || '未分类') === cat) : data.items;
-    if (resFilter) items = items.filter((p) => (p.tags || []).includes(resFilter));
-    packsShown = items;
+    packsShown = packsForView();
     renderPacks();
   }
 
@@ -1329,10 +1345,18 @@ export async function CharacterView(root, id) {
     // 每次画都按当前排序来；packsShown 同步成显示顺序，Shift 连选的区间才对得上
     const items = sortPacks(packsShown, PACK_SORT.key, PACK_SORT.desc);
     packsShown = items;
-    // 关联图包（别处打上本条目标签的包）接在自己图包后面，只读
-    const linkedHtml = showLinked() ? linkedCardsHtml() : '';
+    // 关联图包（别处打上本条目标签的包）接在自己图包后面，只读；搜索时一并过滤
+    const linkedVisible = linkedPacks.filter((p) =>
+      hitQuery(p.title, p.owner && p.owner.name, p.shelf && p.shelf.name, ...(p.tags || []))
+    );
+    const linkedHtml = showLinked() ? linkedCardsHtml(linkedVisible) : '';
+    const kw = topQuery.trim();
     if (!items.length && !linkedHtml) {
-      holder.innerHTML = `<div class="empty" style="grid-column:1/-1">
+      holder.innerHTML = kw
+        ? `<div class="empty" style="grid-column:1/-1">
+             <b>没有匹配「${esc(kw)}」的图包</b>图包标题、小库分类和标签都会参与匹配，换个关键词试试
+           </div>`
+        : `<div class="empty" style="grid-column:1/-1">
         <b>${
           resFilter
             ? `「${esc(resFilter)}」下还没有图包`
@@ -1524,15 +1548,6 @@ export async function CharacterView(root, id) {
       bar.querySelectorAll('[data-f-kind] button').forEach((b) => b.classList.toggle('on', b === btn));
       renderMedia();
     });
-
-    const search = bar.querySelector('.filter-search input');
-    search.addEventListener(
-      'input',
-      debounce(() => {
-        filters.q = search.value.trim();
-        renderMedia();
-      }, 220)
-    );
   }
 
   /** 标签 / 图包下拉的候选值跟着当前条目的媒体走 */
@@ -1597,8 +1612,11 @@ export async function CharacterView(root, id) {
     mediaItems = applyFilters(mediaAll);
     holder.innerHTML = '';
     if (!mediaItems.length) {
+      const kw = filters.q.trim();
       holder.innerHTML = mediaAll.length
-        ? '<div class="empty" style="flex:1"><b>没有符合条件的媒体</b>换个筛选条件试试</div>'
+        ? kw
+          ? `<div class="empty" style="flex:1"><b>没有匹配「${esc(kw)}」的素材</b>文件名和标签都会参与匹配，换个关键词试试</div>`
+          : '<div class="empty" style="flex:1"><b>没有符合条件的媒体</b>换个筛选条件试试</div>'
         : '<div class="empty" style="flex:1"><b>还没有媒体</b>点右上角上传图片或视频</div>';
       return;
     }
@@ -1714,7 +1732,9 @@ export async function CharacterView(root, id) {
   function paintTexts() {
     const slot = root.querySelector('[data-texts]');
     if (!slot) return;
-    const rows = texts
+    // 正文也吃顶栏搜索：不然搜「第3卷」只筛出图包，正文那堆文件看着像漏了
+    const list = texts.filter((t) => hitQuery(t.fileName, t.ext));
+    const rows = list
       .map((t) => {
         const ext = String(t.ext || '').toLowerCase();
         const canRead = ext === 'txt';
@@ -1737,14 +1757,26 @@ export async function CharacterView(root, id) {
     slot.innerHTML = `<section class="text-block">
       <div class="tf-head">
         <b>正文</b>
-        <i>${texts.length ? `${texts.length} 个文件` : '还没有'}</i>
+        <i>${
+          topQuery.trim() && list.length !== texts.length
+            ? `${list.length} / ${texts.length} 个`
+            : texts.length
+              ? `${texts.length} 个文件`
+              : '还没有'
+        }</i>
         <span class="tf-hint">${
           texts.length ? 'TXT 站内阅读 · EPUB 需下载后用系统程序打开' : '支持 TXT / EPUB / PDF，TXT 可以直接在站内读'
         }</span>
         <span class="spacer"></span>
         <button class="tb-btn" data-add-text>＋ 添加正文</button>
       </div>
-      ${rows ? `<div class="tf-list">${rows}</div>` : ''}
+      ${
+        rows
+          ? `<div class="tf-list">${rows}</div>`
+          : texts.length
+            ? `<div class="tf-empty">没有匹配「${esc(topQuery.trim())}」的正文文件</div>`
+            : ''
+      }
     </section>`;
 
     slot.querySelector('[data-add-text]').addEventListener('click', pickTextFiles);
@@ -1998,6 +2030,23 @@ export async function CharacterView(root, id) {
   bindToolbar();
   mountPackSort();
   buildFilterBar();
+  // 顶栏搜索：图包视图筛图包，全部媒体视图筛素材，小说库顺带筛正文
+  bindTopbarSearch(root, (val) => {
+    topQuery = val;
+    filters.q = val;
+    // 默认筛选是「未归包」——留着它，搜索只会在没归包的素材里找，等于白搜
+    if (val && filters.pack === '__none__') {
+      filters.pack = '';
+      if (packDD) packDD.setValue('');
+    }
+    if (mode === 'media') {
+      renderMedia();
+    } else {
+      packsShown = packsForView();
+      renderPacks();
+    }
+    if (isNovelShelf()) paintTexts();
+  });
   root.querySelector('[data-upload]').addEventListener('click', () => pickFiles());
   bindContextMenus();
   watchUploads();

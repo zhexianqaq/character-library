@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { esc, fmtNum, fadeIn, toast, copyText, charDeleteMessage, splitAliases } from '../util.js';
-import { topbarHtml, bindTopbar } from '../components/topbar.js';
+import { topbarHtml, bindTopbar, bindTopbarSearch } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openTagPicker } from '../components/tag-picker.js';
 import { openContextMenu } from '../components/context-menu.js';
@@ -18,9 +18,18 @@ export async function ResourceView(root, id) {
   let related = d.related;
   // 资源自带一个「官方」图包（结构同其它库：库/条目/图包/图片|视频）
   let packs = packData.items || [];
+  // 顶栏搜索：同时过滤「官方图包」和「相关角色 / 人物」两块
+  let q = '';
 
   root.innerHTML =
-    topbarHtml({ back: true, title: r.shelf.name || '资源库', sub: '', actions: `<button class="tb-btn" data-edit>编辑</button>` }) +
+    topbarHtml({
+      back: true,
+      title: r.shelf.name || '资源库',
+      sub: '',
+      search: true,
+      placeholder: '搜索条目或图包',
+      actions: `<button class="tb-btn" data-edit>编辑</button>`,
+    }) +
     `<main class="page">
        <section class="hero">
          <div class="hero-bg" data-bg></div>
@@ -198,17 +207,44 @@ export async function ResourceView(root, id) {
     });
   });
 
+  /** 顶栏搜索用：任意一段文本命中即可 */
+  function hit(...vals) {
+    const kw = q.trim().toLowerCase();
+    if (!kw) return true;
+    return vals.some((v) => String(v === null || v === undefined ? '' : v).toLowerCase().includes(kw));
+  }
+
+  /** 条目：名称 / 平台账号 / 别名 都能搜 */
+  function visibleRelated() {
+    return related.filter((c) => hit(c.name, c.account, ...(c.aliases || [])));
+  }
+
+  /** 图包：标题 / 小库分类 / 标签 都能搜 */
+  function visiblePacks() {
+    return packs.filter((p) => hit(p.title, p.category, ...(p.tags || [])));
+  }
+
   function paintRelated() {
     const grid = root.querySelector('[data-related]');
-    root.querySelector('[data-related-count]').textContent = related.length ? `${related.length} 个` : '';
-    if (!related.length) {
-      grid.innerHTML = `<div class="empty" style="grid-column:1/-1">
-        <b>还没有关联的条目</b>
-        去「人物库 / 角色库」给条目打上「${esc(r.name)}」标签，或者把出处写成「${esc(r.name)}」，就会出现在这里
-      </div>`;
+    const list = visibleRelated();
+    const kw = q.trim();
+    root.querySelector('[data-related-count]').textContent = kw
+      ? `${list.length} / ${related.length}`
+      : related.length
+        ? `${related.length} 个`
+        : '';
+    if (!list.length) {
+      grid.innerHTML = kw
+        ? `<div class="empty" style="grid-column:1/-1">
+             <b>没有匹配「${esc(kw)}」的条目</b>这个资源下只有 ${related.length} 个关联条目，换个关键词试试
+           </div>`
+        : `<div class="empty" style="grid-column:1/-1">
+             <b>还没有关联的条目</b>
+             去「人物库 / 角色库」给条目打上「${esc(r.name)}」标签，或者把出处写成「${esc(r.name)}」，就会出现在这里
+           </div>`;
       return;
     }
-    grid.innerHTML = related
+    grid.innerHTML = list
       .map((c) => {
         const img = c.coverMediaId ? api.thumb(c.coverMediaId) : '';
         const kind = c.kind === 'work' ? '角色' : '人物';
@@ -360,12 +396,20 @@ export async function ResourceView(root, id) {
   function paintPacks() {
     const grid = root.querySelector('[data-packs]');
     if (!grid) return;
-    root.querySelector('[data-pack-count]').textContent = packs.length ? `${packs.length} 个` : '';
-    if (!packs.length) {
-      grid.innerHTML = '<div class="empty" style="grid-column:1/-1"><b>还没有图包</b>刷新一下试试</div>';
+    const list = visiblePacks();
+    const kw = q.trim();
+    root.querySelector('[data-pack-count]').textContent = kw
+      ? `${list.length} / ${packs.length}`
+      : packs.length
+        ? `${packs.length} 个`
+        : '';
+    if (!list.length) {
+      grid.innerHTML = kw
+        ? `<div class="empty" style="grid-column:1/-1"><b>没有匹配「${esc(kw)}」的图包</b>这个资源下只有 ${packs.length} 个图包</div>`
+        : '<div class="empty" style="grid-column:1/-1"><b>还没有图包</b>刷新一下试试</div>';
       return;
     }
-    grid.innerHTML = sortPacks(packs, packSort.key, packSort.desc)
+    grid.innerHTML = sortPacks(list, packSort.key, packSort.desc)
       .map((p) => {
         const img = p.coverMediaId ? api.thumb(p.coverMediaId) : '';
         const meta =
@@ -398,6 +442,13 @@ export async function ResourceView(root, id) {
   });
   const sortSlot = root.querySelector('[data-pack-sort]');
   if (sortSlot) sortSlot.replaceWith(packSortCtl.el);
+
+  // 顶栏搜索：只重画下面两块列表，hero 不动（里面没有可搜的东西）
+  bindTopbarSearch(root, (val) => {
+    q = val;
+    paintRelated();
+    paintPacks();
+  });
 
   paintHero();
   paintRelated();
