@@ -119,7 +119,7 @@ async function setOwnerCover(item, owner, onCover) {
 export function mediaMenu(
   event,
   item,
-  { characterId, onOpen, onChange, pack = null, owner = null, onCover = null, shelfKind = '' } = {}
+  { characterId, onOpen, onChange, pack = null, owner = null, onCover = null, shelfKind = '', allowMove = true } = {}
 ) {
   const packRef = pack || (item.packId ? { id: item.packId, title: item.packTitle || '这个图包' } : null);
   const ownerRef = owner && owner.id ? owner : null;
@@ -133,7 +133,8 @@ export function mediaMenu(
     ownerRef ? { label: `设为${ownerNoun}封面`, hint: ownerRef.name, onClick: () => setOwnerCover(item, ownerRef, onCover) } : null,
     { label: '打开本地文件夹', onClick: () => api.reveal('media', item.id).catch(() => toast('文件已丢失')) },
     { separator: true },
-    { label: '移动到其他图包', onClick: () => moveMedia(item, characterId, onChange) },
+    // 全部库里的素材没有图包可去（pack_id 一律为空），这一项没意义
+    allowMove ? { label: '移动到其他图包', onClick: () => moveMedia(item, characterId, onChange) } : null,
     // 已经在「全部库」里的没必要再移一次
     shelfKind === 'inbox' ? null : { label: '移出库', hint: '放到全部库', onClick: () => ejectMedia(item, onChange) },
     { separator: true },

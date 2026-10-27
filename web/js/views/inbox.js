@@ -4,6 +4,8 @@ import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { createDropdown } from '../components/dropdown.js';
 import { confirmDialog } from '../components/modal.js';
+import { openContextMenu } from '../components/context-menu.js';
+import { mediaMenu } from '../components/media-actions.js';
 import { bindDropUpload } from '../components/dropzone.js';
 import { queue } from '../upload-queue.js';
 import { applyPickClick } from '../selection.js';
@@ -215,12 +217,22 @@ export async function InboxView(root, shelfId, opts = {}) {
             pickByClick(items[i].id, ev);
             return;
           }
+          // Ctrl / Shift + 点击：不用先点「选取」，直接进多选并选中这一张
+          if (ev && (ev.ctrlKey || ev.metaKey || ev.shiftKey)) {
+            enterSelect(items[i].id, ev);
+            return;
+          }
           gotoMedia(items[i].id);
         },
         {
           selectable: selecting,
           isPicked: (it) => picked.has(it.id),
           spanWide: true,
+          onContext: (e, item) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openMediaMenu(e, item);
+          },
         }
       );
     });
@@ -253,6 +265,56 @@ export async function InboxView(root, shelfId, opts = {}) {
     window.dispatchEvent(new CustomEvent('app:route'));
   }
 
+  /** 重新拉一遍已经翻过的所有页：改名 / 改标签 / 删除之后不用退回第一页 */
+  async function reloadLoaded() {
+    const pages = Math.max(1, page);
+    const chunks = [];
+    let info = null;
+    for (let p = 1; p <= pages; p += 1) {
+      const r = await api.inboxShelf(shelfId, { section, kind, q, page: p, pageSize: PAGE_SIZE });
+      info = r;
+      chunks.push(...r.items);
+      if (r.items.length < PAGE_SIZE) break;
+    }
+    if (!info) return;
+    shelfInfo = info.shelf;
+    containerId = info.containerId;
+    total = info.total;
+    counts = info.counts;
+    items = chunks;
+    paintMeta();
+    paintTabs();
+    renderGrid();
+  }
+
+  /**
+   * 瓦片右键：和角色库 / 图包页共用同一套媒体菜单。
+   * 全部库有三项不该出现 —— 素材没有图包（设不了图包封面、也没处可移动）、
+   * 归属条目是隐藏容器（设不了「条目封面」）、本来就在全部库里（不用再移出）。
+   *
+   * 如果右键的是「已选中的那几张之一」，菜单换成批量动作 ——
+   * 否则选了 50 张、右键点删除，只删一张会很意外。
+   */
+  function openMediaMenu(e, item) {
+    if (selecting && picked.size > 1 && picked.has(item.id)) {
+      openContextMenu(e, [
+        { label: '打开这一张', onClick: () => gotoMedia(item.id) },
+        { separator: true },
+        { label: `分发选中的 ${picked.size} 个…`, onClick: () => onSelAction('move') },
+        { label: `删除选中的 ${picked.size} 个`, danger: true, onClick: () => onSelAction('del') },
+        { separator: true },
+        { label: '退出选取', onClick: () => exitSelect() },
+      ]);
+      return;
+    }
+    mediaMenu(e, item, {
+      onOpen: () => gotoMedia(item.id),
+      onChange: reloadLoaded,
+      shelfKind: 'inbox',
+      allowMove: false,
+    });
+  }
+
   // ---------- 多选 ----------
   function pickByClick(id, ev) {
     const ordered = items.map((m) => m.id);
@@ -275,7 +337,7 @@ export async function InboxView(root, shelfId, opts = {}) {
     return root.querySelector('[data-selbar]');
   }
 
-  function enterSelect() {
+  function enterSelect(firstId = null, ev = null) {
     selecting = true;
     picked.clear();
     anchorId = null;
@@ -296,6 +358,8 @@ export async function InboxView(root, shelfId, opts = {}) {
         b.addEventListener('click', () => onSelAction(b.dataset.sel))
       );
     }
+    // Ctrl+点击进来时顺手把这一张选上：renderGrid 的瓦片是下一帧画的，等一帧再勾
+    if (firstId) requestAnimationFrame(() => pickByClick(firstId, ev || {}));
   }
 
   function exitSelect() {
@@ -562,14 +626,39 @@ export async function InboxView(root, shelfId, opts = {}) {
 
   bindDropUpload(root.querySelector('.page'), target);
 
-  /** Esc 退出选取（弹窗 / 下拉开着时归它们管） */
+  // 空白处右键：选取 / 全选 / 收素材 / 刷新（瓦片自己的 contextmenu 已经 stopPropagation）
+  bodyEl.addEventListener('contextmenu', (e) => {
+    if (e.target.closest('.tile')) return;
+    e.preventDefault();
+    openContextMenu(e, [
+      { label: selecting ? '退出选取' : '选取素材', hint: '也可以按 Ctrl+A', onClick: () => (selecting ? exitSelect() : enterSelect()) },
+      selecting ? { label: '全选已加载的素材', onClick: () => onSelAction('all') } : null,
+      { label: '收素材', hint: '也可以直接拖进来', onClick: () => root.querySelector('[data-upload]').click() },
+      { separator: true },
+      { label: '刷新', onClick: () => reloadLoaded() },
+    ]);
+  });
+
+  /** Esc 退出选取、Ctrl+A 全选、Delete 删除（弹窗 / 下拉开着时归它们管） */
   const onKey = (e) => {
-    if (e.key !== 'Escape') return;
     if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
     if (escDepth() > 0) return;
     if (!selecting) return;
-    e.preventDefault();
-    exitSelect();
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      exitSelect();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+      e.preventDefault();
+      onSelAction('all');
+      return;
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (!picked.size) return;
+      e.preventDefault();
+      onSelAction('del');
+    }
   };
   document.addEventListener('keydown', onKey);
 
