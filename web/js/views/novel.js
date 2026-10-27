@@ -204,13 +204,14 @@ export async function NovelView(root, shelfId, opts = {}) {
   async function novelModal(item = null) {
     const groups = isFan() ? await fanficGroups() : [...new Set([...knownGroups(), ...ORIGIN_TYPES])];
     // 字段定义在 novel-fields.js：详情页「编辑资料」用的是同一份
-    const { fields, transform } = novelFieldSet({ fan: isFan(), groups, item });
+    const { fields, transform, className } = novelFieldSet({ fan: isFan(), groups, item });
     const v = await openModal({
       title: item ? '编辑小说' : '新建小说',
       description: item
         ? '改书名或归类文件夹会同步移动磁盘目录。'
         : `建好后可以在书里放正文文件和插图；${isFan() ? '原作品名' : '小说类型'}就是磁盘上的文件夹名。`,
       fields,
+      className,
       submitText: item ? '保存' : '创建',
       transform,
     });

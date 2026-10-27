@@ -8,6 +8,7 @@ import { pushEsc } from '../esc.js';
  *   type: text | month | textarea | select | url
  *   options: string[] | [{ value, label }]（type=select 时用）
  *   half: true 时相邻的 half 字段会排成一行两列
+ * className: 追加到 .modal 上的类（比如 form-wide 让双栏弹窗宽一点）
  * onMount(bodyEl, root): 插入 DOM 后回调，可做联动
  * transform(values, bodyEl): 提交前改写返回值
  * 返回 Promise<values|null>
@@ -18,6 +19,7 @@ export function openModal({
   submitText = '确定',
   danger = false,
   description = '',
+  className = '',
   onMount,
   transform,
 }) {
@@ -94,7 +96,7 @@ export function openModal({
     flush();
 
     root.innerHTML = `
-      <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal${className ? ` ${className}` : ''}" role="dialog" aria-modal="true">
         <h3>${esc(title)}</h3>
         ${description ? `<p class="modal-desc">${esc(description)}</p>` : ''}
         <div class="modal-body">${parts.join('')}</div>

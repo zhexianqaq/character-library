@@ -1027,6 +1027,10 @@ img { display: block; }
 }
 .field-row .field { margin-bottom: 13px; min-width: 0; }
 
+/* 双栏弹窗（小说新建/编辑）：460 放两列太挤，放宽到 680 且两列等宽 */
+.modal.form-wide { width: min(680px, 100%); }
+.modal.form-wide .field-row { grid-template-columns: 1fr 1fr; }
+
 /* 右键菜单 */
 .ctx-menu {
   position: fixed;

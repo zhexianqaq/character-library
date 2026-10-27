@@ -122,7 +122,7 @@ export async function CharacterView(root, id) {
           <div class="hero-body">
             <div class="stat-grid">${stats}</div>
             <div class="platform-pane" data-platforms></div>
-            <div class="alias-pane" data-aliases></div>
+            ${novel ? '' : '<div class="alias-pane" data-aliases></div>'}
             <div class="hero-intro" data-intro></div>
           </div>
         </div>
@@ -1580,6 +1580,7 @@ export async function CharacterView(root, id) {
       const v = await openModal({
         title: `编辑${noun()}资料`,
         description: novel ? '改书名或归类文件夹会同步移动磁盘目录。' : '',
+        className: set ? set.className : '',
         fields: set
           ? set.fields
           : [
