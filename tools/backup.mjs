@@ -28,7 +28,7 @@ import { DATA_DIR, DB_FILE } from '../server/src/config.js';
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Database = require('better-sqlite3');
 
-const DEST_ROOT = process.env.CL_BACKUP_DIR || 'D:\\CharacterLibrary-Backup';
+const DEST_ROOT = process.env.CL_BACKUP_DIR || 'E:\\CharacterLibrary-Backup';
 const argNum = (name, def) => {
   const i = process.argv.indexOf(name);
   if (i < 0) return def;

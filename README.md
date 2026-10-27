@@ -212,7 +212,7 @@ node desktop/build.mjs      # cargo build --release + 拷成项目根的「资�
   分类就取你填的出处类型（新类型会自动多出一个分类标签）
 
 新增库：首页库标签右侧的 **＋**，填名字并选类型。新库在磁盘上会建同名目录
-（`D:\CharacterLibrary\<库名>\`），建条目、传文件时自动按五层展开。
+（`E:\CharacterLibrary\<库名>\`），建条目、传文件时自动按五层展开。
 
 ## 当前库里的展示内容
 
@@ -620,12 +620,27 @@ node desktop/build.mjs      # cargo build --release + 拷成项目根的「资�
 
 链接只接受 http/https，写 `x.com/xxx` 会自动补成 `https://x.com/xxx`（前后端各补一次）。
 
+## 三个目录
+
+**D 盘放软件，E 盘放资源**，三个目录别搞混：
+
+| 路径 | 是什么 | 体量 | 删了会怎样 |
+|---|---|---|---|
+| `D:\character-library` | **程序本体**：代码、`web/`、`server/`、`资料库.exe`、`.cache`（缩略图缓存） | 约 180 MB | 没程序了，代码在 GitHub 上还能拉回来 |
+| `E:\CharacterLibrary` | **资源库数据**：媒体原件 + 索引库 `.catalog\library.db` | 约 5 GB | 素材没了，只能靠备份恢复 |
+| `E:\CharacterLibrary-Backup` | **备份**：`backup.bat` 每次生成一个 `<时间戳>\` 子目录，留最近 5 份 | 约 2.3 GB（3 份） | 旧份可以删，至少要留一份 |
+
+> 迁移时复制到 `D:\CharacterLibrary` 的那份是副本，程序已经不用它了（配置指向 E 盘），确认无误后可以删。
+>
+> 备份和数据都在 E 盘，**同一块盘挂了会一起没**。想再保一层，把备份指到另一块物理盘：
+> `set CL_BACKUP_DIR=G:\CharacterLibrary-Backup`，再跑 `backup.bat`。
+
 ## 存储结构
 
-**数据放 `D:\CharacterLibrary`，缓存放在项目目录下的 `.cache`**（可随时重建、不进备份）。
+**数据放 `E:\CharacterLibrary`，缓存放在项目目录下的 `.cache`**（可随时重建、不进备份）。
 
 ```
-D:\CharacterLibrary\                  ← 数据目录（原件 + 索引库，约 5 GB）
+E:\CharacterLibrary\                  ← 数据目录（原件 + 索引库，约 5 GB）
   .catalog\
     library.db                        索引库，和媒体放一起，备份时一起拷
     pending-moves\                    跨角色搬运的意图记录（进程被杀后靠它收尾）
@@ -666,12 +681,12 @@ D:\ams\workbuddy\character-library\
 
 ## 备份
 
-整个库就是一个目录，**备份 = 复制 `D:\CharacterLibrary`**。`.cache` 不用备份——删了会自动重建。
+整个库就是一个目录，**备份 = 复制 `E:\CharacterLibrary`**。`.cache` 不用备份——删了会自动重建。
 
 一键备份（双击 `backup.bat`，或命令行 `npm run backup`）：
 
 ```bat
-backup.bat                   :: 备份到 D:\CharacterLibrary-Backup\<时间戳>\，保留最近 5 份
+backup.bat                   :: 备份到 E:\CharacterLibrary-Backup\<时间戳>\，保留最近 5 份
 npm run backup -- --keep 10  :: 保留 10 份
 npm run backup -- --sample 30 :: 抽多少个文件比内容哈希（默认 12，0 = 不比）
 ```
@@ -698,7 +713,7 @@ npm run backup -- --sample 30 :: 抽多少个文件比内容哈希（默认 12�
 **不会**被当成可用备份，也**不会**触发旧备份清理。看目录就知道哪次没成：
 
 ```
-D:\CharacterLibrary-Backup\
+E:\CharacterLibrary-Backup\
   20261026-133946\          正式备份
     MANIFEST.txt            备份时间 / 来源 / 文件数 / 字节数 / 抽样哈希 / 完整性
     RESTORE.md              一步步的恢复说明
@@ -724,7 +739,7 @@ D:\CharacterLibrary-Backup\
 数据库不用动：
 
 ```bat
-set CL_DATA_DIR=D:\CharacterLibrary
+set CL_DATA_DIR=E:\CharacterLibrary
 set CL_CACHE_DIR=D:\my-cache
 start.bat
 ```
