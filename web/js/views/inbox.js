@@ -409,6 +409,9 @@ export async function InboxView(root, shelfId, opts = {}) {
       onChange: reloadLoaded,
       shelfKind: 'inbox',
       allowMove: false,
+      // 已经在选中的时候给「退出」，否则进选取并顺手勾上这一张
+      selecting,
+      onSelect: () => (selecting ? exitSelect() : enterSelect(item.id)),
       extra: [
         {
           label: '分发到…',

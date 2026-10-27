@@ -117,6 +117,9 @@ async function setOwnerCover(item, owner, onCover) {
  * @param {(kind:'pack'|'owner')=>void} ctx.onCover 设好之后刷新展示区
  * @param {boolean} ctx.allowMove  全部库这类没有图包归属的地方传 false
  * @param {Array} ctx.extra  额外菜单项，紧跟在「打开」后面（全部库用它加「分发到…」）
+ * @param {()=>void} ctx.onSelect  进入 / 退出多选。素材多的时候顶部「选取」按钮早滚出屏幕了，
+ *                                 右键是滚到一半时唯一顺手的入口
+ * @param {boolean} ctx.selecting  当前是否已经在选取模式（决定文案是「选取素材」还是「退出选取」）
  */
 export function mediaMenu(
   event,
@@ -131,6 +134,8 @@ export function mediaMenu(
     shelfKind = '',
     allowMove = true,
     extra = [],
+    onSelect = null,
+    selecting = false,
   } = {}
 ) {
   const packRef = pack || (item.packId ? { id: item.packId, title: item.packTitle || '这个图包' } : null);
@@ -139,6 +144,11 @@ export function mediaMenu(
 
   openContextMenu(event, [
     { label: '打开', onClick: () => onOpen && onOpen() },
+    onSelect
+      ? selecting
+        ? { label: '退出选取', onClick: onSelect }
+        : { label: '选取素材', hint: '进入多选', onClick: onSelect }
+      : null,
     ...(Array.isArray(extra) ? extra : []),
     { label: '重命名', onClick: () => renameMedia(item, onChange) },
     { label: '编辑标签', onClick: () => editMediaTags(item, onChange) },

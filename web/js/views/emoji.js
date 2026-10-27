@@ -378,6 +378,8 @@ export async function EmojiView(root, shelfId, opts = {}) {
                   // 表情库的条目是容器，没有「人物 / 角色」这一层
                   owner: null,
                   shelfKind: (shelf && shelf.kind) || 'emoji',
+                  // 滚到下面时顶部「选取」按钮不在视野里，右键也能进多选
+                  onSelect: enterSelect,
                   onCover: () => reload(),
                 }),
         }

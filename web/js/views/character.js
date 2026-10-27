@@ -1406,6 +1406,8 @@ export async function CharacterView(root, id) {
                     : null,
                   owner: { id: c.id, name: c.name, noun: noun() },
                   shelfKind: (c.shelf && c.shelf.kind) || '',
+                  // 列表长了以后顶部「选取」按钮不在视野里，右键也能进多选
+                  onSelect: enterSelect,
                   onCover: async (kind) => {
                     if (kind === 'owner') {
                       c = await api.character(id);

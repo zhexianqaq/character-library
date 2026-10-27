@@ -121,6 +121,8 @@ export async function PackView(root, id) {
                 // 表情库挂在容器条目上，没有「人物 / 角色」可设
                 owner: emoji ? null : { id: pack.character.id, name: pack.character.name, noun: ownerNoun },
                 shelfKind: (pack.shelf && pack.shelf.kind) || '',
+                // 滚到下面时顶部「选取」按钮早就不在屏幕里了，右键也能进多选
+                onSelect: enterSelect,
                 onCover: async (kind) => {
                   if (kind !== 'pack') return;
                   const next = await api.pack(id);
