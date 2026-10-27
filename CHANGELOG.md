@@ -34,7 +34,7 @@
 | `tools/e2e.mjs` | ffmpeg 兜底写死用户路径 | `'ffmpeg'`（走 PATH） |
 | README | 真实库统计、coser 账号、私人目录名 | 中性示例与占位符 |
 
-改完 `git grep -E "35155|X-Vault|ams.workbuddy"` 为空。`ffmpeg` 仍能解析到（`os.homedir()` 拼出来的路径在所有用户下都成立）。
+改完用 `git grep -E "<本机用户名>|<私人目录名>|ams.workbuddy"` 扫一遍，为空。`ffmpeg` 仍能解析到（`os.homedir()` 拼出来的路径在所有用户下都成立）。
 
 ### 3. 补许可声明
 
