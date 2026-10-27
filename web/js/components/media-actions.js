@@ -3,6 +3,7 @@ import { openModal, confirmDialog } from './modal.js';
 import { openTagPicker } from './tag-picker.js';
 import { openContextMenu } from './context-menu.js';
 import { toast } from '../util.js';
+import { packOptions, matchPack } from './pack-choice.js';
 
 async function renameMedia(item, onChange) {
   const v = await openModal({
@@ -25,29 +26,61 @@ async function editMediaTags(item, onChange) {
   onChange && onChange();
 }
 
+/** 「移出图包」那条特殊选项：可输入下拉提交的是文本，靠它和空值一起辨认 */
+const OUT_OF_PACK = '（移出图包，变成未归包）';
+
 async function moveMedia(item, characterId, onChange) {
   const data = await api.packs(characterId);
-  const options = [{ value: '', label: '（移出图包，变成未归包）' }];
-  for (const p of data.items) {
-    options.push({ value: String(p.id), label: `${p.category ? p.category + ' / ' : ''}${p.title}` });
-  }
+  const packs = data.items || [];
+  const src = packs.find((p) => p.id === item.packId) || null;
   const v = await openModal({
     title: '移动到其他图包',
+    description: '只改所属图包，磁盘文件留在原地。',
     fields: [
       {
         name: 'packId',
         label: '目标图包',
         type: 'select',
-        options,
-        value: item.packId ? String(item.packId) : '',
+        // 能直接打名字：不存在的名字就地新建，和「批量移动」保持一致
+        editable: true,
+        placeholder: '选择或输入新图包名称',
+        hint: '输入不存在的名称会新建图包；选第一项或留空 = 移出图包，变成未归包',
+        options: [{ value: '', label: OUT_OF_PACK }, ...packOptions(packs)],
+        value: item.packId && src ? String(item.packId) : '',
       },
     ],
     submitText: '移动',
   });
   if (!v) return;
-  await api.updateMedia(item.id, { packId: v.packId ? Number(v.packId) : null });
-  toast('已移动');
-  onChange && onChange();
+
+  const wanted = String(v.packId || '').trim();
+  let packId = null;
+  if (wanted && wanted !== OUT_OF_PACK) {
+    const hit = matchPack(packs, wanted);
+    if (hit) packId = hit.id;
+    else {
+      try {
+        // 新建时沿用原图包的小库（角色库的官图 / cosplay / 同人），别把素材丢到「未分类」
+        const created = await api.createPack(characterId, {
+          title: wanted.slice(0, 60),
+          month: '',
+          category: (src && src.category) || null,
+        });
+        packId = created.id;
+      } catch (err) {
+        toast(err.message || '创建图包失败');
+        return;
+      }
+    }
+  }
+
+  try {
+    await api.updateMedia(item.id, { packId });
+    toast(packId ? '已移动' : '已移出图包，变成未归包');
+    onChange && onChange();
+  } catch (err) {
+    toast(err.message || '移动失败');
+  }
 }
 
 /**
