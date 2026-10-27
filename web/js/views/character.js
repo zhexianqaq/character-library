@@ -12,6 +12,7 @@ import { bindDropUpload } from '../components/dropzone.js';
 import { queue } from '../upload-queue.js';
 import { applyPickClick } from '../selection.js';
 import { escDepth } from '../esc.js';
+import { ORIGIN_TYPES, novelFieldSet } from '../novel-fields.js';
 
 /**
  * 资源名 → 资源。出处卡片点「原神」时要跳到资源详情，
@@ -158,10 +159,56 @@ export async function CharacterView(root, id) {
     return isNovelShelf() ? '小说' : isWorkShelf() ? '角色' : '人物';
   }
 
+  /** 小说库没有「平台账号」：这一栏就是归类文件夹（原创=类型 / 同人=原作）。
+      它是 novel_group 的只读投影，点一下进编辑（同人若资源库里有同名作品就跳资源页）。 */
+  function paintNovelGroup() {
+    const pane = root.querySelector('[data-platforms]');
+    if (!pane) return;
+    const fan = isFanficShelf();
+    const group = String(c.novelGroup || '');
+    const hit = fan && group && RES_INDEX ? RES_INDEX.get(group.trim()) : null;
+    pane.innerHTML = `
+      <div class="pf-head"><span>${fan ? '原作' : '类型'}</span></div>
+      <div class="pf-list">
+        ${
+          group
+            ? `<div class="pf-card${hit ? ' has-url' : ''}" role="button" tabindex="0"
+                 title="${hit ? `打开《${esc(group)}》的资源页` : '点击修改'}">
+                 <span class="pf-name">${fan ? '原作' : '类型'}</span>
+                 <span class="pf-handle">${esc(group)}</span>
+                 ${hit ? '<span class="pf-link">↗</span>' : ''}
+               </div>`
+            : `<span class="pf-empty">还没有填${fan ? '原作品' : '类型'}</span>`
+        }
+      </div>`;
+    const card = pane.querySelector('.pf-card');
+    if (!card) return;
+    const open = () => {
+      if (hit) {
+        history.pushState({ from: location.pathname + location.search }, '', `/r/${hit.id}`);
+        window.dispatchEvent(new CustomEvent('app:route'));
+        return;
+      }
+      const edit = root.querySelector('[data-edit]');
+      if (edit) edit.click();
+    };
+    card.addEventListener('click', open);
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        open();
+      }
+    });
+  }
+
   /** 平台账号：一行一个圆角卡片。有网址点开跳转，没网址复制账号；悬停可编辑/删除 */
   function paintPlatforms() {
     const pane = root.querySelector('[data-platforms]');
     if (!pane) return;
+    if (isNovelShelf()) {
+      paintNovelGroup();
+      return;
+    }
     const list = Array.isArray(c.platforms) ? c.platforms : [];
     const work = isWorkShelf();
     const fan = isFanficShelf();
@@ -1349,15 +1396,32 @@ export async function CharacterView(root, id) {
     });
 
     root.querySelector('[data-edit]').addEventListener('click', async () => {
+      // 小说库的字段多（书名/类型或原作/作者/字数/状态），和首页共用一份定义
+      const novel = isNovelShelf();
+      const set = novel
+        ? novelFieldSet({
+            fan: isFanficShelf(),
+            groups: isFanficShelf() ? [...(RES_INDEX ? RES_INDEX.keys() : [])] : ORIGIN_TYPES,
+            item: c,
+          })
+        : null;
       const v = await openModal({
         title: `编辑${noun()}资料`,
-        fields: [
-          { name: 'name', label: `${noun()}名`, value: c.name, required: true },
-          { name: 'intro', label: '简介', type: 'textarea', value: c.intro || '' },
-        ],
+        description: novel ? '改书名或归类文件夹会同步移动磁盘目录。' : '',
+        fields: set
+          ? set.fields
+          : [
+              { name: 'name', label: `${noun()}名`, value: c.name, required: true },
+              { name: 'intro', label: '简介', type: 'textarea', value: c.intro || '' },
+            ],
         submitText: '保存',
+        transform: set ? set.transform : undefined,
       });
       if (!v) return;
+      if (novel && !v.novelGroup) {
+        toast(`请填${isFanficShelf() ? '原作品' : '小说类型'}`);
+        return;
+      }
       await api.updateCharacter(c.id, v);
       c = await api.character(id);
       paint();

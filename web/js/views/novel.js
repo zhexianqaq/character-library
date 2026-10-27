@@ -4,6 +4,7 @@ import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openContextMenu } from '../components/context-menu.js';
 import { createDropdown } from '../components/dropdown.js';
+import { ORIGIN_TYPES, novelFieldSet } from '../novel-fields.js';
 
 /**
  * 小说库首页。
@@ -16,8 +17,6 @@ import { createDropdown } from '../components/dropdown.js';
  */
 
 /** 原创库的常用类型；datalist 可手输，没列出来的照样能用 */
-const ORIGIN_TYPES = ['玄幻', '仙侠', '都市', '言情', '历史', '科幻', '悬疑', '奇幻', '军事', '游戏竞技', '文学'];
-const STATUS = ['连载', '完结', '暂停'];
 
 const SORTS = [
   { value: 'words', label: '字数' },
@@ -202,65 +201,16 @@ export async function NovelView(root, shelfId) {
   /** 新建 / 编辑共用；返回可直接提交给接口的对象 */
   async function novelModal(item = null) {
     const groups = isFan() ? await fanficGroups() : [...new Set([...knownGroups(), ...ORIGIN_TYPES])];
+    // 字段定义在 novel-fields.js：详情页「编辑资料」用的是同一份
+    const { fields, transform } = novelFieldSet({ fan: isFan(), groups, item });
     const v = await openModal({
       title: item ? '编辑小说' : '新建小说',
       description: item
         ? '改书名或归类文件夹会同步移动磁盘目录。'
         : `建好后可以在书里放正文文件和插图；${isFan() ? '原作品名' : '小说类型'}就是磁盘上的文件夹名。`,
-      fields: [
-        {
-          name: 'name',
-          label: '书名',
-          required: true,
-          value: item ? item.name : '',
-          placeholder: isFan() ? '比如：提瓦特纪事' : '比如：斗破苍穹',
-          hint: item ? '' : '一次建多本用逗号隔开',
-        },
-        {
-          name: 'novelGroup',
-          label: isFan() ? '原作品' : '小说类型',
-          type: 'datalist',
-          required: true,
-          allowEmpty: true,
-          options: groups,
-          value: item ? item.novelGroup : '',
-          placeholder: isFan() ? '比如：原神' : '比如：玄幻',
-          hint: isFan() ? '同人小说会自动带上这个标签，资源库的作品卡就能关联到' : '会作为磁盘上的文件夹名',
-        },
-        {
-          name: 'novelSubtype',
-          label: isFan() ? '篇幅' : '出版方式',
-          type: 'select',
-          required: true,
-          options: isFan() ? ['短篇', '长篇'] : ['出版', '网络'],
-          value: item ? item.novelSubtype : isFan() ? '短篇' : '网络',
-        },
-        { name: 'author', label: '作者', value: item ? item.author : '', placeholder: '选填' },
-        {
-          name: 'wordCount',
-          label: '字数（万字）',
-          value: item && item.wordCount ? String(Math.round((item.wordCount / 10000) * 10) / 10) : '',
-          placeholder: '选填，比如 53.6',
-        },
-        {
-          name: 'novelStatus',
-          label: '状态',
-          type: 'select',
-          options: STATUS,
-          value: item ? item.novelStatus || '完结' : '完结',
-        },
-        { name: 'intro', label: '简介', type: 'textarea', value: item ? item.intro || '' : '', placeholder: '选填' },
-      ],
+      fields,
       submitText: item ? '保存' : '创建',
-      transform: (val) => ({
-        name: String(val.name || '').trim(),
-        novelGroup: String(val.novelGroup || '').trim(),
-        novelSubtype: val.novelSubtype || '',
-        author: String(val.author || '').trim(),
-        wordCount: Math.round((Number(val.wordCount) || 0) * 10000),
-        novelStatus: val.novelStatus || '',
-        intro: val.intro || '',
-      }),
+      transform,
     });
     if (!v) return null;
     if (!v.novelGroup) {
