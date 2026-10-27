@@ -12,8 +12,9 @@
 librement ; le dossier d'origine n'est jamais touché.
 
 > L'interface et les commentaires du code sont **uniquement en chinois simplifié** (l'application n'est pas
-> traduite). Ce fichier est un résumé. Le manuel complet (chaque écran, la table des API, les réglages de
-> performance, les limites connues, l'historique des versions) se trouve dans [README.md](README.md), en chinois.
+> traduite). **Ce fichier est un résumé.** Le manuel complet (chaque écran, la table des API, les réglages de
+> performance, les limites connues, l'historique des versions) n'existe qu'en deux versions :
+> **[简体中文](README.md)** et **[English](README.en.md)**.
 
 ## Aperçu
 
