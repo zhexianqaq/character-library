@@ -149,7 +149,66 @@ function migrate(d) {
   addColumnIfMissing('characters', 'novel_status', `novel_status TEXT`);
   // 索引必须在补列之后建（老库一开始没有 novel_group 这一列）
   d.exec(`CREATE INDEX IF NOT EXISTS idx_chars_novel_group ON characters(shelf_id, novel_group)`);
+  // 内容文件夹类型：pack 图包 / novel 小说袋 / comic 漫画（后两种见 README）
+  addColumnIfMissing('packs', 'kind', `kind TEXT NOT NULL DEFAULT 'pack'`);
+  ensureNovelBags(d);
   ensureSelfTags(d);
+}
+
+/**
+ * 小说袋：把每个小说库里不同的「类型 / 原作」实体化成一条 pack（kind='novel'）。
+ *
+ * 书与袋子的关系继续沿用 characters.novel_group（= 袋子名），所以这里只补记录、不动书；
+ * 封面 / 标签 / 排序这些能力直接复用图包那套（packs 表）。
+ * 袋子挂在库的容器条目下，和表情库、全部库是同一个模式。
+ */
+function ensureNovelBags(d) {
+  const shelves = d.prepare("SELECT id, name FROM shelves WHERE kind = 'novel'").all();
+  for (const s of shelves) {
+    const groups = d
+      .prepare(
+        `SELECT COALESCE(novel_group,'') g, COUNT(*) n FROM characters
+          WHERE shelf_id = ? AND is_container = 0 GROUP BY COALESCE(novel_group,'')`
+      )
+      .all(s.id);
+    if (!groups.length) continue;
+
+    let container = d
+      .prepare('SELECT * FROM characters WHERE shelf_id = ? AND is_container = 1 ORDER BY id LIMIT 1')
+      .get(s.id);
+    if (!container) {
+      // 迁移期不调 ensureShelfContainer（它会走 getDb()），这里用同一个连接直接建
+      const base = slugify(s.name) || '小说库';
+      let dirSlug = base;
+      let n = 2;
+      while (d.prepare('SELECT 1 FROM characters WHERE dir_slug = ?').get(dirSlug)) {
+        dirSlug = `${base}-${n}`;
+        n += 1;
+      }
+      const ts = nowIso();
+      const cid = Number(
+        d
+          .prepare(
+            `INSERT INTO characters(shelf_id, name, account, intro, dir_slug, sort_order, created_at, updated_at, is_container)
+             VALUES(?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM characters WHERE shelf_id=?),?,?,1)`
+          )
+          .run(s.id, s.name, null, '', dirSlug, s.id, ts, ts).lastInsertRowid
+      );
+      container = { id: cid };
+    }
+
+    for (const { g } of groups) {
+      const title = String(g || '').trim() || '未分类';
+      const exists = d
+        .prepare("SELECT 1 FROM packs WHERE character_id = ? AND kind = 'novel' AND title = ?")
+        .get(container.id, title);
+      if (exists) continue;
+      d.prepare(
+        `INSERT INTO packs(character_id, title, month, category, kind, tags, sort_order, created_at)
+         VALUES(?,?,NULL,NULL,'novel',?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?)`
+      ).run(container.id, title, JSON.stringify([title]), container.id, nowIso());
+    }
+  }
 }
 
 /**

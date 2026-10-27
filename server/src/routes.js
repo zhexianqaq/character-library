@@ -430,6 +430,29 @@ async function ensureCharDirs(relDir, novel = false) {
 const OFFICIAL_PACK = '官方';
 
 /**
+ * 书的归类保存后，确保库里有一个同名袋子。
+ * 袋子和书靠 characters.novel_group（= 袋子名）关联，这里是唯一的「按需建袋」入口。
+ */
+function ensureNovelBag(db, shelfId, title) {
+  const t = String(title || '').trim();
+  if (!t || !shelfId) return null;
+  const container = ensureShelfContainer(shelfId);
+  if (!container) return null;
+  const exists = db
+    .prepare("SELECT id FROM packs WHERE character_id = ? AND kind = 'novel' AND title = ?")
+    .get(container.id, t);
+  if (exists) return exists.id;
+  return Number(
+    db
+      .prepare(
+        `INSERT INTO packs(character_id, title, month, category, kind, tags, sort_order, created_at)
+         VALUES(?,?,NULL,NULL,'novel',?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?)`
+      )
+      .run(container.id, t, JSON.stringify([t]), container.id, nowIso()).lastInsertRowid
+  );
+}
+
+/**
  * 资源库的每个「作品」预置一个「官方」图包：
  * `<资源库>/<作品>/官方/图片|视频`，和其他库「条目/图包/图片|视频」的层级完全一致。
  * 资源本身不直接存媒体，这里只建空壳（DB 一条 pack + 两个子目录），
@@ -776,6 +799,74 @@ export function createApp() {
    *   group = novel_group（小说类型 或 原作品名），既是分组标题也是磁盘上的一层目录
    * 所以 view 只影响「这页显示哪些书」，group 影响「书放在哪个文件夹」。
    */
+  /**
+   * 小说库的「袋子」：把不同的类型 / 原作实体化成一条 pack（kind='novel'）。
+   * 书和袋子的关系仍用 characters.novel_group（= 袋子名），袋子挂在库的容器条目下。
+   */
+  app.get('/api/shelves/:id/novelbags', (req, res) => {
+    const db = getDb();
+    const shelfId = Number(req.params.id);
+    const shelf = db.prepare('SELECT * FROM shelves WHERE id = ?').get(shelfId);
+    if (!shelf) return res.status(404).json({ error: '库不存在' });
+    if (shelf.kind !== 'novel') return res.status(400).json({ error: '不是小说库' });
+    const container = ensureShelfContainer(shelfId);
+    if (!container) return res.status(404).json({ error: '小说库没有准备好' });
+
+    const rows = db
+      .prepare(
+        `SELECT p.*,
+                (SELECT COUNT(*) FROM characters c
+                  WHERE c.shelf_id = @shelfId AND c.is_container = 0
+                    AND COALESCE(c.novel_group,'') = CASE WHEN p.title = '未分类' THEN '' ELSE p.title END) AS book_count,
+                (SELECT c.cover_media_id FROM characters c
+                  WHERE c.shelf_id = @shelfId AND c.is_container = 0 AND c.cover_media_id IS NOT NULL
+                    AND COALESCE(c.novel_group,'') = CASE WHEN p.title = '未分类' THEN '' ELSE p.title END
+                  LIMIT 1) AS bag_cover
+           FROM packs p
+          WHERE p.character_id = @containerId AND p.kind = 'novel'
+          ORDER BY p.sort_order, p.id`
+      )
+      .all({ shelfId, containerId: container.id });
+
+    res.json({
+      shelf: { id: shelf.id, name: shelf.name, variant: shelf.variant || '' },
+      items: rows.map((p) => ({
+        id: p.id,
+        title: p.title,
+        tags: safeJson(p.tags),
+        bookCount: p.book_count || 0,
+        // 袋子自己的封面优先，没有就用组里第一本书的
+        coverMediaId: p.cover_media_id || p.bag_cover || null,
+        createdAt: p.created_at,
+      })),
+    });
+  });
+
+  app.post('/api/shelves/:id/novelbags', (req, res) => {
+    const db = getDb();
+    const shelfId = Number(req.params.id);
+    const shelf = db.prepare('SELECT * FROM shelves WHERE id = ?').get(shelfId);
+    if (!shelf) return res.status(404).json({ error: '库不存在' });
+    if (shelf.kind !== 'novel') return res.status(400).json({ error: '不是小说库' });
+    const title = String((req.body && req.body.title) || '').trim().slice(0, 40);
+    if (!title) return res.status(400).json({ error: '袋子名称不能为空' });
+    const container = ensureShelfContainer(shelfId);
+    if (!container) return res.status(404).json({ error: '小说库没有准备好' });
+    const dup = db
+      .prepare("SELECT id FROM packs WHERE character_id = ? AND kind = 'novel' AND title = ?")
+      .get(container.id, title);
+    if (dup) return res.status(409).json({ error: `已经有「${title}」这个袋子了` });
+    const id = Number(
+      db
+        .prepare(
+          `INSERT INTO packs(character_id, title, month, category, kind, tags, sort_order, created_at)
+           VALUES(?,?,NULL,NULL,'novel',?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?)`
+        )
+        .run(container.id, title, JSON.stringify([title]), container.id, nowIso()).lastInsertRowid
+    );
+    res.json({ id, title, bookCount: 0 });
+  });
+
   app.get('/api/shelves/:id/novel', (req, res) => {
     const db = getDb();
     const shelfId = Number(req.params.id);
@@ -1307,6 +1398,8 @@ export function createApp() {
     else if (isNovel) await ensureCharDirs(dirSlug, true);
     // 资源库：每张「作品」卡预置一个「官方」图包 + 对应目录
     else if (shelf.kind === 'resource') await ensureOfficialPack(db, id, dirSlug);
+    // 建书时填的类型 / 原作就是袋子名，顺手把袋子建出来
+    if (isNovel) ensureNovelBag(db, shelf.id, novelGroup);
     // 同人小说自动带「原作品名」标签 —— 资源库那张作品卡的「关联条目」正是按同名标签统计的
     if (isNovel && normalizeVariant(shelf.variant) === 'fanfic' && novelGroup) {
       applyTags(db, id, [...new Set([...(Array.isArray(b.tags) ? b.tags : []), novelGroup])]);
@@ -1413,6 +1506,8 @@ export function createApp() {
         if (isNovel) {
           if (typeof b.novelGroup === 'string') {
             db.prepare('UPDATE characters SET novel_group = ?, updated_at = ? WHERE id = ?').run(nextGroup, nowIso(), id);
+            // 填了一个新类型 / 原作，就顺手把这个袋子建出来
+            ensureNovelBag(db, shelf.id, nextGroup);
           }
           if (b.novelSubtype !== undefined) {
             db.prepare('UPDATE characters SET novel_subtype = ?, updated_at = ? WHERE id = ?').run(

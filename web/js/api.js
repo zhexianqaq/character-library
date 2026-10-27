@@ -102,6 +102,8 @@ export const api = {
 
   shelfCharacters: (shelfId, params) => req(`/api/shelves/${shelfId}/characters${qs(params)}`),
   novelShelf: (shelfId, params) => req(`/api/shelves/${shelfId}/novel${qs(params)}`),
+  novelBags: (shelfId) => req(`/api/shelves/${shelfId}/novelbags`),
+  createNovelBag: (shelfId, title) => json('POST')(`/api/shelves/${shelfId}/novelbags`, { title }),
   emojiShelf: (shelfId) => req(`/api/shelves/${shelfId}/emoji`),
   inboxShelf: (shelfId, params) => req(`/api/shelves/${shelfId}/inbox${qs(params)}`),
   resources: (shelfId) => req(`/api/shelves/${shelfId}/resources`),

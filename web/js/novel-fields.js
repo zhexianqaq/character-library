@@ -32,8 +32,9 @@ export const STATUS = ['连载', '完结', '暂停'];
  *
  * 六个字段两栏排（`half: true`），简介整行 —— 单列排下来太高，弹窗底部会被遮住。
  */
-export function novelFieldSet({ fan = false, groups = [], item = null } = {}) {
+export function novelFieldSet({ fan = false, groups = [], item = null, defaults = null } = {}) {
   const it = item || {};
+  const def = defaults || {};
   const fields = [
     {
       name: 'name',
@@ -53,7 +54,7 @@ export function novelFieldSet({ fan = false, groups = [], item = null } = {}) {
       // 不填就留空，别被静默填成第一个选项
       allowEmpty: true,
       options: groups,
-      value: it.novelGroup || '',
+      value: it.novelGroup || def.novelGroup || '',
       placeholder: fan ? '比如：原神' : '比如：玄幻',
       hint: fan ? '会自动打上同名标签' : '会作为磁盘文件夹名',
     },

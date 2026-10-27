@@ -45,7 +45,15 @@ export async function NovelView(root, shelfId, opts = {}) {
   let data = await api.novelShelf(id);
   let shelf = data.shelf;
   let items = data.items;
-  const state = { view: '', group: '', q: '', sort: 'words' };
+  /** 袋子（packs.kind='novel'）：库里按类型 / 原作分的书架 */
+  let bags = [];
+  try {
+    bags = (await api.novelBags(id)).items || [];
+  } catch {
+    bags = [];
+  }
+  // bag 为空 = 袋子列表；有值 = 打开的那个袋子（按 novel_group 对应）
+  const state = { view: '', bag: '', q: '', sort: 'words' };
   // 同人库：原作品名 → 资源库作品卡 id，用来在分组标题上给一个直达入口
   let workMap = new Map();
 
@@ -85,7 +93,7 @@ export async function NovelView(root, shelfId, opts = {}) {
 
   function visibleItems() {
     let list = items.filter((x) => !state.view || x.novelSubtype === state.view);
-    if (state.group) list = list.filter((x) => (x.novelGroup || '') === state.group);
+    if (state.bag) list = list.filter((x) => (x.novelGroup || '') === state.bag);
     const q = state.q.trim().toLowerCase();
     if (q) {
       list = list.filter((x) => `${x.name} ${x.author || ''} ${x.novelGroup || ''}`.toLowerCase().includes(q));
@@ -131,9 +139,9 @@ export async function NovelView(root, shelfId, opts = {}) {
 
   function paintMeta() {
     const words = items.reduce((a, x) => a + (x.wordCount || 0), 0);
-    const groups = knownGroups().length;
-    const parts = [`${fmtNum(items.length)} 本`, `${groups} 个${isFan() ? '原作' : '类型'}`];
+    const parts = [`${fmtNum(bags.length)} 个袋子`, `${fmtNum(items.length)} 本`];
     if (words) parts.push(wordsLabel(words));
+    if (state.bag) parts.unshift(state.bag);
     root.querySelector('[data-meta]').textContent = parts.join(' · ');
   }
 
@@ -150,51 +158,92 @@ export async function NovelView(root, shelfId, opts = {}) {
       .join('');
   }
 
+  /** 袋子卡片：外观沿用书卡片，只是元素是 button（袋子不是条目） */
+  function bagCard(b) {
+    const img = b.coverMediaId ? api.thumb(b.coverMediaId) : '';
+    return `<button class="char-card novel-card bag-card" data-bag="${esc(b.title)}" type="button">
+      <div class="cover">
+        <div class="cover-title"><span>${esc(b.title)}</span></div>
+        ${img ? `<img src="${img}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : ''}
+        <span class="sub-chip">小说袋</span>
+        ${b.bookCount ? `<span class="badge">${fmtNum(b.bookCount)}</span>` : ''}
+      </div>
+      <div class="info">
+        <div class="name">${esc(b.title)}</div>
+        <div class="sub">${b.bookCount ? `${b.bookCount} 本` : '还没有书'}</div>
+      </div>
+    </button>`;
+  }
+
   function paintBody() {
     const body = root.querySelector('[data-body]');
     if (!body) return;
-    const list = visibleItems();
     const count = root.querySelector('[data-count]');
-    if (count) count.textContent = list.length === items.length ? '' : `${list.length} 本`;
 
-    if (!list.length) {
-      body.innerHTML = `<div class="empty">
-        <b>${items.length ? '这个视图下还没有书' : '这个库还是空的'}</b>
-        ${
-          items.length
-            ? '换个分类看看，或者新建一本'
-            : `点右上角「＋ 新建小说」开始，${isFan() ? '原作品名' : '小说类型'}会成为磁盘上的文件夹`
-        }
-      </div>`;
+    // ① 袋子列表
+    if (!state.bag) {
+      const q = state.q.trim().toLowerCase();
+      const list = q ? bags.filter((b) => b.title.toLowerCase().includes(q)) : bags;
+      if (count) count.textContent = `${list.length} 个袋子`;
+      if (!list.length) {
+        body.innerHTML = `<div class="empty"><b>${bags.length ? '没有匹配的袋子' : '还没有袋子'}</b>${
+          bags.length
+            ? '换个关键词试试'
+            : `点「＋ 新建袋子」先分个类（比如玄幻、科幻）；新建小说时填的${
+                isFan() ? '原作品' : '类型'
+              }也会自动变成袋子`
+        }</div>`;
+        return;
+      }
+      body.innerHTML = `<div class="char-grid">${list.map(bagCard).join('')}</div>`;
+      body.querySelectorAll('[data-bag]').forEach((el) => {
+        el.addEventListener('click', () => {
+          state.bag = el.dataset.bag;
+          paintBody();
+          paintMeta();
+        });
+      });
+      body.querySelectorAll('img').forEach(fadeIn);
       return;
     }
 
-    body.innerHTML = buckets(list)
-      .map(([g, arr]) => {
-        // 同人库的分组名就是原作品名：资源库里有同名作品卡就给个直达入口
-        const rid = isFan() ? workMap.get(g) : null;
-        return `<section class="novel-group">
-          <h2 class="ng-head">
-            ${FOLDER_ICON}
-            <span>${esc(g)}</span>
-            <i>${arr.length}</i>
-            ${
-              rid
-                ? `<a class="ng-link" href="/r/${rid}" data-link title="打开资源库里的「${esc(g)}」">作品页 ↗</a>`
-                : ''
-            }
-          </h2>
-          <div class="char-grid">${arr.map(card).join('')}</div>
-        </section>`;
-      })
-      .join('');
-    body.querySelectorAll('img').forEach(fadeIn);
+    // ② 袋内的书
+    const list = visibleItems();
+    if (count) count.textContent = `${list.length} 本`;
+    const head = `<div class="bag-head">
+      <button class="bag-back" data-bag-back type="button">‹ 全部袋子</button>
+      <b>${esc(state.bag)}</b>
+      <span>${list.length} 本</span>
+    </div>`;
+    if (!list.length) {
+      body.innerHTML = `${head}<div class="empty">
+        <b>这个袋子里还没有书</b>点右上角「＋ 新建小说」，${isFan() ? '原作品' : '类型'}填「${esc(
+        state.bag
+      )}」就会放进来
+      </div>`;
+    } else {
+      body.innerHTML = `${head}<div class="char-grid">${list.map(card).join('')}</div>`;
+      body.querySelectorAll('img').forEach(fadeIn);
+    }
+    const backBtn = body.querySelector('[data-bag-back]');
+    if (backBtn) {
+      backBtn.addEventListener('click', () => {
+        state.bag = '';
+        paintBody();
+        paintMeta();
+      });
+    }
   }
 
   async function reload() {
     data = await api.novelShelf(id);
     shelf = data.shelf;
     items = data.items;
+    try {
+      bags = (await api.novelBags(id)).items || [];
+    } catch {
+      /* 袋子读不到就沿用旧的 */
+    }
     paintMeta();
     paintTabs();
     paintBody();
@@ -204,7 +253,13 @@ export async function NovelView(root, shelfId, opts = {}) {
   async function novelModal(item = null) {
     const groups = isFan() ? await fanficGroups() : [...new Set([...knownGroups(), ...ORIGIN_TYPES])];
     // 字段定义在 novel-fields.js：详情页「编辑资料」用的是同一份
-    const { fields, transform, className } = novelFieldSet({ fan: isFan(), groups, item });
+    const { fields, transform, className } = novelFieldSet({
+      fan: isFan(),
+      groups,
+      item,
+      // 在袋子里点「新建小说」：类型预填成这个袋子
+      defaults: !item && state.bag ? { novelGroup: state.bag } : null,
+    });
     const v = await openModal({
       title: item ? '编辑小说' : '新建小说',
       description: item
@@ -240,6 +295,7 @@ export async function NovelView(root, shelfId, opts = {}) {
              <div class="sh-meta" data-meta></div>
            </div>
            <span class="spacer"></span>
+           <button class="tb-btn" data-new-bag>＋ 新建袋子</button>
            <button class="tb-btn primary" data-new-novel>＋ 新建小说</button>
          </div>
          <div class="toolbar">
@@ -291,6 +347,27 @@ export async function NovelView(root, shelfId, opts = {}) {
       state.view = btn.dataset.v;
       paintTabs();
       paintBody();
+    });
+
+    root.querySelector('[data-new-bag]').addEventListener('click', async () => {
+      const v = await openModal({
+        title: '新建袋子',
+        description: '袋子就是按类型 / 原作分的书架，书可以后放进去。',
+        fields: [
+          { name: 'title', label: '袋子名称', required: true, placeholder: isFan() ? '比如：原神' : '比如：玄幻' },
+        ],
+        submitText: '创建',
+      });
+      if (!v) return;
+      try {
+        await api.createNovelBag(id, v.title);
+        bags = (await api.novelBags(id)).items || [];
+        toast(`已创建「${v.title}」`);
+        paintMeta();
+        paintBody();
+      } catch (err) {
+        toast(err.message || '创建失败');
+      }
     });
 
     root.querySelector('[data-new-novel]').addEventListener('click', async () => {
@@ -372,14 +449,14 @@ export async function NovelView(root, shelfId, opts = {}) {
       openContextMenu(e, [
         { label: '新建小说', onClick: () => root.querySelector('[data-new-novel]').click() },
         {
-          label: `只看${isFan() ? '原作品' : '类型'}`,
-          hint: state.group || '全部',
+          label: '打开袋子',
+          hint: state.bag || '全部',
           children: [
-            { label: '全部', hint: !state.group ? '当前' : '', onClick: () => setGroup('') },
-            ...knownGroups().map((g) => ({
-              label: g,
-              hint: state.group === g ? '当前' : '',
-              onClick: () => setGroup(g),
+            { label: '全部袋子', hint: !state.bag ? '当前' : '', onClick: () => setBag('') },
+            ...bags.map((b) => ({
+              label: b.title,
+              hint: state.bag === b.title ? '当前' : `${b.bookCount} 本`,
+              onClick: () => setBag(b.title),
             })),
           ],
         },
@@ -392,9 +469,10 @@ export async function NovelView(root, shelfId, opts = {}) {
     });
   }
 
-  function setGroup(g) {
-    state.group = g;
+  function setBag(g) {
+    state.bag = g;
     paintBody();
+    paintMeta();
   }
 
   function goto(bookId) {
