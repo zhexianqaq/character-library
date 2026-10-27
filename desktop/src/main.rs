@@ -163,6 +163,23 @@ fn port_open(port: u16) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
 }
 
+/// 关窗口前先请服务「自己退出」：它会 checkpoint 一次 WAL 再 exit(0)。
+/// 直接 TerminateProcess 偶尔会把 SQLite 停在 checkpoint 中间，最近写入的记录就没了。
+fn ask_shutdown(port: u16) {
+    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+    let mut stream = match TcpStream::connect_timeout(&addr, Duration::from_millis(400)) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(1500)));
+    let req = format!(
+        "POST /api/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    let _ = stream.write_all(req.as_bytes());
+    let mut buf = [0u8; 128];
+    let _ = stream.read(&mut buf);
+}
+
 /// 光看 TCP 连得上不够：刚杀掉的进程会留下一堆 TIME_WAIT，connect 照样能成功，
 /// 结果壳以为「服务在跑」，打开却是一张错误页。这里发一个真请求，拿到 200 才算数。
 fn service_ready(port: u16) -> bool {
@@ -342,6 +359,9 @@ fn main() {
         {
             // 服务是我们起的才由我们收尸；复用别人起的就别乱杀
             if let Some(mut c) = child.take() {
+                ask_shutdown(port);
+                std::thread::sleep(Duration::from_millis(900));
+                let _ = c.try_wait();
                 let _ = c.kill();
                 let _ = c.wait();
                 log("server stopped");

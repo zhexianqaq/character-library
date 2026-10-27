@@ -2762,6 +2762,23 @@ export function createApp() {
       if (tmpArchive) await fsp.unlink(tmpArchive).catch(() => {});
       if (archivePath && archivePath !== tmpArchive) await fsp.unlink(archivePath).catch(() => {});
     };
+    /**
+     * 解压失败时把压缩包留下来（挪到 .cache/failed/）。
+     * 以前失败也照删 —— 用户那边源文件早删了的话，就只剩「重新下载」一条路。
+     */
+    const keepArchive = async () => {
+      if (!archivePath) return null;
+      const dir = path.join(CACHE_DIR, 'failed');
+      try {
+        await fsp.mkdir(dir, { recursive: true });
+        const dest = path.join(dir, `${Date.now()}-${path.basename(archivePath)}`);
+        await fsp.rename(archivePath, dest);
+        archivePath = null;
+        return dest;
+      } catch {
+        return null;
+      }
+    };
 
     try {
       if (!char) {
@@ -2799,16 +2816,19 @@ export function createApp() {
       try {
         packed = await extractArchive(archivePath, workDir);
       } catch (err) {
+        const kept = await keepArchive();
         await cleanup();
-        return res.status(400).json({ error: err.message || '解压失败' });
+        return res.status(400).json({ error: err.message || '解压失败', keptArchive: kept });
       }
 
       // 只要图片 / 视频：压缩包里通常还有 readme、种子、网址快捷方式
       const media = packed.files.filter((f) => ['image', 'video'].includes(kindOfExt(path.extname(f.name))));
       if (!media.length) {
+        const kept = await keepArchive();
         await cleanup();
         return res.status(400).json({
           error: `压缩包里有 ${packed.files.length} 个文件，但没有图片或视频`,
+          keptArchive: kept,
         });
       }
 
@@ -3068,6 +3088,27 @@ export function createApp() {
   });
 
   app.get('/api/tasks', (req, res) => res.json({ warm: warmState }));
+
+  /**
+   * 优雅退出，只给桌面壳用。
+   *
+   * 壳关窗口时如果直接 TerminateProcess，SQLite 的 WAL 有可能停在 checkpoint 中间：
+   * 实测「刚导入的 69 条记录」在下一次启动后凭空消失（WAL 被截成 0 字节、主库没写完）。
+   * 这里让服务自己把 WAL 落盘再 exit，壳那边关了窗口等 600ms 才 kill。
+   */
+  app.post('/api/shutdown', (req, res) => {
+    const ip = String(req.ip || '');
+    if (!ip.includes('127.0.0.1')) return res.status(403).json({ error: '只允许本机调用' });
+    res.json({ ok: true });
+    setTimeout(() => {
+      try {
+        getDb().pragma('wal_checkpoint(TRUNCATE)');
+      } catch {
+        /* 库可能已经关了，退出优先 */
+      }
+      process.exit(0);
+    }, 120);
+  });
 
   // 兜底：不带版本前缀的请求一律协商缓存
   app.use(

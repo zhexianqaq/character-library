@@ -323,7 +323,10 @@ const bsdtar = () =>
 /** 跑一个外部命令，收集输出；超时 30 分钟（解 20GB 的包也够了） */
 function run(cmd, args, { timeout = 30 * 60 * 1000 } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { windowsHide: true });
+    // stdin 必须显式 ignore：UnRAR 这类控制台程序在没有终端时会去读 stdin 等输入，
+    // 而 spawn 默认给的是永不关闭的管道 —— 表现为「解压永远不结束」，进程挂在后台
+    // （实测 3 个 UnRAR.exe 卡死，接口一直没有响应）
+    const child = spawn(cmd, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
     const timer = setTimeout(() => {
@@ -369,7 +372,7 @@ async function extractWithTool(format, archiveAbs, destRoot) {
   const attempts = [];
   if (format === 'rar') {
     const un = unrar();
-    if (un) attempts.push({ cmd: un, args: ['x', '-y', '-idq', archiveAbs, destRoot + path.sep], name: 'UnRAR' });
+    if (un) attempts.push({ cmd: un, args: ['x', '-y', '-o+', '-idq', archiveAbs, destRoot + path.sep], name: 'UnRAR' });
   }
   const sz = sevenZip();
   if (sz) attempts.push({ cmd: sz, args: ['x', '-y', '-bd', `-o${destRoot}`, archiveAbs], name: '7-Zip' });
