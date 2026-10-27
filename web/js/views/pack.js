@@ -5,6 +5,7 @@ import { renderMasonry } from '../components/masonry.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openContextMenu, openMenuAtPoint } from '../components/context-menu.js';
 import { mediaMenu } from '../components/media-actions.js';
+import { packOptions, matchPack } from '../components/pack-choice.js';
 import { sortMedia, createMediaSort, mediaSortState, setMediaSort } from '../components/media-sort.js';
 import { addMediaMenuItems } from '../components/media-picker.js';
 import { bindDropUpload } from '../components/dropzone.js';
@@ -305,41 +306,31 @@ export async function PackView(root, id) {
           label: '目标图包',
           type: 'select',
           required: true,
-          options: [
-            { value: '__new__', label: '＋ 新建图包…' },
-            ...others.map((p) => ({
-              value: String(p.id),
-              label: `${p.category ? `${p.category} / ` : ''}${p.title}（${p.mediaCount}）`,
-            })),
-          ],
-          value: others.length ? String(others[0].id) : '__new__',
+          // 直接在输入框里打名字：不是已有图包就新建，省掉「再弹一个窗」那一步
+          editable: true,
+          placeholder: others.length ? '选择或输入新图包名称' : '输入新图包名称',
+          hint: '不是已有图包的名字，就会新建一个',
+          options: packOptions(others),
+          value: others.length ? String(others[0].id) : '',
         },
       ],
       submitText: '移动',
     });
     if (!v) return;
 
-    let packId = Number(v.packId);
-    if (v.packId === '__new__') {
-      const nv = await openModal({
-        title: '新建图包',
-        description: '建好后这些媒体会直接移进去。',
-        fields: [
-          { name: 'title', label: '图包名称', required: true, placeholder: '比如：夏日写真' },
-          { name: 'month', label: '日期（可选）', type: 'month' },
-        ],
-        submitText: '创建并移动',
-      });
-      if (!nv) return;
+    const wanted = String(v.packId || '').trim();
+    const hit = matchPack(others, wanted);
+    let packId = hit ? hit.id : 0;
+    if (!packId) {
       try {
         const created = await api.createPack(pack.character.id, {
-          title: nv.title,
-          month: nv.month,
+          title: wanted.slice(0, 60),
+          month: '',
           category: pack.category || null,
         });
         packId = created.id;
       } catch (err) {
-        toast(err.message || '创建失败');
+        toast(err.message || '创建图包失败');
         return;
       }
     }

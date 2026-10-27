@@ -59,8 +59,10 @@ export function openModal({
           options: opts,
           value: f.value || '',
           placeholder: f.placeholder || '',
-          editable: false,
-          allowEmpty: !!f.placeholder,
+          // f.editable：可以直接在下拉输入框里打一个新值（「目标图包」输入新名称就是新建）
+          editable: f.editable === true,
+          // 可输入时不要「空值项」：placeholder 只当输入框提示，不当选项
+          allowEmpty: f.editable === true ? false : !!f.placeholder,
           emptyLabel: f.placeholder || '全部',
         }) - 1;
         control = `<div class="dd-slot" data-dd-slot="${idx}"></div>`;

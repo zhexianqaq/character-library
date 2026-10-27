@@ -239,15 +239,24 @@ export async function InboxView(root, shelfId, opts = {}) {
     };
   }
 
-  /** 「加载更多」按钮：位置固定在外层，不跟瀑布流一起重画 */
+  /** 「加载更多」：滚到接近底部就自动拉下一批，按钮留着当兜底 / 重试 */
+  let loadingMore = false;
+  let moreFailed = false;
+  let moreObserver = null;
+
   function syncMore() {
     const box = bodyEl.querySelector('.inbox-more');
     if (!box) return;
-    box.hidden = items.length >= total;
+    const done = items.length >= total;
+    box.hidden = done;
     const btn = box.querySelector('[data-more]');
     if (btn) {
-      btn.disabled = false;
-      btn.textContent = '加载更多';
+      btn.disabled = loadingMore;
+      btn.textContent = loadingMore ? '加载中…' : '加载更多';
+    }
+    if (done && moreObserver) {
+      moreObserver.disconnect();
+      moreObserver = null;
     }
   }
 
@@ -255,21 +264,61 @@ export async function InboxView(root, shelfId, opts = {}) {
     bodyEl.innerHTML =
       '<div class="masonry" data-masonry></div>' +
       '<div class="inbox-more"><button class="tb-btn" data-more>加载更多</button></div>';
-    bodyEl.querySelector('[data-more]').addEventListener('click', onMore);
+    bodyEl.querySelector('[data-more]').addEventListener('click', () => {
+      moreFailed = false; // 手动点就是重试
+      loadMore();
+    });
+    observeMore();
   }
 
-  async function onMore(e) {
-    const btn = e.currentTarget;
-    if (btn.disabled) return;
-    btn.disabled = true;
-    btn.textContent = '加载中…';
+  /**
+   * 监听底部那一块：进入视口就自动加载。
+   * 提前 600px 触发，滚到底时下一批通常已经画好了，不会看到「空一段再蹦出来」。
+   */
+  function observeMore() {
+    if (moreObserver) moreObserver.disconnect();
+    const box = bodyEl.querySelector('.inbox-more');
+    if (!box || typeof IntersectionObserver === 'undefined') return;
+    moreObserver = new IntersectionObserver(
+      (entries) => {
+        if (moreFailed) return;
+        if (entries.some((e) => e.isIntersecting)) loadMore();
+      },
+      { rootMargin: '600px 0px' }
+    );
+    moreObserver.observe(box);
+  }
+
+  async function loadMore() {
+    if (loadingMore || items.length >= total) return;
+    loadingMore = true;
+    syncMore();
     page += 1;
     try {
       await load({ append: true });
     } catch (err) {
       page -= 1;
+      // 失败就别再自动试了，按钮还在，用户点一下算重试
+      moreFailed = true;
       toast(err.message || '加载失败');
+    } finally {
+      loadingMore = false;
       syncMore();
+      if (!moreFailed) fillViewport();
+    }
+  }
+
+  /**
+   * 一批没铺满视口时接着拉。
+   * IntersectionObserver 只在「相交状态变化」时回调 —— 内容不满一屏，
+   * 哨兵一直停在视野里，不主动检查的话就只会加载一批然后卡住。
+   */
+  function fillViewport() {
+    const box = bodyEl.querySelector('.inbox-more');
+    if (!box || box.hidden) return;
+    if (box.getBoundingClientRect().top < window.innerHeight + 600) {
+      // 走 microtask，别在 finally 里同步递归
+      queueMicrotask(() => loadMore());
     }
   }
 
@@ -285,6 +334,7 @@ export async function InboxView(root, shelfId, opts = {}) {
     if (!canAppend) {
       buildGridShell();
       renderedCount = 0;
+      moreFailed = false; // 换了筛选 / 重新加载：上一轮的失败不算数
     }
     const target = bodyEl.querySelector('[data-masonry]');
     const from = renderedCount;
@@ -796,5 +846,11 @@ export async function InboxView(root, shelfId, opts = {}) {
   paintStats();
   renderGrid();
 
-  return () => document.removeEventListener('keydown', onKey);
+  return () => {
+    document.removeEventListener('keydown', onKey);
+    if (moreObserver) {
+      moreObserver.disconnect();
+      moreObserver = null;
+    }
+  };
 }
