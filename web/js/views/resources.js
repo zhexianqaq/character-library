@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fadeIn, toast, copyText, charDeleteMessage } from '../util.js';
+import { esc, fmtNum, fadeIn, toast, copyText, charDeleteMessage, splitAliases } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openContextMenu } from '../components/context-menu.js';
@@ -26,6 +26,13 @@ async function editResourceModal(item = null) {
         value: item ? item.category || RES_CATS[0] : RES_CATS[0],
         required: true,
       },
+      {
+        name: 'aliases',
+        label: '别名',
+        value: item ? (item.aliases || []).join('、') : '',
+        placeholder: '简称、原名、日文名、英文名，用顿号或逗号隔开',
+        hint: '游戏 / 动画 / 电影 / 剧集都支持；详情页里也能直接改',
+      },
       { name: 'intro', label: '简介', type: 'textarea', value: item ? item.intro || '' : '', placeholder: '选填' },
       {
         name: 'tags',
@@ -42,7 +49,7 @@ async function editResourceModal(item = null) {
     .split(/[、,，\s]+/)
     .map((t) => t.trim())
     .filter(Boolean);
-  return { name: v.name.trim(), category: v.category, intro: v.intro || '', tags };
+  return { name: v.name.trim(), category: v.category, intro: v.intro || '', tags, aliases: splitAliases(v.aliases) };
 }
 
 export async function ResourcesView(root, shelfId, opts = {}) {
@@ -348,7 +355,13 @@ export async function ResourcesView(root, shelfId, opts = {}) {
     const v = await editResourceModal(item);
     if (!v) return;
     try {
-      await api.updateCharacter(item.id, { name: v.name, category: v.category, intro: v.intro, tags: v.tags });
+      await api.updateCharacter(item.id, {
+        name: v.name,
+        category: v.category,
+        intro: v.intro,
+        tags: v.tags,
+        aliases: v.aliases,
+      });
       toast('已保存');
       await reload();
     } catch (err) {

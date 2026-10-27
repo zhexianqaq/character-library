@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fmtBytes, fadeIn, toast, debounce, copyText, deleteSummary } from '../util.js';
+import { esc, fmtNum, fmtBytes, fadeIn, toast, debounce, copyText, deleteSummary, splitAliases } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { openModal, confirmDialog } from '../components/modal.js';
@@ -122,6 +122,7 @@ export async function CharacterView(root, id) {
           <div class="hero-body">
             <div class="stat-grid">${stats}</div>
             <div class="platform-pane" data-platforms></div>
+            <div class="alias-pane" data-aliases></div>
             <div class="hero-intro" data-intro></div>
           </div>
         </div>
@@ -174,6 +175,7 @@ export async function CharacterView(root, id) {
     root.querySelector('[data-hero]').innerHTML = heroHtml();
     paintTags();
     paintPlatforms();
+    paintAliases();
     paintIntro();
   }
 
@@ -615,11 +617,73 @@ export async function CharacterView(root, id) {
     }
   }
 
+  /**
+   * 别名栏：简称 / 日文名 / 英文名。
+   *
+   * 出处是一行一个可编辑卡片（条目可能有十几个账号），别名一般就两三条，
+   * 所以整栏点开一个弹窗一次改完，比逐个 chip 增删省事。
+   */
+  function paintAliases() {
+    const el = root.querySelector('[data-aliases]');
+    if (!el) return;
+    const list = Array.isArray(c.aliases) ? c.aliases : [];
+    el.innerHTML =
+      `<div class="pf-head"><span>别名</span><button class="pf-edit" data-add-alias title="编辑别名" aria-label="编辑别名">＋</button></div>` +
+      `<div class="alias-list">${
+        list.length
+          ? list.map((a) => `<span class="alias-chip" title="${esc(a)}">${esc(a)}</span>`).join('')
+          : '<span class="alias-empty">简称 / 日文名 / 英文名</span>'
+      }</div>`;
+  }
+
+  async function editAliases() {
+    const cur = Array.isArray(c.aliases) ? c.aliases : [];
+    const v = await openModal({
+      title: '编辑别名',
+      description: `简称、日文名、英文名都放这里 —— 一行一个，也可以直接用逗号隔开。搜${noun()}时别名也参与匹配。`,
+      fields: [
+        {
+          name: 'aliases',
+          label: '别名',
+          type: 'textarea',
+          value: cur.join('\n'),
+          placeholder: 'FGO\nFate/Grand Order\nフェイト・グランドオーダー',
+        },
+      ],
+      submitText: '保存',
+    });
+    if (!v) return;
+    const next = String(v.aliases || '')
+      .split(/[,，、\n]+/)
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .slice(0, 20);
+    const prev = c.aliases;
+    c.aliases = next;
+    paintAliases();
+    try {
+      await api.updateCharacter(c.id, { aliases: next });
+      toast(next.length ? '别名已保存' : '别名已清空');
+    } catch (err) {
+      c.aliases = prev;
+      paintAliases();
+      toast(err.message || '保存失败');
+    }
+  }
+
   function paintIntro() {
     const el = root.querySelector('[data-intro]');
     if (!el) return;
     el.classList.toggle('is-empty', !c.intro);
     el.textContent = c.intro || '点击写点简介…';
+  }
+
+  function bindAliases() {
+    root.addEventListener('click', (e) => {
+      if (!e.target.closest('[data-aliases]')) return;
+      // 点的是别名栏里的任何地方（标题、+、chip、空白）都进编辑
+      editAliases();
+    });
   }
 
   function bindIntro() {
@@ -1520,6 +1584,13 @@ export async function CharacterView(root, id) {
           ? set.fields
           : [
               { name: 'name', label: `${noun()}名`, value: c.name, required: true },
+              {
+                name: 'aliases',
+                label: '别名',
+                value: (c.aliases || []).join('、'),
+                placeholder: '简称、日文名、英文名，用顿号或逗号隔开',
+                hint: '详情页里点「别名」那一栏也能直接改',
+              },
               { name: 'intro', label: '简介', type: 'textarea', value: c.intro || '' },
             ],
         submitText: '保存',
@@ -1530,7 +1601,8 @@ export async function CharacterView(root, id) {
         toast(`请填${isFanficShelf() ? '原作品' : '小说类型'}`);
         return;
       }
-      await api.updateCharacter(c.id, v);
+      // 弹窗里是「用顿号隔开的一行字」，接口要数组
+      await api.updateCharacter(c.id, typeof v.aliases === 'string' ? { ...v, aliases: splitAliases(v.aliases) } : v);
       c = await api.character(id);
       paint();
       toast('已保存');
@@ -1574,6 +1646,7 @@ export async function CharacterView(root, id) {
   bindTopbar(root);
   paint();
   paintResNote();
+  bindAliases();
   bindIntro();
   bindToolbar();
   mountPackSort();

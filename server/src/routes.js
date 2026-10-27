@@ -117,6 +117,18 @@ function packTagMap(db, charId) {
   return map;
 }
 
+/** 别名：简称 / 日文名 / 英文名。去空、去重、限长，最多 20 条 */
+function cleanAliases(v) {
+  if (!Array.isArray(v)) return [];
+  const out = [];
+  for (const x of v) {
+    const t = String(x || '').trim().slice(0, 60);
+    if (t && !out.includes(t)) out.push(t);
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
 function mapChar(row, tags) {
   return {
     id: row.id,
@@ -138,6 +150,7 @@ function mapChar(row, tags) {
     bytes: row.total_bytes ?? 0,
     tags: tags || [],
     platforms: safeJson(row.platforms),
+    aliases: safeJson(row.aliases),
     shelf: {
       id: row.shelf_id,
       name: row.shelf_name || '',
@@ -724,7 +737,7 @@ export function createApp() {
     const where = ['c.shelf_id = @shelfId', 'c.is_container = 0'];
     const params = { shelfId };
     if (q) {
-      where.push('(c.name LIKE @q OR c.account LIKE @q OR c.author LIKE @q)');
+      where.push('(c.name LIKE @q OR c.account LIKE @q OR c.author LIKE @q OR c.aliases LIKE @q)');
       params.q = `%${q}%`;
     }
     const order =
@@ -1202,6 +1215,8 @@ export function createApp() {
         coverMediaId: row.cover || null,
         // ownCoverId = 资源自己设过的封面（null 表示用自动借来的）
         ownCoverId: row.cover_media_id || null,
+        // 资源详情是手写字段（不走 mapChar），新增列必须在这里也带出来一次
+        aliases: safeJson(row.aliases),
         tags: tagsOf(db, row.id).filter((t) => t !== row.name),
         shelf: { id: row.shelf_id, name: row.shelf_name || '', kind: row.shelf_kind || 'resource' },
       },
@@ -1246,9 +1261,9 @@ export function createApp() {
     const ts = nowIso();
     const info = db
       .prepare(
-        `INSERT INTO characters(shelf_id, name, account, intro, dir_slug, category,
+        `INSERT INTO characters(shelf_id, name, account, intro, dir_slug, category, aliases,
            novel_group, novel_subtype, author, word_count, novel_status, sort_order, created_at, updated_at)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM characters WHERE shelf_id=?),?,?)`
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM characters WHERE shelf_id=?),?,?)`
       )
       .run(
         shelfId,
@@ -1257,6 +1272,7 @@ export function createApp() {
         String(b.intro || '').slice(0, 20000),
         dirSlug,
         String(b.category || '').trim().slice(0, 20) || null,
+        JSON.stringify(cleanAliases(b.aliases)),
         isNovel ? novelGroup : null,
         isNovel ? pickNovelSubtype(shelf, b.novelSubtype) : null,
         isNovel ? String(b.author || '').trim().slice(0, 60) || null : null,
@@ -1352,6 +1368,13 @@ export function createApp() {
           );
         }
         if (Array.isArray(b.tags)) applyTags(db, id, b.tags);
+        if (Array.isArray(b.aliases)) {
+          db.prepare('UPDATE characters SET aliases = ?, updated_at = ? WHERE id = ?').run(
+            JSON.stringify(cleanAliases(b.aliases)),
+            nowIso(),
+            id
+          );
+        }
         if (Array.isArray(b.platforms)) {
           const clean = b.platforms
             .filter((x) => x && (String(x.handle || '').trim() || String(x.url || '').trim()))

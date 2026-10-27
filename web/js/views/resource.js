@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fadeIn, toast, copyText, charDeleteMessage } from '../util.js';
+import { esc, fmtNum, fadeIn, toast, copyText, charDeleteMessage, splitAliases } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openTagPicker } from '../components/tag-picker.js';
@@ -34,6 +34,7 @@ export async function ResourceView(root, id) {
              <div class="chip-row" data-tags></div>
              <div class="hero-body">
                <div class="stat-grid" data-stats></div>
+               <div class="alias-pane" data-aliases></div>
                <div class="hero-intro" data-intro></div>
              </div>
            </div>
@@ -71,7 +72,57 @@ export async function ResourceView(root, id) {
       ? `<img src="${cover}" alt="">`
       : '<div class="cover-empty">无封面</div>';
     paintTags();
+    paintAliases();
     paintIntro();
+  }
+
+  /** 别名栏：简称 / 日文名 / 英文名。游戏、动画、电影、剧集都走这一栏 */
+  function paintAliases() {
+    const el = root.querySelector('[data-aliases]');
+    if (!el) return;
+    const list = Array.isArray(r.aliases) ? r.aliases : [];
+    el.innerHTML =
+      `<div class="pf-head"><span>别名</span><button class="pf-edit" data-add-alias title="编辑别名" aria-label="编辑别名">＋</button></div>` +
+      `<div class="alias-list">${
+        list.length
+          ? list.map((a) => `<span class="alias-chip" title="${esc(a)}">${esc(a)}</span>`).join('')
+          : '<span class="alias-empty">简称 / 日文名 / 英文名</span>'
+      }</div>`;
+  }
+
+  async function editAliases() {
+    const cur = Array.isArray(r.aliases) ? r.aliases : [];
+    const v = await openModal({
+      title: '编辑别名',
+      description: '简称、原名、日文名、英文名都放这里 —— 一行一个，也可以直接用逗号隔开。',
+      fields: [
+        {
+          name: 'aliases',
+          label: '别名',
+          type: 'textarea',
+          value: cur.join('\n'),
+          placeholder: 'FGO\nFate/Grand Order\nフェイト・グランドオーダー',
+        },
+      ],
+      submitText: '保存',
+    });
+    if (!v) return;
+    const next = String(v.aliases || '')
+      .split(/[,，、\n]+/)
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .slice(0, 20);
+    const prev = r.aliases;
+    r.aliases = next;
+    paintAliases();
+    try {
+      await api.updateCharacter(r.id, { aliases: next });
+      toast(next.length ? '别名已保存' : '别名已清空');
+    } catch (err) {
+      r.aliases = prev;
+      paintAliases();
+      toast(err.message || '保存失败');
+    }
   }
 
   /** 编辑资源标签；资源名本身始终留在标签里，它是关联的依据 */
@@ -102,6 +153,9 @@ export async function ResourceView(root, id) {
     el.classList.toggle('is-empty', !r.intro);
     el.textContent = r.intro || '点击写点简介…';
   }
+
+  // 别名栏整块可点（标题、＋、chip、空白都行）
+  root.querySelector('[data-aliases]').addEventListener('click', editAliases);
 
   root.querySelector('[data-intro]').addEventListener('click', (e) => {
     const el = e.currentTarget;
@@ -255,6 +309,13 @@ export async function ResourceView(root, id) {
           options: RES_CATS.map((c) => ({ value: c, label: c })),
           value: r.category || RES_CATS[0],
         },
+        {
+          name: 'aliases',
+          label: '别名',
+          value: (r.aliases || []).join('、'),
+          placeholder: '简称、原名、日文名、英文名，用顿号或逗号隔开',
+          hint: '详情页里点「别名」那一栏也能直接改',
+        },
         { name: 'intro', label: '简介', type: 'textarea', value: r.intro || '' },
         {
           name: 'coverMediaId',
@@ -278,6 +339,7 @@ export async function ResourceView(root, id) {
         name: v.name,
         category: v.category,
         intro: v.intro,
+        aliases: splitAliases(v.aliases),
         coverMediaId: v.coverMediaId ? Number(v.coverMediaId) : null,
       });
       d = await api.resource(id);

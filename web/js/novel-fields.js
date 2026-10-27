@@ -7,6 +7,8 @@
  * `transform` 负责把「万字」换算成「字」（库里存原始字数）。
  */
 
+import { splitAliases } from './util.js';
+
 /** 原创库的常用类型；datalist 可手输，没列出来的照样能用 */
 export const ORIGIN_TYPES = [
   '玄幻',
@@ -75,11 +77,19 @@ export function novelFieldSet({ fan = false, groups = [], item = null } = {}) {
       options: STATUS,
       value: it.novelStatus || '完结',
     },
+    {
+      name: 'aliases',
+      label: '别名',
+      type: 'textarea',
+      value: (it.aliases || []).join('\n'),
+      placeholder: '原名、译名、简称，一行一个（选填）',
+    },
     { name: 'intro', label: '简介', type: 'textarea', value: it.intro || '', placeholder: '选填' },
   ];
 
   const transform = (val) => ({
     name: String(val.name || '').trim(),
+    aliases: splitAliases(val.aliases),
     novelGroup: String(val.novelGroup || '').trim(),
     novelSubtype: val.novelSubtype || '',
     author: String(val.author || '').trim(),

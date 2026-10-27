@@ -114,6 +114,8 @@ function migrate(d) {
     if (!cols.includes(column)) d.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
   };
   addColumnIfMissing('characters', 'platforms', `platforms TEXT NOT NULL DEFAULT '[]'`);
+  // 别名：简称 / 日文名 / 英文名，JSON 数组；人物、角色、资源（游戏/动画/电影/剧集）共用
+  addColumnIfMissing('characters', 'aliases', `aliases TEXT NOT NULL DEFAULT '[]'`);
   // 小库：官图 / cosplay / 同人（只对虚拟角色库有意义，人物库留空）
   addColumnIfMissing('packs', 'category', `category TEXT`);
   // 图包 / 单个媒体自己的标签（JSON 数组），媒体最终标签还要并上角色标签与库标签

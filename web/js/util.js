@@ -191,6 +191,21 @@ export function columnCount(width, colW = 120, gap = 8) {
   return Math.max(1, Math.floor((width + gap) / (colW + gap)));
 }
 
+/**
+ * 别名拆分：「FGO、Fate/Grand Order」→ ['FGO','Fate/Grand Order']。
+ * 中英文逗号、顿号、分号、换行都算分隔符；数组直接洗一遍。
+ */
+export function splitAliases(v) {
+  const raw = Array.isArray(v) ? v : String(v || '').split(/[,，、;；\n]+/);
+  const out = [];
+  for (const x of raw) {
+    const t = String(x || '').trim().slice(0, 60);
+    if (t && !out.includes(t)) out.push(t);
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
 /** 让图片淡入，避免加载完成时闪一下 */
 export function fadeIn(img) {
   if (!img) return;
