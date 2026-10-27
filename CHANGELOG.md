@@ -5,6 +5,26 @@
 > 功能索引（每个功能是哪一版加的）、版本历史总表、提交与 tag 约定，见 **[README.md](README.md#功能一览)**。
 > 本文件只记「每个版本具体改了什么、踩到了什么坑」。
 
+## v3.42 — 桌面壳 `资料库.exe`（单文件，700 KB）
+
+双击一个 exe 就能用：不用开命令行、不用浏览器。**页面还是 `web/` 那一套，一行 HTML 都没改。**
+
+- 技术栈 `desktop/`：Rust + tao + wry（WebView2 官方 Rust 绑定），`cargo build --release`
+  出去 **700 KB 单文件**，静态链接 CRT，不依赖任何 dll；只要系统有 WebView2 Runtime（Win11 自带）。
+- 启动顺序：找 Node（`AMS_NODE` → `PATH` → `Program Files\nodejs` → WorkBuddy 内置目录）→
+  起 `server/src/index.js`（隐藏窗口，stdout/stderr 进 `%LOCALAPPDATA%\ams-desktop\server.log`）→
+  轮询到服务健康 → 开窗口加载 `http://127.0.0.1:7788`。找不到 Node / 程序目录 / 端口被占时，
+  显示一张能点「重试」的说明页，而不是一张浏览器错误页。
+- **复用而不是抢端口**：端口上已经有健康的服务就直接连（比如用户先跑了 start.bat）。
+- **关窗即停**：服务是壳起的，关窗口会 kill 掉；复用别人的则不动。
+- **F5 / Ctrl+R 刷新**：WebView2 里浏览器快捷键默认不生效，壳在页面加载前注入一段脚本，
+  在**捕获阶段**拦 F5 / Ctrl+R 调 `location.reload()`，冒泡阶段不拦，不影响页面自己的键盘逻辑。
+- 健康检查一开始只看 TCP 连得上，结果踩坑：**刚杀掉的进程会留下一堆 TIME_WAIT，`connect` 照样成功**，
+  壳以为服务在跑，打开却是一张错误页 → 改成发一个真请求（GET `/api/overview` 要 200）才算就绪。
+
+构建：`node desktop/build.mjs`（cargo build --release + 拷到项目根）。需要 Rust + VS2022 Build Tools。
+**exe 必须待在项目根**，它从自己所在位置向上找 `server/src/index.js`；要放桌面就建快捷方式。
+
 ## v3.41 — 压缩包拖进来就自动解压入库
 
 以前拖一个 zip 进来只会得到「不支持的文件类型」。现在压缩包是**一等公民**：

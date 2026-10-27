@@ -15,6 +15,11 @@ shots/
 tools/survey.json
 *.log
 
+# 桌面壳：Rust 构建产物与 exe 都是生成物
+desktop/target/
+/资料库.exe
+/资料库.exe.WebView2/
+
 # 系统
 .DS_Store
 Thumbs.db
