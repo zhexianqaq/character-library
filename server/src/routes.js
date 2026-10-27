@@ -3126,6 +3126,183 @@ export function createApp() {
   app.get('/api/tasks', (req, res) => res.json({ warm: warmState }));
 
   /**
+   * 从本机绝对路径导入（只给桌面壳用）。
+   *
+   * 浏览器拖拽只给字节、不给路径；壳的 drop 事件拿得到真实路径 ——
+   * 这是「导入完把源文件删掉」的唯一合法入口。
+   * body: { paths: string[], charId, packId?, category?, password?, move?: boolean }
+   */
+  app.post('/api/import/paths', async (req, res) => {
+    const db = getDb();
+    const b = req.body || {};
+    const paths = (Array.isArray(b.paths) ? b.paths : [])
+      .map((p) => String(p || '').trim())
+      .filter(Boolean);
+    if (!paths.length) return res.status(400).json({ error: '没有收到路径' });
+
+    const charId = Number(b.charId);
+    const char = db.prepare('SELECT * FROM characters WHERE id = ?').get(charId);
+    if (!char) return res.status(404).json({ error: '角色不存在' });
+
+    const forcedPackId = b.packId ? Number(b.packId) : null;
+    const category = String(b.category || '').trim().slice(0, 20) || null;
+    const password = String(b.password || '').slice(0, 128);
+    const move = b.move !== false;
+    const shelfRow = db.prepare('SELECT kind FROM shelves WHERE id = ?').get(char.shelf_id);
+    const shelfKind = (shelfRow && shelfRow.kind) || '';
+
+    const added = [];
+    const skipped = [];
+    const removed = [];
+    const kept = [];
+    const workDirs = [];
+
+    const tmpName = (ext) => `import-${Date.now()}-${Math.random().toString(16).slice(2, 8)}${ext}`;
+
+    const collectMedia = async (dir) => {
+      const out = [];
+      const stack = [dir];
+      while (stack.length) {
+        const cur = stack.pop();
+        const entries = await fsp.readdir(cur, { withFileTypes: true }).catch(() => []);
+        for (const e of entries) {
+          const full = path.join(cur, e.name);
+          if (e.isDirectory()) stack.push(full);
+          else if (['image', 'video'].includes(kindOfExt(path.extname(e.name)))) out.push(full);
+        }
+      }
+      return out.sort((x, y) =>
+        path.basename(x).localeCompare(path.basename(y), 'zh-Hans-CN', { numeric: true })
+      );
+    };
+
+    /** 库里确实有这份内容（记录 + 实体文件都在），才允许删源 */
+    const libHasCopy = async (abs) => {
+      try {
+        const sha = await hashFileOf(abs);
+        const row = db
+          .prepare('SELECT rel_path FROM media WHERE character_id = ? AND sha256 = ?')
+          .get(charId, sha);
+        return !!(row && fs.existsSync(absPathOf(row.rel_path)));
+      } catch {
+        return false;
+      }
+    };
+
+    try {
+      for (const raw of paths) {
+        const abs = path.resolve(raw);
+        let st;
+        try {
+          st = await fsp.stat(abs);
+        } catch {
+          skipped.push({ name: raw, reason: '路径不存在' });
+          continue;
+        }
+
+        let batch = [];
+        let packForThis = forcedPackId;
+        let archiveName = '';
+
+        if (st.isDirectory()) {
+          const files = await collectMedia(abs);
+          if (!files.length) {
+            skipped.push({ name: path.basename(abs), reason: '目录里没有图片或视频' });
+            continue;
+          }
+          await fsp.mkdir(INBOX_DIR, { recursive: true });
+          for (const f of files) {
+            const tmp = path.join(INBOX_DIR, tmpName(path.extname(f)));
+            await fsp.copyFile(f, tmp);
+            batch.push({ path: tmp, name: path.basename(f) });
+          }
+        } else if (isArchiveName(path.basename(abs))) {
+          const workDir = await fsp.mkdtemp(path.join(CACHE_DIR, 'unzip-'));
+          workDirs.push(workDir);
+          let packed;
+          try {
+            packed = await extractArchive(abs, workDir, { password });
+          } catch (err) {
+            skipped.push({ name: path.basename(abs), reason: err.message || '解压失败', code: err.code });
+            continue;
+          }
+          archiveName = path.basename(abs);
+          const media = packed.files.filter((f) =>
+            ['image', 'video'].includes(kindOfExt(path.extname(f.name)))
+          );
+          if (!media.length) {
+            skipped.push({ name: archiveName, reason: `解出 ${packed.files.length} 个文件，没有图片或视频` });
+            continue;
+          }
+          batch = media.map((f) => ({ path: f.abs, name: f.name }));
+        } else {
+          const kind = kindOfExt(path.extname(abs));
+          if (!kind || kind === 'file') {
+            skipped.push({ name: path.basename(abs), reason: '不支持的文件类型' });
+            continue;
+          }
+          await fsp.mkdir(INBOX_DIR, { recursive: true });
+          const tmp = path.join(INBOX_DIR, tmpName(path.extname(abs)));
+          await fsp.copyFile(abs, tmp);
+          batch = [{ path: tmp, name: path.basename(abs) }];
+        }
+
+        // 压缩包且没指定图包 → 按包名建一个（和网页拖拽同一套规则）
+        if (archiveName && !packForThis && (!char.is_container || shelfKind === 'loose')) {
+          packForThis = ensureNamedPack(db, charId, titleFromArchive(archiveName), category).id;
+        }
+
+        const out = await ingestFiles(db, char, shelfKind, batch, {
+          forcedPackId: packForThis,
+          category,
+        });
+        added.push(...out.added);
+        skipped.push(...out.skipped);
+
+        if (!move) continue;
+
+        if (st.isDirectory()) {
+          let gone = 0;
+          const files = await collectMedia(abs);
+          for (const f of files) {
+            if (await libHasCopy(f)) {
+              await fsp.unlink(f).catch(() => {});
+              gone += 1;
+            } else {
+              kept.push(f);
+            }
+          }
+          removed.push(`${path.basename(abs)}/ (${gone}/${files.length})`);
+        } else if (archiveName) {
+          // 压缩包本身不入库：解出来的文件要么新入库、要么全是重复，才认为可以删
+          const allOk = out.added.length > 0 || out.skipped.every((s) => s.reason === '重复文件');
+          if (allOk) {
+            await fsp
+              .unlink(abs)
+              .then(() => removed.push(abs))
+              .catch(() => kept.push(abs));
+          } else {
+            kept.push(abs);
+          }
+        } else if (await libHasCopy(abs)) {
+          await fsp
+            .unlink(abs)
+            .then(() => removed.push(abs))
+            .catch(() => kept.push(abs));
+        } else {
+          kept.push(abs);
+        }
+      }
+
+      res.json({ added: added.length, ids: added, skipped, removed, kept });
+    } finally {
+      await Promise.all(
+        workDirs.map((d) => fsp.rm(d, { recursive: true, force: true, maxRetries: 2 }).catch(() => {}))
+      );
+    }
+  });
+
+  /**
    * 优雅退出，只给桌面壳用。
    *
    * 壳关窗口时如果直接 TerminateProcess，SQLite 的 WAL 有可能停在 checkpoint 中间：

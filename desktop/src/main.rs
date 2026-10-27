@@ -8,12 +8,14 @@
 //! 之所以要有壳：浏览器拖拽只给字节、不给路径（File 对象没有 path），
 //! 壳能拿到真实路径，后续「拖进来就解压入库、把源包删掉」才有得做。
 
+use std::cell::RefCell;
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tao::dpi::LogicalSize;
@@ -244,6 +246,23 @@ color:#fff;font-size:13px;cursor:pointer}}
     )
 }
 
+/// 路径要拼进 JS 字符串，反斜杠和引号必须转义（Windows 路径满屏反斜杠）
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn main() {
     let port: u16 = env::var("AMS_PORT")
         .ok()
@@ -313,6 +332,28 @@ fn main() {
         })
         .with_ipc_handler(|req| log(&format!("page: {}", req.body())));
 
+    // 拖进窗口的文件：只有壳知道它在磁盘上的真实路径（浏览器拿到的只是字节），
+    // 拿到之后交给页面，由页面调 /api/import/paths —— 入库成功才能删掉源文件。
+    let webview_slot: Rc<RefCell<Option<wry::WebView>>> = Rc::new(RefCell::new(None));
+    let slot_for_drop = webview_slot.clone();
+    let builder = builder.with_drag_drop_handler(move |event| {
+        if let wry::DragDropEvent::Drop { paths, .. } = event {
+            let list = paths
+                .iter()
+                .map(|p| format!("\"{}\"", json_escape(&p.to_string_lossy())))
+                .collect::<Vec<_>>()
+                .join(",");
+            log(&format!("drop {} path(s)", paths.len()));
+            if let Some(w) = slot_for_drop.borrow().as_ref() {
+                let _ = w.evaluate_script(&format!(
+                    "window.__amsDrop && window.__amsDrop([{list}])"
+                ));
+            }
+            return true;
+        }
+        false
+    });
+
     let builder = if ready {
         builder.with_url(format!("http://127.0.0.1:{port}"))
     } else {
@@ -346,9 +387,11 @@ fn main() {
         builder.with_html(body)
     };
 
-    let _webview = builder
+    // WebView 必须活到事件循环结束，交给 Rc 托管（拖拽回调里也要用）
+    let webview = builder
         .build(&window)
         .expect("webview2 runtime is required");
+    *webview_slot.borrow_mut() = Some(webview);
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
