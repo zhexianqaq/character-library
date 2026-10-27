@@ -748,7 +748,24 @@ npm run shot -- "http://127.0.0.1:7788/c/1" "../shots/char.png" 1440 1100 4000
 参数：`<url> <输出路径> [宽] [高] [等待毫秒]`。等待给够时间让图片加载，否则会拍出一片灰块。
 脚本同时会把页面的 JS 报错打出来——`console errors: 0` 才算干净。
 
+### 批量把某个小库退回「全部库」
+
+```bash
+node tools/eject-official.mjs                       # 只统计，不动文件
+node tools/eject-official.mjs --apply               # 把「官图」小库整个退回全部库 → 未分发
+node tools/eject-official.mjs --keep 鸣潮 --apply    # 保留某个作品（出处或标签命中就算）
+node tools/eject-official.mjs --dir /cosplay/ --apply  # 换个目录片段
+```
+
+- 判定看**磁盘路径**（`m.rel_path LIKE %/官图/%`），不看 `packs.category` ——
+  官图小库里还有一批「未分类」包的媒体，按包筛会漏。
+- 实际调用 `POST /api/media/eject`（批量 150 条一次），走的是同一套「搬文件 + 写 journal + 失败回滚」。
+- 全部库里已有同 sha256 的内容时会合并（删源文件 + 删记录）；
+  **如果那一轮删除配额用尽**（环境的 safe-delete 保护），这些会留在原库并标 `ERR`，
+  重跑一次通常还是不行 —— 需要下一轮再删，或手动处理。
+
 ### 手动测试清单（改完前端先过一遍）
+
 
 1. **改了前端看不到变化** → `Ctrl + Shift + R` 强刷。后端已设 `no-cache`，正常刷新就够，但强刷能排除一切缓存干扰。
 2. **首页**：角色卡片有封面、数量徽章对得上。
