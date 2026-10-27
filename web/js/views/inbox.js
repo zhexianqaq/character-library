@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, toast, fadeIn, debounce, deleteSummary } from '../util.js';
+import { esc, fmtNum, fmtBytes, toast, fadeIn, debounce, deleteSummary } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { createDropdown } from '../components/dropdown.js';
@@ -61,6 +61,10 @@ export async function InboxView(root, shelfId, opts = {}) {
          <button class="tb-btn" data-select-toggle>选取</button>
          <button class="tb-btn primary" data-upload>↑ 收素材</button>
        </div>
+       <section class="lib-stats" data-stats>
+         <div class="ls-head"><b>库总览</b><span data-totals>加载中…</span></div>
+         <div class="ls-grid" data-ls-grid></div>
+       </section>
        <div class="toolbar">
          <div class="segmented" data-sec>
            <button class="on" data-s="undistributed">未分发<i>0</i></button>
@@ -89,6 +93,8 @@ export async function InboxView(root, shelfId, opts = {}) {
   if (!embedded) bindTopbar(root);
   document.title = `${shelfInfo.name} · 全部库`;
 
+  paintStats();
+
   const bodyEl = root.querySelector('[data-body]');
 
   // ---------- 头部与角标 ----------
@@ -102,6 +108,72 @@ export async function InboxView(root, shelfId, opts = {}) {
       `已分发 ${fmtNum(di)}`,
       st ? '选几项 →「分发到…」就会把文件搬进角色目录' : '拖入手机里的照片 / 视频就能开始',
     ].join(' · ');
+  }
+
+  /** 每个库的条目叫法（卡片副标题、悬停提示用） */
+  const UNIT = {
+    people: '人物',
+    work: '角色',
+    novel: '小说',
+    resource: '作品',
+    emoji: '图包',
+    inbox: '待分发',
+  };
+
+  /**
+   * 库总览：一行加起来的总数 + 每个库一张小卡（媒体数、条目数、占用、占比条）。
+   * 点卡片直接切到那个库 —— 首页标签条也能切，但这里能顺手看出谁的占用最大。
+   */
+  async function paintStats() {
+    const grid = root.querySelector('[data-ls-grid]');
+    const totalEl = root.querySelector('[data-totals]');
+    if (!grid || !totalEl) return;
+    let ov;
+    try {
+      ov = await api.overview();
+    } catch {
+      totalEl.textContent = '统计加载失败';
+      return;
+    }
+    if (!root.isConnected || !grid.isConnected) return;
+
+    const shelves = ov.shelves || [];
+    const t = ov.totals || { characters: 0, media: 0, bytes: 0 };
+    totalEl.textContent = [
+      `${shelves.length} 个库`,
+      `${fmtNum(t.characters)} 个条目`,
+      `${fmtNum(t.media)} 个媒体`,
+      fmtBytes(t.bytes || 0),
+    ].join(' · ');
+
+    grid.innerHTML = shelves
+      .map((s) => {
+        const pct = t.bytes ? Math.round(((s.bytes || 0) / t.bytes) * 1000) / 10 : 0;
+        // 主数字是「多少个」：人物 / 角色 / 小说 / 作品 / 图包；全部库没有条目，用待分发素材数
+        const cnt = s.kind === 'emoji' ? s.packCount : s.kind === 'inbox' ? s.mediaCount : s.characterCount;
+        const sub =
+          s.kind === 'inbox' ? '待分发' : `${UNIT[s.kind] || '条目'} · ${fmtNum(s.mediaCount)} 个媒体`;
+        return `<button class="ls-card${s.id === shelfInfo.id ? ' is-on' : ''}" data-goto="${s.id}"
+            title="${esc(s.name)} · ${fmtNum(cnt)} ${UNIT[s.kind] || '个条目'} · ${fmtNum(s.mediaCount)} 个媒体 · ${fmtBytes(
+              s.bytes || 0
+            )}（占总占用 ${pct}%）">
+          <span class="ls-name">${esc(s.name)}</span>
+          <b class="ls-n">${fmtNum(cnt)}</b>
+          <span class="ls-sub">${sub}</span>
+          <span class="ls-bar"><i style="width:${Math.min(100, pct)}%"></i></span>
+          <span class="ls-bytes">${fmtBytes(s.bytes || 0)} · ${pct}%</span>
+        </button>`;
+      })
+      .join('');
+
+    grid.onclick = (e) => {
+      const btn = e.target.closest('[data-goto]');
+      if (!btn) return;
+      const id = Number(btn.dataset.goto);
+      if (!id || id === shelfInfo.id) return; // 点当前库不跳
+      history.pushState({}, '', `/s/${id}`);
+      window.dispatchEvent(new CustomEvent('app:route'));
+    };
   }
 
   function paintTabs() {
