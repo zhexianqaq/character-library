@@ -115,11 +115,12 @@ function mergeTags(...lists) {
 }
 
 /**
- * 媒体继承的标签 = 条目「自身」的身份（条目名）+ 库类型（人物 / 角色）。
+ * 媒体继承的标签 = 条目名。
  *
- * 条目上手动加的通用标签（原神、米哈游、写真…）**不再下发**：
- * 一个人物可能只有一两个图包跟某个作品有关，全量下发会把上千张图一起染色，
- * 既不准也没法撤。要标就给图包标 / 给单张图标。
+ * - 库类型（人物 / 角色 / 小说）**不下发**：它只是当前页面的身份，放在每张图的标签里
+ *   既是噪音，又会在标签池里造出三条几千次计数、点进去毫无意义的假标签。
+ * - 条目上手动加的通用标签（原神、米哈游、写真…）也不下发：一个人物可能只有一两个
+ *   图包跟某个作品有关，全量下发会把上千张图一起染色。要标就给图包标 / 给单张图标。
  */
 function mediaTagSet(db, charId) {
   const c = db
@@ -127,9 +128,29 @@ function mediaTagSet(db, charId) {
     .get(charId);
   if (!c) return [];
   if (c.is_container || c.kind === 'emoji') return [];
-  // 条目自身的身份标签：角色库→角色、小说库→小说、其余→人物
-  const identity = c.kind === 'work' ? '角色' : c.kind === 'novel' ? '小说' : '人物';
-  return mergeTags([c.name, identity]);
+  return mergeTags([c.name]);
+}
+
+/**
+ * 图包标签 = 名字拆出来的 + **所属条目名**。
+ *
+ * 包挂在谁名下就带上谁的名字，这样在标签池里搜「水淼」能一次看到她的所有图包，
+ * 点标签也能落到标签页。容器条目（表情库 / 全部库 / 小说库的袋子）没有这层含义，跳过。
+ */
+function ownerTagOf(db, charId) {
+  if (!charId) return '';
+  const c = db.prepare('SELECT name, is_container FROM characters WHERE id = ?').get(Number(charId));
+  if (!c || c.is_container) return '';
+  return String(c.name || '').trim();
+}
+
+function packTagsFor(db, charId, title) {
+  return cleanTags([...splitTitleTags(title), ownerTagOf(db, charId)]);
+}
+
+/** 用户手动改标签时也别把「所属条目名」那条弄丢 */
+function withOwnerTag(db, charId, tags) {
+  return cleanTags([...(Array.isArray(tags) ? tags : []), ownerTagOf(db, charId)]);
 }
 
 /** 图包标签：所有库都会下发给包内每张图，标一次全包生效（读时合并，不落库） */
@@ -305,7 +326,7 @@ function ensurePackFor(db, charId, month, category = null) {
         `INSERT INTO packs(character_id, title, month, category, tags, sort_order, created_at)
          VALUES(?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?)`
       )
-      .run(charId, title, month, category, JSON.stringify(cleanTags(splitTitleTags(title))), charId, nowIso()).lastInsertRowid
+      .run(charId, title, month, category, JSON.stringify(packTagsFor(db, charId, title)), charId, nowIso()).lastInsertRowid
   );
   return { id, title };
 }
@@ -486,7 +507,7 @@ async function ensureOfficialPack(db, charId, dirSlug) {
           `INSERT INTO packs(character_id, title, month, category, sort_order, created_at, tags)
            VALUES(?,?,NULL,NULL,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?,?)`
         )
-        .run(charId, OFFICIAL_PACK, charId, nowIso(), JSON.stringify([OFFICIAL_PACK])).lastInsertRowid
+        .run(charId, OFFICIAL_PACK, charId, nowIso(), JSON.stringify(packTagsFor(db, charId, OFFICIAL_PACK))).lastInsertRowid
     );
     pack = { id };
   }
@@ -782,6 +803,85 @@ export function createApp() {
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh'));
     res.json({ items });
+  });
+
+  /**
+   * 单个标签的落地页：条目 / 图包 / 素材三段。
+   *
+   * 素材口径和「标签是怎么算出来的」保持一致：
+   * 自己的标签里有它、所属条目名等于它、或者所在图包有这个标签。
+   * 图包口径只认 packs.tags（包继承了条目名标签，所以搜条目名也能列出它的包）。
+   */
+  app.get('/api/tags/:name', (req, res) => {
+    const db = getDb();
+    const name = String(req.params.name || '').trim().slice(0, 40);
+    if (!name) return res.status(400).json({ error: '缺少标签名' });
+
+    const charRows = db
+      .prepare(
+        `${CHAR_SELECT}
+          WHERE c.is_container = 0
+            AND (c.name = @name
+              OR EXISTS (SELECT 1 FROM character_tags ct JOIN tags t ON t.id = ct.tag_id
+                          WHERE ct.character_id = c.id AND t.name = @name))
+          ORDER BY c.name
+          LIMIT 200`
+      )
+      .all({ name });
+
+    const packs = db
+      .prepare(
+        `SELECT p.id, p.title, p.kind, p.cover_media_id, p.month, p.created_at, p.tags,
+                c.id AS owner_id, c.name AS owner_name,
+                sh.name AS shelf_name, sh.kind AS shelf_kind,
+                (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id AND m.kind <> 'file') AS media_count,
+                (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id AND m.kind = 'image') AS image_count,
+                (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id AND m.kind = 'video') AS video_count
+           FROM packs p
+           JOIN characters c ON c.id = p.character_id
+           LEFT JOIN shelves sh ON sh.id = c.shelf_id
+          WHERE EXISTS (SELECT 1 FROM json_each(p.tags) WHERE json_each.value = @name)
+          ORDER BY p.id DESC
+          LIMIT 300`
+      )
+      .all({ name });
+
+    const whereMedia = `m.kind <> 'file' AND (
+        EXISTS (SELECT 1 FROM json_each(m.tags) WHERE json_each.value = @name)
+        OR c.name = @name
+        OR EXISTS (SELECT 1 FROM packs p WHERE p.id = m.pack_id
+                    AND EXISTS (SELECT 1 FROM json_each(p.tags) WHERE json_each.value = @name))
+      )`;
+    const mediaTotal = db
+      .prepare(`SELECT COUNT(*) AS n FROM media m LEFT JOIN characters c ON c.id = m.character_id WHERE ${whereMedia}`)
+      .get({ name }).n;
+    const mediaRows = db
+      .prepare(
+        `SELECT m.* FROM media m LEFT JOIN characters c ON c.id = m.character_id
+          WHERE ${whereMedia} ORDER BY m.id DESC LIMIT 200`
+      )
+      .all({ name });
+
+    res.json({
+      name,
+      characters: charRows.map((r) => mapChar(r, tagsOf(db, r.id))),
+      packs: packs.map((r) => ({
+        id: r.id,
+        title: r.title,
+        kind: r.kind || 'pack',
+        month: r.month,
+        createdAt: r.created_at,
+        coverMediaId: r.cover_media_id,
+        tags: safeJson(r.tags),
+        mediaCount: r.media_count,
+        imageCount: r.image_count,
+        videoCount: r.video_count,
+        owner: { id: r.owner_id, name: r.owner_name },
+        shelf: { name: r.shelf_name || '', kind: r.shelf_kind || 'people' },
+      })),
+      media: mediaRows.map(mapMedia),
+      counts: { characters: charRows.length, packs: packs.length, media: mediaTotal },
+    });
   });
 
   // ---------- 角色 ----------
@@ -1783,7 +1883,7 @@ export function createApp() {
           category,
           charId,
           nowIso(),
-          JSON.stringify(cleanTags(splitTitleTags(title)))
+          JSON.stringify(packTagsFor(db, charId, title))
         ).lastInsertRowid
     );
     res.json({ id, title, month, category, autoMonth: !hasTitle && !hasMonth });
@@ -1831,7 +1931,7 @@ export function createApp() {
         const nextTitle = b.title.trim().slice(0, 100);
         db.prepare('UPDATE packs SET title = ? WHERE id = ?').run(nextTitle, id);
         // 名字变了，那条同名标签跟着改；用户自己加的其他标签保留
-        const tags = packTagsKeepingName(safeJson(row.tags), row.title, nextTitle);
+        const tags = withOwnerTag(db, row.character_id, packTagsKeepingName(safeJson(row.tags), row.title, nextTitle));
         db.prepare('UPDATE packs SET tags = ? WHERE id = ?').run(JSON.stringify(tags), id);
       }
       if (b.month !== undefined) {
@@ -1851,7 +1951,8 @@ export function createApp() {
         );
       }
       if (Array.isArray(b.tags)) {
-        db.prepare('UPDATE packs SET tags = ? WHERE id = ?').run(JSON.stringify(cleanTags(b.tags)), id);
+        // 「所属条目名」是系统维护的那条，用户取消勾选也补回来，否则标签池里会缺一块
+        db.prepare('UPDATE packs SET tags = ? WHERE id = ?').run(JSON.stringify(withOwnerTag(db, row.character_id, b.tags)), id);
       }
     } catch (err) {
       return res.status(400).json({ error: String(err.message || '保存失败') });

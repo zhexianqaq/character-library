@@ -88,6 +88,12 @@ export async function openTagPicker({ title = '编辑标签', selected = [], not
       // 输入时把下面的列表收窄成「名字里含这段字」的；已选中的始终留着，
       // 否则筛掉之后看不见，容易让人以为被取消了
       const shown = q ? names.filter((n) => chosen.has(n) || n.toLowerCase().includes(q)) : names;
+      // 已选中的排在最前面：打开弹窗第一眼就看到这个包身上有哪些标签，
+      // 不用在 1500 多个里找哪几个是深色的（它们本来还在各自的位置上）
+      const ordered = [
+        ...shown.filter((n) => chosen.has(n)),
+        ...shown.filter((n) => !chosen.has(n)),
+      ];
       totalEl.textContent = shown.length
         ? q && shown.length !== names.length
           ? `（${shown.length} / ${names.length}）`
@@ -102,7 +108,7 @@ export async function openTagPicker({ title = '编辑标签', selected = [], not
         return;
       }
       const counts = new Map(pool.map((p) => [p.name, p.count]));
-      poolEl.innerHTML = shown
+      poolEl.innerHTML = ordered
         .map(
           (n) => `<button class="tag-pill${chosen.has(n) ? ' on' : ''}" data-tag="${esc(n)}">
             ${esc(n)}${counts.get(n) ? `<i>${counts.get(n)}</i>` : ''}

@@ -158,6 +158,7 @@ function migrate(d) {
   ensureNovelBags(d);
   ensureSelfTags(d);
   normalizePackTitleTags(d);
+  normalizePackOwnerTags(d);
 }
 
 /**
@@ -276,6 +277,39 @@ function normalizePackTitleTags(d) {
     if (!Array.isArray(tags) || !tags.includes(title)) continue;
     const next = [...new Set([...tags.filter((t) => t !== title), ...parts])].slice(0, 30);
     upd.run(JSON.stringify(next), r.id);
+    n += 1;
+  }
+  return n;
+}
+
+/**
+ * 图包标签补上「所属条目名」。
+ *
+ * 图包挂在某个条目下面，那个条目的名字本身就是一个有意义的标签：搜「水淼」
+ * 应该能一次看到她的所有图包，点标签也能落到标签页。只在缺失时补一条，
+ * 已有的其他标签一个都不动；容器条目（表情库 / 全部库 / 小说袋）跳过。
+ */
+function normalizePackOwnerTags(d) {
+  const rows = d
+    .prepare(
+      `SELECT p.id, p.tags, c.name AS owner
+         FROM packs p JOIN characters c ON c.id = p.character_id
+        WHERE c.is_container = 0`
+    )
+    .all();
+  const upd = d.prepare('UPDATE packs SET tags = ? WHERE id = ?');
+  let n = 0;
+  for (const r of rows) {
+    const owner = String(r.owner || '').trim();
+    if (!owner) continue;
+    let tags;
+    try {
+      tags = JSON.parse(r.tags || '[]');
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(tags) || tags.includes(owner)) continue;
+    upd.run(JSON.stringify([...tags, owner].slice(0, 30)), r.id);
     n += 1;
   }
   return n;

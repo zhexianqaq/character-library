@@ -3,6 +3,7 @@ import { esc, fmtBytes, fmtDur, toast, fadeIn } from '../util.js';
 import { openLightbox } from '../components/lightbox.js';
 import { openTagPicker } from '../components/tag-picker.js';
 import { openModal, confirmDialog } from '../components/modal.js';
+import { openContextMenu } from '../components/context-menu.js';
 import { sortMedia, mediaSortState } from '../components/media-sort.js';
 import { escDepth } from '../esc.js';
 
@@ -239,6 +240,13 @@ export async function MediaView(root, id) {
     }
   }
 
+  /** 打开标签页：条目 / 图包 / 素材三段都在那一页 */
+  function gotoTag(name) {
+    if (!name) return;
+    history.pushState({ from: location.pathname + location.search }, '', `/tag/${encodeURIComponent(name)}`);
+    window.dispatchEvent(new CustomEvent('app:route'));
+  }
+
   function paintTags() {
     const box = info.querySelector('[data-tags]');
     if (!box) return;
@@ -250,27 +258,57 @@ export async function MediaView(root, id) {
       (item.tags || [])
         .map((t) => {
           const mine = own.has(t);
-          const src = fromPack.has(t) ? `图包「${esc(packLabel)}」` : `条目「${esc(item.character.name)}」`;
+          // 图包现在也会带上条目名标签，所以先认「条目名」这个来源，免得说成来自图包
+          const src =
+            t === item.character.name
+              ? `条目「${esc(item.character.name)}」`
+              : fromPack.has(t)
+                ? `图包「${esc(packLabel)}」`
+                : `条目「${esc(item.character.name)}」`;
           return `<button class="mp-pill${mine ? ' is-own' : ''}" data-tag="${esc(t)}" data-mine="${
             mine ? 1 : 0
-          }" title="${mine ? '点一下移除' : `来自${src}`}">${esc(t)}${
-            mine ? '<i>×</i>' : ''
+          }" title="${mine ? `点击查看标签 · × 移除（自己打的）` : `点击查看标签 · 来自${src}`}">${esc(t)}${
+            mine ? '<i data-x="1" title="移除这个标签">×</i>' : ''
           }</button>`;
         })
         .join('') + '<button class="mp-pill add" data-add-tag title="添加标签">＋</button>';
 
     box.querySelectorAll('[data-tag]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
+      btn.addEventListener('click', async (e) => {
         const t = btn.dataset.tag;
-        if (btn.dataset.mine !== '1') {
-          toast(
-            fromPack.has(t)
-              ? `「${t}」是从图包「${packLabel}」继承的，去图包上改`
-              : `「${t}」是从条目「${item.character.name}」继承的，去条目上改`
-          );
+        // 标签本体 = 去看这个标签；「自己打的」那条用后面的 × 移除，
+        // 原来点一下就删，和「标签可以点」的预期冲突。
+        if (!e.target.closest('[data-x]')) {
+          gotoTag(t);
           return;
         }
         await saveOwnTags((item.ownTags || []).filter((x) => x !== t));
+      });
+      btn.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const t = btn.dataset.tag;
+        const mine = btn.dataset.mine === '1';
+        const from =
+          t === item.character.name
+            ? `条目「${item.character.name}」`
+            : fromPack.has(t)
+              ? `图包「${packLabel}」`
+              : `条目「${item.character.name}」`;
+        openContextMenu(e, [
+          { label: '打开标签页', onClick: () => gotoTag(t) },
+          { label: '来源', hint: mine ? '自己打的标签' : from },
+          ...(mine
+            ? [
+                { separator: true },
+                {
+                  label: '移除这个标签',
+                  danger: true,
+                  onClick: () => saveOwnTags((item.ownTags || []).filter((x) => x !== t)),
+                },
+              ]
+            : []),
+        ]);
       });
     });
     box.querySelector('[data-add-tag]').addEventListener('click', async () => {

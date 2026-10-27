@@ -102,7 +102,9 @@ export async function importCharacterDir({ shelfId, sourceDir, name, account, on
             `INSERT INTO packs(character_id, title, month, sort_order, created_at, tags)
              VALUES(?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?,?)`
           )
-          .run(charId, title, month, charId, ts, JSON.stringify(splitTitleTags(title))).lastInsertRowid
+          // 图包标签带上新条目名：外部导入的包也要能在标签池里被搜到
+          .run(charId, title, month, charId, ts, JSON.stringify([...new Set([...splitTitleTags(title), finalName])]))
+          .lastInsertRowid
       );
       pack = { id, title };
     }

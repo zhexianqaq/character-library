@@ -2994,3 +2994,24 @@ body.cm-locked { overflow: hidden; }
 .tf-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tf-sub { font-size: 11px; color: var(--text-3); }
 .tf-row .tb-btn { flex: 0 0 auto; }
+
+/* ============ 标签页（/tag/:name） ============ */
+.tag-sec { margin-bottom: 24px; }
+.tag-sec > h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 2px 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.tag-sec > h2 i { font-style: normal; font-size: 11.5px; font-weight: 400; color: var(--text-3); }
+.tag-sec > h2 .hint { margin-left: auto; font-size: 11.5px; font-weight: 400; color: var(--text-3); }
+
+/* 媒体详情页标签里的 ×：点它才移除，点标签本体是打开标签页 */
+.mp-pill.is-own i[data-x] { cursor: pointer; padding: 0 2px; border-radius: 999px; }
+.mp-pill.is-own i[data-x]:hover { opacity: 1; color: #fff; }
+
+/* 图包页标题旁的标签现在可点：给个可点的反馈 */
+button.pack-tag { cursor: pointer; transition: background 0.14s var(--ease), color 0.14s var(--ease); }
+button.pack-tag:hover { background: var(--fill-2); color: var(--text); }

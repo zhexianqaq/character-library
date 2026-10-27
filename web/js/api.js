@@ -136,6 +136,8 @@ export const api = {
   addMediaToPack: (packId, ids) => json('POST')(`/api/packs/${packId}/media`, { ids }),
   pickMedia: (params) => req(`/api/media/pick${qs(params)}`),
   characterMedia: (id, params) => req(`/api/characters/${id}/media${qs(params)}`),
+  /** 单个标签的落地页：条目 / 图包 / 最近 200 个素材 */
+  tag: (name) => req(`/api/tags/${encodeURIComponent(name)}`),
   /** 小说正文文件列表（kind='file'） */
   charTexts: (id) => req(`/api/characters/${id}/texts`),
 

@@ -100,8 +100,26 @@ export async function PackView(root, id) {
     const el = root.querySelector('[data-pack-tags]');
     if (!el) return;
     const tags = Array.isArray(pack.tags) ? pack.tags : [];
-    el.innerHTML = tags.map((t) => `<span class="pack-tag">${esc(t)}</span>`).join('');
+    el.innerHTML = tags
+      .map(
+        (t) =>
+          `<button class="pack-tag" data-ptag="${esc(t)}" title="查看标签「${esc(t)}」">${esc(t)}</button>`
+      )
+      .join('');
     el.hidden = !tags.length;
+    // 标签点一下 = 这个标签下有什么（条目 / 图包 / 素材）
+    el.querySelectorAll('[data-ptag]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        history.pushState(
+          { from: location.pathname + location.search },
+          '',
+          `/tag/${encodeURIComponent(btn.dataset.ptag)}`
+        );
+        window.dispatchEvent(new CustomEvent('app:route'));
+      });
+    });
   }
 
   function syncCount() {

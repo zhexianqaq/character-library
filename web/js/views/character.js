@@ -530,6 +530,13 @@ export async function CharacterView(root, id) {
   }
 
   /** 标签点进去是「对应的库」（资源详情），删除走右键 —— 点一下就没太容易误删 */
+  /** 打开标签页：点击任何标签都落到「这个标签下有什么」 */
+  function gotoTag(name) {
+    if (!name) return;
+    history.pushState({ from: location.pathname + location.search }, '', `/tag/${encodeURIComponent(name)}`);
+    window.dispatchEvent(new CustomEvent('app:route'));
+  }
+
   function gotoResourceByName(name) {
     const hit = RES_INDEX && RES_INDEX.get(name);
     if (!hit) {
@@ -554,7 +561,9 @@ export async function CharacterView(root, id) {
           return `<button class="chip${self ? ' self' : ''}${hit ? ' link' : ''}" data-tag="${esc(t)}" data-self="${
             self ? 1 : 0
           }" title="${
-            self ? '条目自己的标签，改名会自动更新' : hit ? `点击进入「${esc(t)}」· 右键可删除` : '右键可删除'
+            self
+              ? '点击查看这个标签 · 条目自己的标签，改名会自动更新'
+              : `点击查看标签「${esc(t)}」${hit ? ' · 右键还能打开对应资源' : ' · 右键可删除'}`
           }">${esc(t)}</button>`;
         })
         .join('') + `<button class="chip add" data-add-tag>+ 标签</button>`;
@@ -562,12 +571,8 @@ export async function CharacterView(root, id) {
       const pick = (e) => {
         e.preventDefault();
         e.stopPropagation();
-        const t = btn.dataset.tag;
-        if (btn.dataset.self === '1') {
-          toast('这是条目自己的标签，改名会自动更新');
-          return;
-        }
-        gotoResourceByName(t);
+        // 自带的同名标签也能点：那一页会列出这个条目、它名下的包和素材
+        gotoTag(btn.dataset.tag);
       };
       btn.addEventListener('click', pick);
       btn.addEventListener('contextmenu', (e) => {
@@ -575,6 +580,7 @@ export async function CharacterView(root, id) {
         const self = btn.dataset.self === '1';
         const hit = RES_INDEX && RES_INDEX.get(t);
         openContextMenu(e, [
+          { label: '打开标签页', onClick: () => gotoTag(t) },
           {
             label: '打开对应的资源',
             hint: hit ? t : '还没有',
