@@ -146,7 +146,11 @@ export async function importCharacterDir({ shelfId, sourceDir, name, account, on
     if (!saved) continue;
 
     if (findBySha.get(charId, saved.sha256)) {
-      await removeLibraryFile(saved.relPath);
+      // 重复文件：删掉刚复制进来的这一份。删不掉不算失败，但要留个记录
+      const del = await removeLibraryFile(saved.relPath);
+      if (!del.ok && !del.alreadyGone) {
+        console.warn(`[import] 重复文件删不掉：${saved.relPath}（${del.code || del.error}）`);
+      }
       skipped += 1;
       done += 1;
       if (onProgress) onProgress({ done, total: files.length, name: fileName, skipped: true });

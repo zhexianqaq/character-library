@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fmtBytes, fadeIn, toast, debounce, copyText } from '../util.js';
+import { esc, fmtNum, fmtBytes, fadeIn, toast, debounce, copyText, deleteSummary } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { openModal, confirmDialog } from '../components/modal.js';
@@ -8,11 +8,15 @@ import { openContextMenu } from '../components/context-menu.js';
 import { mediaMenu } from '../components/media-actions.js';
 import { addMediaMenuItems } from '../components/media-picker.js';
 import { createDropdown } from '../components/dropdown.js';
+import { createPackSort, sortPacks } from '../components/pack-sort.js';
 import { bindDropUpload } from '../components/dropzone.js';
 import { queue } from '../upload-queue.js';
 import { applyPickClick } from '../selection.js';
 import { escDepth } from '../esc.js';
 import { ORIGIN_TYPES, novelFieldSet } from '../novel-fields.js';
+
+/** 图包排序的记忆：切换角色、重新进页面都沿用，默认「时间倒序」 */
+const PACK_SORT = { key: 'date', desc: true };
 
 /**
  * 资源名 → 资源。出处卡片点「原神」时要跳到资源详情，
@@ -34,7 +38,25 @@ async function resourceIndex() {
 
 export async function CharacterView(root, id) {
   let c = await api.character(id);
-  let mode = 'packs';
+  /**
+   * 当前是「图包」还是「全部媒体」。
+   *
+   * 这个视图以前只活在内存里，一关掉详情页、整页重挂载就退回图包页 ——
+   * 在「全部媒体」里点开一张图再关回来，人会莫名其妙落到别的列表上。
+   * 现在存两处：历史项（`history.state.tab`，前进 / 后退 / 刷新都带着）+
+   * sessionStorage（别处 `replaceState({}, …)` 把 state 清掉时的兜底）。
+   */
+  const viewKey = `cl-view:${id}`;
+  let mode = (() => {
+    const t = history.state && history.state.tab;
+    if (t === 'media' || t === 'packs') return t;
+    try {
+      if (sessionStorage.getItem(viewKey) === 'media') return 'media';
+    } catch {
+      /* 隐私模式读不了，按默认走 */
+    }
+    return 'packs';
+  })();
   // 虚拟角色库的三个小库；人物库不启用
   const CATEGORIES = ['官图', 'cosplay', '同人'];
   let cat = CATEGORIES[0];
@@ -46,6 +68,20 @@ export async function CharacterView(root, id) {
   let packsShown = [];
   // 从资源详情页点进来时带 ?res=原神，只显示带这个标签的图包
   let resFilter = new URLSearchParams(location.search).get('res') || '';
+
+  /** 把当前视图记下来：历史项 + sessionStorage（两处都写，任一处丢了还能还原） */
+  function rememberView() {
+    try {
+      sessionStorage.setItem(viewKey, mode === 'media' ? 'media' : 'packs');
+    } catch {
+      /* 隐私模式写不了就只靠 history.state */
+    }
+    try {
+      history.replaceState({ ...(history.state || {}), tab: mode === 'media' ? 'media' : 'packs' }, '', location.href);
+    } catch {
+      /* replaceState 偶尔在极老浏览器上抛错，忽略即可 */
+    }
+  }
 
   function heroHtml() {
     const cover = c.coverMediaId ? api.thumb(c.coverMediaId) : '';
@@ -103,6 +139,7 @@ export async function CharacterView(root, id) {
              <button class="on" data-v="packs">图包</button>
              <button data-v="media">全部媒体</button>
            </div>
+           <span data-pack-sort></span>
            <div class="filter-bar" data-filter-bar hidden>
              <div class="segmented" data-f-kind>
                <button class="on" data-k="">全部</button>
@@ -800,7 +837,7 @@ export async function CharacterView(root, id) {
     bar.innerHTML = `
       <span class="sel-n">已选 <b>0</b> ${mode === 'packs' ? '个图包' : '个媒体'}</span>
       <button data-sel="all">全选</button>
-      ${mode === 'packs' ? '<button data-sel="dissolve">解散</button>' : '<button data-sel="move">移动到…</button>'}
+      ${mode === 'packs' ? '<button data-sel="dissolve">解散</button>' : '<button data-sel="move">移动到…</button><button data-sel="eject">移出库</button>'}
       <button data-sel="del" class="danger">删除</button>
       <button data-sel="exit" class="primary">完成</button>`;
     bar.querySelectorAll('button[data-sel]').forEach((b) => {
@@ -871,6 +908,7 @@ export async function CharacterView(root, id) {
     if (action === 'dissolve') bulkPacks('dissolve');
     else if (action === 'del') mode === 'packs' ? bulkPacks('delete') : bulkMediaDelete();
     else if (action === 'move') bulkMediaMove();
+    else if (action === 'eject') bulkEject();
   }
 
   async function bulkPacks(action) {
@@ -885,7 +923,11 @@ export async function CharacterView(root, id) {
     if (!ok) return;
     try {
       const res = await api.bulkPacks(ids, action);
-      toast(del ? `已删除 ${res.done} 个图包 · ${res.removed} 个媒体` : `已解散 ${res.done} 个图包`);
+      if (del && res.failed && res.failed.length) {
+        toast(`已删除 ${res.done} 个图包 · ${res.removed} 个媒体，${res.failed.length} 个文件没删掉（${res.failed[0].reason}）`);
+      } else {
+        toast(del ? `已删除 ${res.done} 个图包 · ${res.removed} 个媒体` : `已解散 ${res.done} 个图包`);
+      }
       resetSelection();
       c = await api.character(id);
       paint();
@@ -901,7 +943,7 @@ export async function CharacterView(root, id) {
     if (!ok) return;
     try {
       const res = await api.bulkMedia(ids, 'delete');
-      toast(`已删除 ${res.done} 个媒体`);
+      toast(deleteSummary(res, '媒体'));
       resetSelection();
       c = await api.character(id);
       paint();
@@ -909,6 +951,34 @@ export async function CharacterView(root, id) {
       else await loadPacks();
     } catch (err) {
       toast(err.message || '删除失败');
+    }
+  }
+
+  /** 批量移出库：退回「全部库 → 未分发」，文件跟着搬 */
+  async function bulkEject() {
+    const ids = [...picked];
+    const ok = await confirmDialog(
+      `把 ${ids.length} 个素材移出当前${noun()}？`,
+      '会移到「全部库 → 未分发」，之后可以在那里重新分发；磁盘上的文件跟着搬，不会复制。'
+    );
+    if (!ok) return;
+    try {
+      const r = await api.ejectMedia(ids);
+      const bad = (r.skipped || []).length;
+      toast(
+        bad
+          ? `已移出 ${r.moved} 个，${bad} 个没成功（${r.skipped[0].reason}）`
+          : r.merged
+            ? `已移出 ${r.moved} 个，${r.merged} 个与全部库重复已合并`
+            : `已移出 ${r.moved} 个素材`
+      );
+      exitSelect();
+      c = await api.character(id);
+      paint();
+      if (mode === 'media') await loadMedia(true);
+      else await loadPacks();
+    } catch (err) {
+      toast(err.message || '移出失败');
     }
   }
 
@@ -993,7 +1063,8 @@ export async function CharacterView(root, id) {
       <button data-clear-res>显示全部</button>`;
     el.querySelector('[data-clear-res]').addEventListener('click', () => {
       resFilter = '';
-      history.replaceState({}, '', location.pathname);
+      // 只去掉 ?res，别把历史项里的视图标记一起冲掉
+      history.replaceState(history.state || {}, '', location.pathname);
       paintResNote();
       loadPacks();
     });
@@ -1033,12 +1104,21 @@ export async function CharacterView(root, id) {
   async function loadPacks() {
     const body = root.querySelector('[data-body]');
     body.innerHTML = '<div class="pack-grid" data-packs></div>';
-    const holder = body.querySelector('[data-packs]');
     const data = await api.packs(c.id);
     packsCache = data.items;
     paintCats();
     let items = isWorkShelf() ? data.items.filter((p) => (p.category || '未分类') === cat) : data.items;
     if (resFilter) items = items.filter((p) => (p.tags || []).includes(resFilter));
+    packsShown = items;
+    renderPacks();
+  }
+
+  /** 只重画图包网格：换排序、勾选态变化都走这里，不重新拉数据 */
+  function renderPacks() {
+    const holder = root.querySelector('[data-body] [data-packs]');
+    if (!holder) return;
+    // 每次画都按当前排序来；packsShown 同步成显示顺序，Shift 连选的区间才对得上
+    const items = sortPacks(packsShown, PACK_SORT.key, PACK_SORT.desc);
     packsShown = items;
     if (!items.length) {
       holder.innerHTML = `<div class="empty" style="grid-column:1/-1">
@@ -1271,6 +1351,7 @@ export async function CharacterView(root, id) {
                       }
                     : null,
                   owner: { id: c.id, name: c.name, noun: noun() },
+                  shelfKind: (c.shelf && c.shelf.kind) || '',
                   onCover: async (kind) => {
                     if (kind === 'owner') {
                       c = await api.character(id);
@@ -1339,6 +1420,29 @@ export async function CharacterView(root, id) {
     };
   }
 
+  /** 排序控件只在「图包」视图显示；它自己带 display，hidden 属性压不住 */
+  let packSortEl = null;
+  function syncPackSort() {
+    if (packSortEl) packSortEl.style.display = mode === 'packs' ? '' : 'none';
+  }
+
+  function mountPackSort() {
+    const slot = root.querySelector('[data-pack-sort]');
+    if (!slot) return;
+    const ctl = createPackSort({
+      key: PACK_SORT.key,
+      desc: PACK_SORT.desc,
+      onChange: (key, desc) => {
+        PACK_SORT.key = key;
+        PACK_SORT.desc = desc;
+        if (mode === 'packs') renderPacks();
+      },
+    });
+    packSortEl = ctl.el;
+    slot.replaceWith(packSortEl);
+    syncPackSort();
+  }
+
   function bindToolbar() {
     root.querySelector('[data-view]').addEventListener('click', async (e) => {
       const btn = e.target.closest('button[data-v]');
@@ -1346,6 +1450,8 @@ export async function CharacterView(root, id) {
       root.querySelectorAll('[data-view] button').forEach((b) => b.classList.toggle('on', b === btn));
       resetSelection();
       mode = btn.dataset.v;
+      rememberView();
+      syncPackSort();
       const bar = root.querySelector('[data-filter-bar]');
       if (bar) bar.hidden = mode !== 'media';
       if (mode === 'packs') await loadPacks();
@@ -1387,6 +1493,8 @@ export async function CharacterView(root, id) {
         );
         if (mode !== 'packs') {
           mode = 'packs';
+          rememberView();
+          syncPackSort();
           root.querySelectorAll('[data-view] button').forEach((b) => b.classList.toggle('on', b.dataset.v === 'packs'));
         }
         loadPacks();
@@ -1457,11 +1565,18 @@ export async function CharacterView(root, id) {
 
   await resourceIndex(); // 先拿索引：标签要据此决定「能不能点进去」
   root.innerHTML = shellHtml();
+  // 骨架里写死的是「图包」高亮、筛选条隐藏；回到「全部媒体」要把这两处拨回去
+  if (mode === 'media') {
+    root.querySelectorAll('[data-view] button').forEach((b) => b.classList.toggle('on', b.dataset.v === 'media'));
+    const bar = root.querySelector('[data-filter-bar]');
+    if (bar) bar.hidden = false;
+  }
   bindTopbar(root);
   paint();
   paintResNote();
   bindIntro();
   bindToolbar();
+  mountPackSort();
   buildFilterBar();
   root.querySelector('[data-upload]').addEventListener('click', () => pickFiles());
   bindContextMenus();
@@ -1473,11 +1588,18 @@ export async function CharacterView(root, id) {
     packTitle: '',
     category: packCategory(),
   }));
-  await loadPacks();
+  // 回来时该是哪一屏就加载哪一屏（等它加载完，滚动位置才有地方可落）
+  if (mode === 'media') {
+    await loadMedia();
+    // 小库分类栏（官图 / cosplay / 同人）的计数来自 packsCache，平时是 loadPacks 画的
+    paintCats();
+  } else {
+    await loadPacks();
+  }
 
   // 从右键菜单「添加素材」跳过来时，直接弹选择框
   if (new URLSearchParams(location.search).get('upload')) {
-    history.replaceState({}, '', `/c/${id}`);
+    history.replaceState(history.state || {}, '', `/c/${id}`);
     pickFiles();
   }
 

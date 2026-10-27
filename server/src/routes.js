@@ -22,12 +22,14 @@ import {
   absPathOf,
   adoptFile,
   hashFileOf,
+  moveFile,
   relocateFile,
   removeLibraryFile,
   removeDir,
   kindOfExt,
   uniqueDirName,
 } from './store.js';
+import { beginMove, logRecovery } from './file-journal.js';
 import { monthOfFileName, monthTitle } from './importer.js';
 
 const MIME = {
@@ -161,6 +163,7 @@ function safeJson(raw) {
  * emoji 表情包（没有条目层级，库里直接是图包 + 未分类 + 全部素材）
  * resource 资源库（游戏 / 动画 / 电影 / 剧集，卡片按分类分组）
  * novel 小说库（条目=一本小说，novel_group 是磁盘上的归类文件夹）
+ * inbox 全部库（没有条目层级：未分发=落在 <库名>/未分类 里的，已分发=全库其余媒体，只链接不复制）
  */
 function normalizeShelfKind(v) {
   const k = String(v || '').toLowerCase();
@@ -168,6 +171,7 @@ function normalizeShelfKind(v) {
   if (k === 'emoji') return 'emoji';
   if (k === 'resource') return 'resource';
   if (k === 'novel') return 'novel';
+  if (k === 'inbox') return 'inbox';
   return 'people';
 }
 
@@ -465,6 +469,27 @@ function serveIndex(req, res) {
   res.type('html').send(html);
 }
 
+/** 删除失败时拼一句人话：错误码 + 原因，方便用户判断是占用还是权限 */
+function whyDeleteFailed(r) {
+  return `${r.error || '删除失败'}${r.code ? `（${r.code}）` : ''}`;
+}
+
+/**
+ * 删完目录但没删干净的兜底：记一条可追溯的记录，并把路径回给调用方。
+ * 不自动重试、更不自动删「疑似残留」的目录 —— 归属没确认的东西一律不碰。
+ */
+async function noteDirLeftover(relDir, r) {
+  await logRecovery({
+    kind: 'dir-remove-failed',
+    relDir,
+    code: r.code || null,
+    error: r.error || null,
+    remaining: r.remaining ?? null,
+    path: r.path || null,
+  });
+  return `目录没能完全删除：${whyDeleteFailed(r)}${r.remaining != null ? `，还剩 ${r.remaining} 个文件` : ''}`;
+}
+
 export function createApp() {
   const app = express();
   app.disable('x-powered-by');
@@ -565,7 +590,8 @@ export function createApp() {
         )
         .lastInsertRowid
     );
-    if (kind === 'emoji') ensureShelfContainer(id);
+    // 表情库 / 全部库都没有条目层级，靠一个隐藏容器条目挂图包和未分类
+    if (kind === 'emoji' || kind === 'inbox') ensureShelfContainer(id);
     // 库根目录建出来：否则资源管理器里少一个库，用户会以为数据没落盘
     await mkdirRel(shelfSlugOf(db, id));
     res.json({ id, name, kind, variant });
@@ -592,8 +618,8 @@ export function createApp() {
       nowIso(),
       id
     );
-    // 改成表情库时补一个容器条目，否则前端没有地方挂图包
-    if (nextKind === 'emoji') ensureShelfContainer(id);
+    // 改成表情库 / 全部库时补一个容器条目，否则前端没有地方挂图包
+    if (nextKind === 'emoji' || nextKind === 'inbox') ensureShelfContainer(id);
     res.json({ ok: true, kind: nextKind, variant: nextVariant });
   });
 
@@ -824,7 +850,8 @@ export function createApp() {
       .prepare(
         `SELECT p.id, p.title, p.month, p.category, p.tags, p.created_at, p.cover_media_id,
            (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id) AS media_count,
-           (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id AND (m.anim = 1 OR m.kind = 'video')) AS anim_count
+           (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id AND (m.anim = 1 OR m.kind = 'video')) AS anim_count,
+           (SELECT COALESCE(SUM(m.bytes),0) FROM media m WHERE m.pack_id = p.id) AS bytes
          FROM packs p WHERE p.character_id = ?
          ORDER BY p.sort_order, p.id`
       )
@@ -892,8 +919,110 @@ export function createApp() {
         createdAt: p.created_at,
         mediaCount: p.media_count,
         animCount: p.anim_count,
+        bytes: p.bytes || 0,
         coverMediaId: p.cover_media_id || null,
         thumbs: byPack.get(p.id) || [],
+      })),
+    });
+  });
+
+  // ---------- 全部库（未分发 / 已分发）----------
+  /**
+   * 「全部库」不是真的把所有文件复制一份进来，而是两种查询：
+   *  - 未分发：媒体挂在库的隐藏容器条目下面，文件在 <库名>/未分类/图片|视频
+   *  - 已分发：库里**其它所有**媒体，只读聚合（点开还是走 /i/:id 原页）
+   * 分发动作不在这里：直接复用 POST /api/packs/:id/media（跨条目移动会搬文件 + 写 journal）。
+   */
+  app.get('/api/shelves/:id/inbox', (req, res) => {
+    const db = getDb();
+    const shelfId = Number(req.params.id);
+    const shelf = db.prepare('SELECT * FROM shelves WHERE id = ?').get(shelfId);
+    if (!shelf) return res.status(404).json({ error: '库不存在' });
+    if ((shelf.kind || '') !== 'inbox') return res.status(400).json({ error: '不是全部库' });
+    const container = ensureShelfContainer(shelfId);
+    if (!container) return res.status(404).json({ error: '全部库没有准备好' });
+
+    const section = String(req.query.section || '') === 'distributed' ? 'distributed' : 'undistributed';
+    const kind = ['image', 'video'].includes(String(req.query.kind || '')) ? String(req.query.kind) : '';
+    const q = String(req.query.q || '').trim();
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(300, Math.max(24, Number(req.query.pageSize) || 120));
+
+    // 一块用容器 id 过滤，另一块取反；kind 只认图片/视频（小说正文那种 file 不进这里）
+    const sideOf = (sec) =>
+      sec === 'undistributed' ? 'm.character_id = @containerId' : 'm.character_id <> @containerId';
+    const cond = [sideOf(section), "m.kind IN ('image','video')"];
+    const params = { containerId: container.id };
+    if (kind) {
+      cond.push('m.kind = @kind');
+      params.kind = kind;
+    }
+    // 文件名 + 所属条目名都能搜：已分发那边只看文件名等于大海捞针
+    if (q) {
+      cond.push('(m.file_name LIKE @q OR c.name LIKE @q OR p.title LIKE @q)');
+      params.q = `%${q}%`;
+    }
+    const from = `FROM media m
+      JOIN characters c ON c.id = m.character_id
+      LEFT JOIN packs p ON p.id = m.pack_id
+      LEFT JOIN shelves sh ON sh.id = c.shelf_id`;
+    const where = cond.join(' AND ');
+
+    const total = db.prepare(`SELECT COUNT(*) n ${from} WHERE ${where}`).get(params).n;
+    // 四个角标：不跟 q 走，切视图时数字要稳
+    const countPair = (sec) => {
+      const row = db
+        .prepare(
+          `SELECT
+             SUM(CASE WHEN m.kind = 'image' THEN 1 ELSE 0 END) AS images,
+             SUM(CASE WHEN m.kind = 'video' THEN 1 ELSE 0 END) AS videos
+           FROM media m WHERE ${sideOf(sec)} AND m.kind IN ('image','video')`
+        )
+        .get({ containerId: container.id });
+      return { image: row.images || 0, video: row.videos || 0 };
+    };
+    const counts = { undistributed: countPair('undistributed'), distributed: countPair('distributed') };
+
+    const rows = db
+      .prepare(
+        `SELECT m.*, c.name AS char_name, c.is_container,
+                sh.id AS shelf_id, sh.name AS shelf_name, sh.kind AS shelf_kind,
+                p.title AS pack_title
+         ${from}
+         WHERE ${where}
+         ORDER BY m.id DESC
+         LIMIT @limit OFFSET @offset`
+      )
+      .all({ ...params, limit: pageSize, offset: (page - 1) * pageSize });
+
+    const packTags = new Map();
+    const packIds = [...new Set(rows.map((r) => r.pack_id).filter(Boolean))];
+    if (packIds.length) {
+      const got = db
+        .prepare(`SELECT id, tags FROM packs WHERE id IN (${packIds.map(() => '?').join(',')})`)
+        .all(...packIds);
+      for (const r of got) packTags.set(r.id, safeJson(r.tags));
+    }
+
+    res.json({
+      shelf: { id: shelf.id, name: shelf.name, note: shelf.note, kind: shelf.kind },
+      containerId: container.id,
+      section,
+      kind,
+      q,
+      page,
+      pageSize,
+      total,
+      counts,
+      items: rows.map((r) => ({
+        ...mapMedia(r),
+        tags: mergeTags(r.tags ? safeJson(r.tags) : [], [], packTags.get(r.pack_id) || []),
+        packTitle: r.pack_title || '',
+        charName: r.char_name,
+        shelfId: r.shelf_id,
+        shelfName: r.shelf_name || '',
+        shelfKind: r.shelf_kind || '',
+        container: !!r.is_container,
       })),
     });
   });
@@ -904,14 +1033,19 @@ export function createApp() {
    * 它和「角色 / 人物」的关系完全靠标签（同名标签）或出处（platforms.handle）建立，
    * 不额外建关联表，这样在条目上打个「原神」标签就自动挂上去了。
    */
+  /**
+   * 关联条目数：**标签或出处**，命中一条就够。
+   * 以前是两段各自 COUNT 再相加 —— 同一张卡既打了标签、又填了出处时会被数两次，
+   * 232 个角色显示成 465。改成「满足任一条件的角色数」。
+   */
   const RESOURCE_LINKED = `
     (SELECT COUNT(*) FROM characters c2
-       JOIN character_tags ct2 ON ct2.character_id = c2.id
-       JOIN tags t2 ON t2.id = ct2.tag_id
-      WHERE t2.name = c.name AND c2.is_container = 0 AND c2.id <> c.id)
-    + (SELECT COUNT(*) FROM characters c3
-        WHERE c3.is_container = 0 AND c3.id <> c.id
-          AND c3.platforms LIKE ('%"handle":"' || c.name || '"%'))`;
+      WHERE c2.is_container = 0 AND c2.id <> c.id
+        AND (
+          EXISTS (SELECT 1 FROM character_tags ct2 JOIN tags t2 ON t2.id = ct2.tag_id
+                   WHERE ct2.character_id = c2.id AND t2.name = c.name)
+          OR c2.platforms LIKE ('%"handle":"' || c.name || '"%')
+        ))`;
 
   // 没设封面时，自动借一个关联条目的封面：优先「角色库」（作品里的角色更像封面）
   const RESOURCE_COVER = `
@@ -1293,12 +1427,37 @@ export function createApp() {
     const db = getDb();
     const row = db.prepare('SELECT * FROM characters WHERE id = ?').get(Number(req.params.id));
     if (!row) return res.status(404).json({ error: '角色不存在' });
-    const paths = db.prepare('SELECT rel_path FROM media WHERE character_id = ?').all(row.id);
-    db.prepare('DELETE FROM characters WHERE id = ?').run(row.id);
-    for (const p of paths) await removeLibraryFile(p.rel_path);
-    await removeDir(row.dir_slug);
+
+    /* 先清磁盘、再删记录。
+       目录里的文件被占用时整次删除失败，条目还在、界面看得见，用户可以关掉占用的程序再来一次；
+       反过来（先删记录）失败的话，文件留在磁盘上、却没有任何记录能指向它，等于悄悄漏删。 */
+    if (row.dir_slug) {
+      const rm = await removeDir(row.dir_slug);
+      if (!rm.ok) {
+        const warning = await noteDirLeftover(row.dir_slug, rm);
+        return res.status(409).json({
+          error: warning,
+          code: rm.code || null,
+          remaining: rm.remaining ?? null,
+          kept: true,
+        });
+      }
+    }
+
+    try {
+      db.prepare('DELETE FROM characters WHERE id = ?').run(row.id);
+    } catch (err) {
+      // 文件已经删了、记录没删掉：极少见，但必须留痕（重试一次删除即可清掉空记录）
+      await logRecovery({
+        kind: 'character-row-delete-failed',
+        characterId: row.id,
+        dirRel: row.dir_slug,
+        error: String(err.message || err),
+      });
+      return res.status(500).json({ error: `文件已删除，但记录没删掉（${err.message}）`, characterId: row.id });
+    }
     pruneOrphanTags(db); // 名字标签别留在池里变成幽灵
-    res.json({ ok: true });
+    res.json({ ok: true, dirRemoved: !!row.dir_slug });
   });
 
   // ---------- 图包 ----------
@@ -1312,7 +1471,8 @@ export function createApp() {
         `SELECT p.*,
            (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id) AS media_count,
            (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id AND m.kind='image') AS image_count,
-           (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id AND m.kind='video') AS video_count
+           (SELECT COUNT(*) FROM media m WHERE m.pack_id = p.id AND m.kind='video') AS video_count,
+           (SELECT COALESCE(SUM(m.bytes),0) FROM media m WHERE m.pack_id = p.id) AS bytes
          FROM packs p WHERE p.character_id = ? ${cat ? 'AND p.category = ?' : ''}
          ORDER BY p.month IS NULL, p.month DESC, p.id DESC`
       )
@@ -1327,6 +1487,8 @@ export function createApp() {
         mediaCount: r.media_count,
         imageCount: r.image_count,
         videoCount: r.video_count,
+        bytes: r.bytes,
+        createdAt: r.created_at,
         coverMediaId: r.cover_media_id,
       })),
     });
@@ -1472,17 +1634,27 @@ export function createApp() {
     if (!row) return res.status(404).json({ error: '图包不存在' });
     const withMedia = String(req.query.withMedia || '') === '1';
     let removed = 0;
+    const failed = [];
     if (withMedia) {
       const items = db.prepare('SELECT id, rel_path FROM media WHERE pack_id = ?').all(id);
-      db.prepare('DELETE FROM media WHERE pack_id = ?').run(id);
-      for (const m of items) await removeLibraryFile(m.rel_path);
-      removed = items.length;
+      const delOne = db.prepare('DELETE FROM media WHERE id = ?');
+      for (const m of items) {
+        // 先删文件，删不掉就留着这条记录（变成未归包），别让「已删除」变成谎话
+        const del = await removeLibraryFile(m.rel_path);
+        if (del.ok || del.alreadyGone) {
+          delOne.run(m.id);
+          removed += 1;
+        } else {
+          failed.push({ id: m.id, reason: whyDeleteFailed(del), code: del.code || null });
+          db.prepare('UPDATE media SET pack_id = NULL WHERE id = ?').run(m.id);
+        }
+      }
     } else {
       db.prepare('UPDATE media SET pack_id = NULL WHERE pack_id = ?').run(id);
     }
     db.prepare('DELETE FROM packs WHERE id = ?').run(id);
     refreshCharacter(row.character_id);
-    res.json({ ok: true, removed });
+    res.json({ ok: true, removed, failed });
   });
 
   /**
@@ -1497,22 +1669,30 @@ export function createApp() {
     if (action !== 'dissolve' && action !== 'delete') return res.status(400).json({ error: '未知操作' });
 
     const getPack = db.prepare('SELECT id, character_id FROM packs WHERE id = ?');
-    const listMedia = db.prepare('SELECT rel_path FROM media WHERE pack_id = ?');
-    const delMedia = db.prepare('DELETE FROM media WHERE pack_id = ?');
     const delPack = db.prepare('DELETE FROM packs WHERE id = ?');
 
     let done = 0;
     let removed = 0;
+    const failed = [];
     const chars = new Set();
+    const delOneMedia = db.prepare('DELETE FROM media WHERE id = ?');
+    const looseMedia = db.prepare('UPDATE media SET pack_id = NULL WHERE id = ?');
     for (const id of ids) {
       const pack = getPack.get(id);
       if (!pack) continue;
       chars.add(pack.character_id);
       if (action === 'delete') {
-        const rows = listMedia.all(id);
-        delMedia.run(id);
-        for (const r of rows) await removeLibraryFile(r.rel_path);
-        removed += rows.length;
+        const rows = db.prepare('SELECT id, rel_path FROM media WHERE pack_id = ?').all(id);
+        for (const r of rows) {
+          const del = await removeLibraryFile(r.rel_path);
+          if (del.ok || del.alreadyGone) {
+            delOneMedia.run(r.id);
+            removed += 1;
+          } else {
+            failed.push({ id: r.id, packId: id, reason: whyDeleteFailed(del), code: del.code || null });
+            looseMedia.run(r.id); // 留在「未归包」里，用户还看得见、能再来一次
+          }
+        }
       }
       // dissolve 时 media.pack_id 有 ON DELETE SET NULL，会自动变成未归包
       delPack.run(id);
@@ -1522,7 +1702,7 @@ export function createApp() {
       refreshCharacterPacks(cid);
       refreshCharacter(cid);
     }
-    res.json({ ok: true, done, removed });
+    res.json({ ok: true, done, removed, failed });
   });
 
   /** 媒体批量操作：delete 删记录和磁盘文件；move 只改分组（限同一批条目） */
@@ -1541,18 +1721,24 @@ export function createApp() {
 
     if (action === 'delete') {
       let done = 0;
+      const failed = [];
       for (const id of ids) {
         const row = getRow.get(id);
         if (!row) continue;
+        // 先删文件：文件被占用/权限不足时不要谎报成功，记录留在原处等重试
+        const del = await removeLibraryFile(row.rel_path);
+        if (!del.ok && !del.alreadyGone) {
+          failed.push({ id, reason: whyDeleteFailed(del), code: del.code || null });
+          continue;
+        }
         delRow.run(id);
-        await removeLibraryFile(row.rel_path);
         chars.add(row.character_id);
         if (row.pack_id) packs.add(row.pack_id);
         done += 1;
       }
       for (const cid of chars) refreshCharacter(cid);
       for (const pid of packs) refreshPack(pid);
-      return res.json({ ok: true, done, skipped: ids.length - done });
+      return res.json({ ok: true, done, skipped: ids.length - done, failed });
     }
 
     const packId = Number(req.body.packId) || null;
@@ -1710,6 +1896,7 @@ export function createApp() {
     let order = maxOrder.get(packId).n;
     const moved = [];
     const skipped = [];
+    const warnings = [];
     const touched = new Set([pack.character_id]);
 
     for (const id of ids) {
@@ -1736,23 +1923,201 @@ export function createApp() {
         continue;
       }
 
-      let relPath;
+      /**
+       * 跨角色：文件先搬、再写库。
+       * - 搬之前落一条意图（journal），进程被杀也能在下次启动时收尾
+       * - 写库失败就把文件搬回去；搬不回去记 recovery.log，别把不一致悄悄留下
+       */
+      let info = null;
+      let dropIntent = null;
+      let intentRel = null;
       try {
         const relDir = await resolvePackDir(db, target.dir_slug, pack, row.kind, pack.category);
-        relPath = await relocateFile(row.rel_path, relDir);
+        info = await relocateFile(row.rel_path, relDir, {
+          onTarget: async (absDst) => {
+            intentRel = path.relative(DATA_DIR, absDst).split(path.sep).join('/');
+            dropIntent = await beginMove({ mediaId: id, fromRel: row.rel_path, toRel: intentRel });
+          },
+        });
       } catch (err) {
+        if (dropIntent) await dropIntent();
         skipped.push({ id, reason: `文件搬迁失败：${err.message || err}` });
         continue;
       }
-      order += 1;
-      crossMove.run(pack.character_id, packId, relPath, order, id);
+
+      try {
+        order += 1;
+        crossMove.run(pack.character_id, packId, info.relPath, order, id);
+      } catch (err) {
+        // 数据库没写成 → 把文件搬回原处，保持「操作前」的状态
+        let rolled = false;
+        try {
+          await moveFile(absPathOf(info.relPath), absPathOf(row.rel_path));
+          rolled = true;
+        } catch (backErr) {
+          await logRecovery({
+            kind: 'move-rollback-failed',
+            mediaId: id,
+            fromRel: row.rel_path,
+            toRel: info.relPath,
+            dbError: String(err.message || err),
+            rollbackError: String(backErr.message || backErr),
+          });
+        }
+        if (dropIntent) await dropIntent();
+        order -= 1;
+        skipped.push({
+          id,
+          reason: rolled
+            ? `数据库写入失败，文件已搬回原处（${err.message || err}）`
+            : `数据库写入失败且文件搬不回去（${err.message || err}），已记入 recovery.log`,
+          rollback: rolled,
+        });
+        continue;
+      }
+      if (dropIntent) await dropIntent();
       touched.add(row.character_id);
       moved.push(id);
+      if (info.warning) warnings.push({ id, warning: info.warning });
     }
 
     refreshPack(packId);
     for (const cid of touched) refreshCharacter(cid);
-    res.json({ ok: true, moved: moved.length, skipped, ids: moved });
+    res.json({ ok: true, moved: moved.length, skipped, warnings, ids: moved });
+  });
+
+  /**
+   * 移出库：把素材从条目（及其图包）里摘出来，放进「全部库」的未分类。
+   * 和「分发」正好相反，共用同一套搬移保证（journal / 全量 sha256 / 写库失败搬回）。
+   * 全部库里已经有同一份内容时不再留两份：文件只留一份，这条记录直接消失（merged）。
+   */
+  app.post('/api/media/eject', async (req, res) => {
+    const db = getDb();
+    const raw = req.body && Array.isArray(req.body.ids) ? req.body.ids : [];
+    const ids = [...new Set(raw.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+    if (!ids.length) return res.status(400).json({ error: '没有选择素材' });
+    if (ids.length > 2000) return res.status(400).json({ error: '一次最多移出 2000 个素材' });
+
+    const shelf = db.prepare("SELECT * FROM shelves WHERE kind = 'inbox' ORDER BY id LIMIT 1").get();
+    if (!shelf) return res.status(400).json({ error: '还没有「全部库」，先在首页建一个' });
+    const box = ensureShelfContainer(shelf.id);
+    if (!box) return res.status(400).json({ error: '全部库没有准备好' });
+
+    const getMedia = db.prepare('SELECT * FROM media WHERE id = ?');
+    const moveRow = db.prepare(
+      'UPDATE media SET character_id = ?, pack_id = NULL, rel_path = ?, sort_order = ? WHERE id = ?'
+    );
+    const delRow = db.prepare('DELETE FROM media WHERE id = ?');
+    const clearCharCover = db.prepare('UPDATE characters SET cover_media_id = NULL WHERE cover_media_id = ?');
+    const clearPackCover = db.prepare('UPDATE packs SET cover_media_id = NULL WHERE cover_media_id = ?');
+    const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order),-1) AS n FROM media WHERE character_id = ?');
+    const dirOf = (kind) => `${box.dir_slug}/未分类/${kind === 'image' ? '图片' : kind === 'video' ? '视频' : '文件'}`;
+
+    let order = maxOrder.get(box.id).n;
+    const moved = [];
+    const merged = [];
+    const skipped = [];
+    const warnings = [];
+    const chars = new Set();
+    const packs = new Set();
+
+    for (const id of ids) {
+      const row = getMedia.get(id);
+      if (!row) {
+        skipped.push({ id, reason: '素材不存在' });
+        continue;
+      }
+      if (row.character_id === box.id) {
+        skipped.push({ id, reason: '已经在全部库里' });
+        continue;
+      }
+
+      // 全部库里已经有同一份内容（sha256 是导入时按字节算的）：内容不会丢，
+      // 这条记录直接收掉，不再往未分类里塞第二份；旧文件删不掉就整条留着，如实报告
+      const dup = row.sha256
+        ? db
+            .prepare('SELECT id FROM media WHERE character_id = ? AND sha256 = ? AND id <> ?')
+            .get(box.id, row.sha256, id)
+        : null;
+      if (dup) {
+        const gone = await removeLibraryFile(row.rel_path);
+        if (!gone.ok && !gone.alreadyGone) {
+          skipped.push({ id, reason: `全部库里已有同一份文件，但这份删不掉（${gone.code || gone.error}）` });
+          continue;
+        }
+        clearCharCover.run(id);
+        clearPackCover.run(id);
+        delRow.run(id);
+        merged.push(id);
+        chars.add(row.character_id);
+        if (row.pack_id) packs.add(row.pack_id);
+        continue;
+      }
+
+      let info = null;
+      let dropIntent = null;
+      try {
+        info = await relocateFile(row.rel_path, dirOf(row.kind), {
+          onTarget: async (absDst) => {
+            const intentRel = path.relative(DATA_DIR, absDst).split(path.sep).join('/');
+            dropIntent = await beginMove({ mediaId: id, fromRel: row.rel_path, toRel: intentRel });
+          },
+        });
+      } catch (err) {
+        if (dropIntent) await dropIntent();
+        skipped.push({ id, reason: `文件搬迁失败：${err.message || err}` });
+        continue;
+      }
+
+      try {
+        if (info.action === 'reused') {
+          // 全部库里躺着同一份内容（刚比过全量 sha256）：文件不重复存，这条记录收掉
+          clearCharCover.run(id);
+          clearPackCover.run(id);
+          delRow.run(id);
+          merged.push(id);
+        } else {
+          order += 1;
+          moveRow.run(box.id, info.relPath, order, id);
+          clearCharCover.run(id);
+          clearPackCover.run(id);
+          moved.push(id);
+        }
+      } catch (err) {
+        let rolled = false;
+        try {
+          await moveFile(absPathOf(info.relPath), absPathOf(row.rel_path));
+          rolled = true;
+        } catch (backErr) {
+          await logRecovery({
+            kind: 'eject-rollback-failed',
+            mediaId: id,
+            fromRel: row.rel_path,
+            toRel: info.relPath,
+            dbError: String(err.message || err),
+            rollbackError: String(backErr.message || backErr),
+          });
+        }
+        if (dropIntent) await dropIntent();
+        skipped.push({
+          id,
+          reason: rolled
+            ? `数据库写入失败，文件已搬回原处（${err.message || err}）`
+            : `数据库写入失败且文件搬不回去（${err.message || err}），已记入 recovery.log`,
+          rollback: rolled,
+        });
+        continue;
+      }
+      if (dropIntent) await dropIntent();
+      chars.add(row.character_id);
+      if (row.pack_id) packs.add(row.pack_id);
+      if (info.warning) warnings.push({ id, warning: info.warning });
+    }
+
+    for (const pid of packs) refreshPack(pid);
+    for (const cid of chars) refreshCharacter(cid);
+    refreshCharacter(box.id);
+    res.json({ ok: true, moved: moved.length, merged: merged.length, shelfId: shelf.id, skipped, warnings, ids: moved });
   });
 
   app.get('/api/characters/:id/media', (req, res) => {
@@ -1963,8 +2328,16 @@ export function createApp() {
     const db = getDb();
     const row = db.prepare('SELECT * FROM media WHERE id = ?').get(Number(req.params.id));
     if (!row) return res.status(404).json({ error: '媒体不存在' });
+    // 先删文件：删不掉就返回 409 并保留记录，用户还能看见它、重试一次
+    const del = await removeLibraryFile(row.rel_path);
+    if (!del.ok && !del.alreadyGone) {
+      return res.status(409).json({
+        error: `文件删不掉：${whyDeleteFailed(del)}`,
+        code: del.code || null,
+        path: del.path || null,
+      });
+    }
     db.prepare('DELETE FROM media WHERE id = ?').run(row.id);
-    await removeLibraryFile(row.rel_path);
     refreshPack(row.pack_id);
     refreshCharacter(row.character_id);
     res.json({ ok: true });

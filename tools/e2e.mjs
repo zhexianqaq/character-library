@@ -1173,7 +1173,9 @@ try {
   );
   check(
     '设为人物封面生效并刷新头像',
-    coverFlow.toastOwner.includes('封面') && coverFlow.heroSrc === `/t/${coverFlow.id}`,
+    // 缩略图 URL 带 ?v=<版本>（作废浏览器旧缓存用），这里只比路径
+    coverFlow.toastOwner.includes('封面') &&
+      String(coverFlow.heroSrc || '').split('?')[0] === `/t/${coverFlow.id}`,
     `${coverFlow.toastOwner} · ${coverFlow.heroSrc}`
   );
   check(

@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fadeIn, toast, copyText } from '../util.js';
+import { esc, fmtNum, fadeIn, toast, copyText, charDeleteMessage } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openContextMenu } from '../components/context-menu.js';
@@ -45,7 +45,9 @@ async function editResourceModal(item = null) {
   return { name: v.name.trim(), category: v.category, intro: v.intro || '', tags };
 }
 
-export async function ResourcesView(root, shelfId) {
+export async function ResourcesView(root, shelfId, opts = {}) {
+  /* 嵌入首页时不自带顶栏：顶栏和库切换条由 LibraryView 提供 */
+  const embedded = !!opts.embedded;
   let data = await api.resources(shelfId);
   let shelf = data.shelf;
   let items = data.items;
@@ -88,12 +90,14 @@ export async function ResourcesView(root, shelfId) {
     const cats = RES_CATS.slice();
     for (const g of groups) if (!cats.includes(g.name)) cats.push(g.name);
     root.innerHTML =
-      topbarHtml({
-        back: true,
-        title: shelf.name,
-        sub: '',
-        actions: `<button class="tb-btn" data-edit-shelf>编辑库</button>`,
-      }) +
+      (embedded
+        ? ''
+        : topbarHtml({
+            back: true,
+            title: shelf.name,
+            sub: '',
+            actions: `<button class="tb-btn" data-edit-shelf>编辑库</button>`,
+          })) +
       `<main class="page">
          <div class="shelf-head">
            <div class="sh-main">
@@ -120,7 +124,7 @@ export async function ResourcesView(root, shelfId) {
          <div class="char-grid" data-grid></div>
        </main>`;
 
-    bindTopbar(root);
+    if (!embedded) bindTopbar(root);
 
     const sortDD = createDropdown({
       options: CARD_SORTS,
@@ -190,7 +194,8 @@ export async function ResourcesView(root, shelfId) {
       }
     });
 
-    root.querySelector('[data-edit-shelf]').addEventListener('click', async () => {
+    // 嵌入首页时没有这颗按钮（由 LibraryView 统一提供），绑定必须可选
+    root.querySelector('[data-edit-shelf]')?.addEventListener('click', async () => {
       const v = await openModal({
         title: '编辑库',
         fields: [{ name: 'name', label: '库名称', value: shelf.name, required: true }],
@@ -266,7 +271,7 @@ export async function ResourcesView(root, shelfId) {
         })),
       },
       { separator: true },
-      { label: '编辑库', onClick: () => root.querySelector('[data-edit-shelf]').click() },
+      { label: '编辑库', onClick: () => root.querySelector('[data-edit-shelf]')?.click() },
       { label: '刷新列表', onClick: () => reload() },
     ];
   }
@@ -356,8 +361,8 @@ export async function ResourcesView(root, shelfId) {
     );
     if (!ok) return;
     try {
-      await api.deleteCharacter(item.id);
-      toast('已删除');
+      const res = await api.deleteCharacter(item.id);
+      toast(charDeleteMessage(res));
       await reload();
     } catch (err) {
       toast(err.message || '删除失败');

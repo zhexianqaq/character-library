@@ -1,12 +1,28 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fmtBytes, fadeIn, toast } from '../util.js';
+import { esc, fmtNum, fmtBytes, fadeIn, toast, charDeleteMessage } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openContextMenu } from '../components/context-menu.js';
 import { createDropdown } from '../components/dropdown.js';
+import { EmojiView } from './emoji.js';
+import { ResourcesView } from './resources.js';
+import { NovelView } from './novel.js';
+import { InboxView } from './inbox.js';
 
-/** 没有条目层级的库（或首页形态完全不同的库）直接有自己的页面 */
-const FLAT_HOME = { emoji: '/e/', resource: '/rs/', novel: '/n/' };
+/**
+ * 没有条目层级的库。
+ *
+ * 以前点这些标签会跳到 /e/:id、/rs/:id、/n/:id、/x/:id 四个二级页面 ——
+ * 明明和其他库并排放在同一排标签里，点一下却整页换掉、还多出一个「返回」按钮。
+ * 现在它们和人物库 / 角色库一样：顶栏和库切换条留在原地，只有内容换。
+ * 四个视图都支持 embedded 参数，嵌入时只输出主体，不重复画顶栏。
+ */
+const FLAT_VIEW = {
+  emoji: EmojiView,
+  resource: ResourcesView,
+  novel: NovelView,
+  inbox: InboxView,
+};
 
 /** 卡片排序：默认按素材数量（卡片右上角那个数）从多到少 */
 const CARD_SORTS = [
@@ -15,6 +31,17 @@ const CARD_SORTS = [
   { value: 'recent', label: '最新添加' },
   { value: 'name', label: '名称' },
 ];
+
+/** 库标签条：普通库与嵌入库共用同一份 */
+function tabsHtml(shelves, currentId) {
+  const items = shelves
+    .map((s) => {
+      const n = s.kind === 'emoji' ? s.packCount : s.kind === 'inbox' ? s.mediaCount : s.characterCount;
+      return `<button data-shelf="${s.id}" class="${s.id === currentId ? 'on' : ''}">${esc(s.name)}<i>${n}</i></button>`;
+    })
+    .join('');
+  return `${items}<button class="seg-add" data-new-shelf title="新建库">＋</button>`;
+}
 
 export async function LibraryView(root, shelfId) {
   const state = { q: '', shelfId: Number(shelfId) || null, sort: 'media' };
@@ -72,6 +99,96 @@ export async function LibraryView(root, shelfId) {
     paintGrid();
   }
 
+  /** 标签点击：换库不换页 —— 普通库和 flat 库走的都是这一条 */
+  function onTabClick(e) {
+    const tab = e.target.closest('button[data-shelf]');
+    if (!tab) return;
+    state.shelfId = Number(tab.dataset.shelf);
+    render({ push: true });
+  }
+
+  /** 新建库：两种骨架共用一份弹窗 */
+  async function openNewShelf() {
+    const v = await openModal({
+      title: '新建库',
+      description:
+        '人物库 / 角色库按「条目 → 图包 → 素材」组织；表情库没有条目；小说库按「归类文件夹 → 书 → 分卷」组织；全部库是收件箱 + 全库总览。',
+      fields: [
+        { name: 'name', label: '名称', required: true, placeholder: '比如：人物库、原创库' },
+        {
+          name: 'kind',
+          label: '类型',
+          type: 'select',
+          options: [
+            { value: 'people', label: '人物库 · 真人，填平台账号' },
+            { value: 'work', label: '角色库 · 虚拟角色，标出处' },
+            { value: 'novel:original', label: '原创库 · 小说，按「小说类型」分文件夹' },
+            { value: 'novel:fanfic', label: '同人库 · 同人小说，按「原作品名」分文件夹' },
+            { value: 'emoji', label: '表情库 · 没有条目，直接放图包（gif / 表情包）' },
+            { value: 'resource', label: '资源库 · 游戏 / 动画 / 电影 / 剧集，按标签串起角色' },
+            { value: 'inbox', label: '全部库 · 收一堆杂图，再分发给人物 / 角色库' },
+          ],
+          value: 'people',
+          hint: '建好之后也能改，只影响条目那一栏的字段。',
+        },
+      ],
+      submitText: '创建',
+    });
+    if (!v) return;
+    try {
+      // 「原创库 / 同人库」共用一个 kind=novel，靠 variant 区分
+      const [kind, variant] = String(v.kind).split(':');
+      const created = await api.createShelf(v.name, kind, variant ? { variant } : {});
+      toast('库已创建');
+      // 建完就打开它：flat 库也留在首页，不再跳二级页面
+      state.shelfId = created.id;
+      render({ push: true });
+    } catch (err) {
+      toast(err.message || '创建失败');
+    }
+  }
+
+  /** 通用「编辑库」：只改名称，四个扁平库共用 */
+  async function editShelf(shelf) {
+    const v = await openModal({
+      title: '编辑库',
+      fields: [{ name: 'name', label: '库名称', value: shelf.name, required: true }],
+      submitText: '保存',
+    });
+    if (!v) return;
+    try {
+      await api.patch(`/api/shelves/${shelf.id}`, { name: v.name });
+      toast('已保存');
+      render();
+    } catch (err) {
+      toast(err.message || '保存失败');
+    }
+  }
+
+  /**
+   * 嵌入渲染：顶栏 + 库切换条 + 该库自己的整块内容。
+   *
+   * 子视图（emoji / resources / novel / inbox）传 embedded 后不再画自己的顶栏，
+   * 也不会把「返回」绑到它们内部的元素上 —— 这里由 LibraryView 统一提供。
+   */
+  async function renderEmbedded(active, shelves, ov) {
+    root.innerHTML =
+      topbarHtml({
+        title: ov.library.name,
+        sub: active.name,
+        actions: `<button class="tb-btn" data-edit-shelf>编辑库</button>`,
+      }) +
+      `<div class="lib-bar"><div class="segmented" data-tabs>${tabsHtml(shelves, active.id)}</div></div>
+       <div data-embed></div>`;
+
+    bindTopbar(root);
+    root.querySelector('[data-tabs]').addEventListener('click', onTabClick);
+    root.querySelector('[data-new-shelf]').addEventListener('click', openNewShelf);
+    root.querySelector('[data-edit-shelf]').addEventListener('click', () => editShelf(active));
+
+    await FLAT_VIEW[active.kind](root.querySelector('[data-embed]'), active.id, { embedded: true });
+  }
+
   async function render({ push = false } = {}) {
     const ov = await api.overview();
     const shelves = ov.shelves;
@@ -84,12 +201,9 @@ export async function LibraryView(root, shelfId) {
     }
 
     const active = shelves.find((s) => s.id === state.shelfId);
-    // 表情库 / 资源库没有条目层级，直接进自己的页面
-    if (active && FLAT_HOME[active.kind]) {
-      history.replaceState({}, '', `${FLAT_HOME[active.kind]}${active.id}`);
-      root.innerHTML = '';
-      // 当前这一轮 renderRoute 还占着 busy，下一帧再切
-      setTimeout(() => window.dispatchEvent(new CustomEvent('app:route')), 0);
+    // 表情库 / 资源库 / 小说库 / 全部库：不跳页，就在首页原地展开
+    if (active && FLAT_VIEW[active.kind]) {
+      await renderEmbedded(active, shelves, ov);
       return;
     }
     const isWork = active ? active.kind === 'work' : false;
@@ -110,17 +224,7 @@ export async function LibraryView(root, shelfId) {
       }) +
       `<main class="page">
          <div class="toolbar">
-           <div class="segmented" data-tabs>
-             ${shelves
-               .map(
-                 (s) =>
-                   `<button data-shelf="${s.id}" class="${s.id === state.shelfId ? 'on' : ''}">${esc(s.name)}<i>${
-                     s.kind === 'emoji' ? s.packCount : s.characterCount
-                   }</i></button>`
-               )
-               .join('')}
-             <button class="seg-add" data-new-shelf title="新建库">＋</button>
-           </div>
+           <div class="segmented" data-tabs>${tabsHtml(shelves, state.shelfId)}</div>
            <span class="spacer"></span>
            <span class="count" data-count>${chars.total} 个角色 · ${fmtNum(active ? active.mediaCount : 0)} 个媒体 · ${fmtBytes(
              active ? active.bytes || 0 : 0
@@ -196,67 +300,14 @@ export async function LibraryView(root, shelfId) {
         `「${item.name}」下的 ${item.packCount} 个图包、${item.mediaCount} 个媒体会一并删除，磁盘文件也会删掉。`
       );
       if (!ok) return;
-      await api.deleteCharacter(item.id);
-      toast('已删除');
+      const res = await api.deleteCharacter(item.id);
+      toast(charDeleteMessage(res));
       render();
     }
 
     // 角色库切换
-    root.querySelector('[data-tabs]').addEventListener('click', (e) => {
-      const tab = e.target.closest('button[data-shelf]');
-      if (!tab) return;
-      const nextId = Number(tab.dataset.shelf);
-      const nextShelf = shelves.find((s) => s.id === nextId);
-      if (nextShelf && FLAT_HOME[nextShelf.kind]) {
-        history.pushState({}, '', `${FLAT_HOME[nextShelf.kind]}${nextId}`);
-        window.dispatchEvent(new CustomEvent('app:route'));
-        return;
-      }
-      state.shelfId = nextId;
-      render({ push: true });
-    });
-
-    root.querySelector('[data-new-shelf]').addEventListener('click', async () => {
-      const v = await openModal({
-        title: '新建库',
-        description:
-          '人物库 / 角色库按「条目 → 图包 → 素材」组织；表情库没有条目；小说库按「归类文件夹 → 书 → 分卷」组织。',
-        fields: [
-          { name: 'name', label: '名称', required: true, placeholder: '比如：人物库、原创库' },
-          {
-            name: 'kind',
-            label: '类型',
-            type: 'select',
-            options: [
-              { value: 'people', label: '人物库 · 真人，填平台账号' },
-              { value: 'work', label: '角色库 · 虚拟角色，标出处' },
-              { value: 'novel:original', label: '原创库 · 小说，按「小说类型」分文件夹' },
-              { value: 'novel:fanfic', label: '同人库 · 同人小说，按「原作品名」分文件夹' },
-              { value: 'emoji', label: '表情库 · 没有条目，直接放图包（gif / 表情包）' },
-              { value: 'resource', label: '资源库 · 游戏 / 动画 / 电影 / 剧集，按标签串起角色' },
-            ],
-            value: 'people',
-            hint: '建好之后也能改，只影响条目那一栏的字段。',
-          },
-        ],
-        submitText: '创建',
-      });
-      if (!v) return;
-      try {
-        // 「原创库 / 同人库」共用一个 kind=novel，靠 variant 区分
-        const [kind, variant] = String(v.kind).split(':');
-        const created = await api.createShelf(v.name, kind, variant ? { variant } : {});
-        toast('库已创建');
-        if (FLAT_HOME[kind]) {
-          history.pushState({}, '', `${FLAT_HOME[kind]}${created.id}`);
-          window.dispatchEvent(new CustomEvent('app:route'));
-          return;
-        }
-        render();
-      } catch (err) {
-        toast(err.message || '创建失败');
-      }
-    });
+    root.querySelector('[data-tabs]').addEventListener('click', onTabClick);
+    root.querySelector('[data-new-shelf]').addEventListener('click', openNewShelf);
 
     // 新建角色
     root.querySelector('[data-new-char]').addEventListener('click', async () => {

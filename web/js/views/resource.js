@@ -1,10 +1,11 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fadeIn, toast, copyText } from '../util.js';
+import { esc, fmtNum, fadeIn, toast, copyText, charDeleteMessage } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openTagPicker } from '../components/tag-picker.js';
 import { openContextMenu } from '../components/context-menu.js';
 import { RES_CATS } from './resources.js';
+import { createPackSort, sortPacks } from '../components/pack-sort.js';
 
 /**
  * 资源详情：顶部是封面 / 名称 / 分类 / 标签 / 简介，
@@ -41,6 +42,8 @@ export async function ResourceView(root, id) {
        <div class="section-head">
          <h2>官方图包</h2>
          <span class="meta" data-pack-count></span>
+         <span class="spacer"></span>
+         <span data-pack-sort></span>
        </div>
        <div class="pack-grid" data-packs></div>
        <div class="section-head">
@@ -189,9 +192,9 @@ export async function ResourceView(root, id) {
     );
     if (!ok) return;
     try {
-      await api.deleteCharacter(r.id);
-      toast('已删除');
-      history.pushState({}, '', `/rs/${r.shelf.id}`);
+      const res = await api.deleteCharacter(r.id);
+      toast(charDeleteMessage(res));
+      history.pushState({}, '', `/s/${r.shelf.id}`);
       window.dispatchEvent(new CustomEvent('app:route'));
     } catch (err) {
       toast(err.message || '删除失败');
@@ -289,6 +292,9 @@ export async function ResourceView(root, id) {
   });
 
   /** 该作品的图包（现在固定有一个「官方」）。点进去就是标准的图包页，能直接上传图片 / 视频 */
+  /** 图包排序：默认时间倒序，和条目页保持一致 */
+  let packSort = { key: 'date', desc: true };
+
   function paintPacks() {
     const grid = root.querySelector('[data-packs]');
     if (!grid) return;
@@ -297,7 +303,7 @@ export async function ResourceView(root, id) {
       grid.innerHTML = '<div class="empty" style="grid-column:1/-1"><b>还没有图包</b>刷新一下试试</div>';
       return;
     }
-    grid.innerHTML = packs
+    grid.innerHTML = sortPacks(packs, packSort.key, packSort.desc)
       .map((p) => {
         const img = p.coverMediaId ? api.thumb(p.coverMediaId) : '';
         const meta =
@@ -318,6 +324,18 @@ export async function ResourceView(root, id) {
       .join('');
     grid.querySelectorAll('img').forEach(fadeIn);
   }
+
+  // 排序控件：只重画图包区，不动别处
+  const packSortCtl = createPackSort({
+    key: packSort.key,
+    desc: packSort.desc,
+    onChange: (key, desc) => {
+      packSort = { key, desc };
+      paintPacks();
+    },
+  });
+  const sortSlot = root.querySelector('[data-pack-sort]');
+  if (sortSlot) sortSlot.replaceWith(packSortCtl.el);
 
   paintHero();
   paintRelated();

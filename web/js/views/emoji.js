@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fmtBytes, fadeIn, toast, debounce } from '../util.js';
+import { esc, fmtNum, fmtBytes, fadeIn, toast, debounce, deleteSummary } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { openModal, confirmDialog } from '../components/modal.js';
@@ -10,6 +10,7 @@ import { applyPickClick } from '../selection.js';
 import { escDepth } from '../esc.js';
 import { addMediaMenuItems } from '../components/media-picker.js';
 import { createDropdown } from '../components/dropdown.js';
+import { createPackSort, sortPacks } from '../components/pack-sort.js';
 import { bindDropUpload } from '../components/dropzone.js';
 import { queue } from '../upload-queue.js';
 
@@ -38,14 +39,19 @@ function gotoMedia(mediaId) {
  * 表情库：扁平库，没有条目层级。
  * 库里直接就是「图包 / 未分类 / 全部素材」三类，图包用前 9 张图拼成封面。
  */
-export async function EmojiView(root, shelfId) {
+export async function EmojiView(root, shelfId, opts = {}) {
+  /* 嵌入首页时不自带顶栏：顶栏和库切换条由 LibraryView 提供 */
+  const embedded = !!opts.embedded;
   let data = await api.emojiShelf(shelfId);
   let shelf = data.shelf;
   let packs = data.packs;
   let mediaAll = [];
   let mediaItems = [];
   let mediaLoaded = false;
-  let mode = 'packs';
+  // 分区记在历史项里（history.state.emojiTab）。以前写进 URL（/e/:id?tab=xx），
+  // 现在库是嵌在首页 /s/:id 里打开的，一改 URL 就把人带出首页、刷新后还落到旧页面
+  let mode =
+    (history.state && history.state.emojiTab) || new URLSearchParams(location.search).get('tab') || 'packs';
   let selecting = false;
   const picked = new Set();
   const filters = { kind: '', tag: '', pack: '', q: '', sort: 'new' };
@@ -53,16 +59,18 @@ export async function EmojiView(root, shelfId) {
   let packDD = null;
   let sortDD = null;
   // 图包卡片的排序（只在「图包」分区显示；未分类 / 全部素材用的是筛选条里那个排序）
-  let packSort = 'count';
-  let packSortDD = null;
+  let packSort = { key: 'count', desc: true };
+  let packSortCtl = null;
 
   root.innerHTML =
-    topbarHtml({
-      back: true,
-      title: shelf.name,
-      sub: '',
-      actions: `<button class="tb-btn" data-edit>编辑库</button>`,
-    }) +
+    (embedded
+      ? ''
+      : topbarHtml({
+          back: true,
+          title: shelf.name,
+          sub: '',
+          actions: `<button class="tb-btn" data-edit>编辑库</button>`,
+        })) +
     `<main class="page">
        <div class="shelf-head">
          <div class="sh-main">
@@ -104,28 +112,22 @@ export async function EmojiView(root, shelfId) {
        <div class="sel-bar" data-selbar hidden></div>
      </main>`;
 
-  bindTopbar(root);
+  if (!embedded) bindTopbar(root);
 
   const bodyEl = root.querySelector('[data-body]');
   const selBar = () => root.querySelector('[data-selbar]');
 
   // 图包卡片排序（默认素材数量从多到少）
-  packSortDD = createDropdown({
-    options: [
-      { value: 'count', label: '素材数量' },
-      { value: 'name', label: '名称' },
-      { value: 'recent', label: '最新创建' },
-    ],
-    value: packSort,
-    allowEmpty: false,
-    className: 'sort-dd',
-    onChange: (v) => {
-      packSort = v;
+  packSortCtl = createPackSort({
+    key: packSort.key,
+    desc: packSort.desc,
+    onChange: (key, desc) => {
+      packSort = { key, desc };
       if (mode === 'packs') renderPacks();
     },
   });
-  root.querySelector('[data-pack-sort]').replaceWith(packSortDD.el);
-  packSortDD.el.hidden = mode !== 'packs';
+  root.querySelector('[data-pack-sort]').replaceWith(packSortCtl.el);
+  packSortCtl.el.style.display = mode === 'packs' ? '' : 'none';
 
   // ---------- 顶部信息 ----------
   function paintHead() {
@@ -185,17 +187,7 @@ export async function EmojiView(root, shelfId) {
 
   /** 图包按当前排序排好（不修改 packs 本身） */
   function sortedPacks() {
-    const list = packs.slice();
-    if (packSort === 'name') {
-      list.sort((a, b) => a.title.localeCompare(b.title, 'zh-Hans-CN'));
-    } else if (packSort === 'recent') {
-      list.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-    } else {
-      list.sort(
-        (a, b) => (b.mediaCount || 0) - (a.mediaCount || 0) || a.title.localeCompare(b.title, 'zh-Hans-CN')
-      );
-    }
-    return list;
+    return sortPacks(packs, packSort.key, packSort.desc);
   }
 
   function renderPacks() {
@@ -385,6 +377,7 @@ export async function EmojiView(root, shelfId) {
                     : null,
                   // 表情库的条目是容器，没有「人物 / 角色」这一层
                   owner: null,
+                  shelfKind: (shelf && shelf.kind) || 'emoji',
                   onCover: () => reload(),
                 }),
         }
@@ -403,13 +396,17 @@ export async function EmojiView(root, shelfId) {
   async function switchMode(next) {
     if (next === mode) return;
     mode = next;
-    // 分区写进 URL：刷新、从详情页返回都能回到同一个分区
-    history.replaceState({}, '', `/e/${shelfId}${next === 'packs' ? '' : `?tab=${next}`}`);
+    // 刷新、从详情页返回都要回到同一个分区：写历史项，不动 URL
+    try {
+      history.replaceState({ ...(history.state || {}), emojiTab: next }, '', location.href);
+    } catch {
+      /* 隐私模式下写不了就算了，分区退回图包 */
+    }
     resetSelection();
     paintTabs();
     const bar = root.querySelector('[data-filter-bar]');
     if (bar) bar.hidden = mode === 'packs';
-    if (packSortDD) packSortDD.el.hidden = mode !== 'packs';
+    if (packSortCtl) packSortCtl.el.style.display = mode === 'packs' ? '' : 'none';
     if (packDD) packDD.el.hidden = mode !== 'all';
     if (mode === 'packs') {
       renderPacks();
@@ -563,7 +560,7 @@ export async function EmojiView(root, shelfId) {
     if (!ok) return;
     try {
       const res = await api.bulkMedia(ids, 'delete');
-      toast(`已删除 ${res.done} 个素材`);
+      toast(deleteSummary(res, '素材'));
       resetSelection();
       await reload();
     } catch (err) {
@@ -708,7 +705,7 @@ export async function EmojiView(root, shelfId) {
         { label: '打开上传队列', onClick: () => { history.pushState({}, '', '/uploads'); window.dispatchEvent(new CustomEvent('app:route')); } },
         { label: '新建图包', onClick: () => root.querySelector('[data-new-pack]').click() },
         { separator: true },
-        { label: '编辑库', onClick: () => root.querySelector('[data-edit]').click() },
+        { label: '编辑库', onClick: () => root.querySelector('[data-edit]')?.click() },
       ]);
     });
   }
@@ -777,7 +774,8 @@ export async function EmojiView(root, shelfId) {
     }
   });
 
-  root.querySelector('[data-edit]').addEventListener('click', async () => {
+  // 嵌入首页时没有这颗按钮（由 LibraryView 统一提供），绑定必须可选
+  root.querySelector('[data-edit]')?.addEventListener('click', async () => {
     const v = await openModal({
       title: '编辑库',
       fields: [{ name: 'name', label: '库名称', value: shelf.name, required: true }],

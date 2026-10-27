@@ -66,7 +66,12 @@ export async function MediaView(root, id) {
     </main>`;
 
   /** 表情库：没有条目层级，标签 / 位置都按「库 + 图包」算 */
-  const isFlat = () => !!(item.shelf && item.shelf.kind === 'emoji');
+  /** 扁平库：没有条目层级（表情库 / 全部库），媒体直接挂在库的容器条目下面 */
+  const flatKind = () => (item.shelf && ['emoji', 'inbox'].includes(item.shelf.kind) ? item.shelf.kind : '');
+  const isFlat = () => !!flatKind();
+  /** 没有来源可退时回哪一页：表情库回 /e/，全部库回 /x/ */
+  // 扁平库（表情 / 全部）现在都嵌在首页的 /s/:id 里，没有可退的历史时回那里
+  const flatHome = () => `/s/${item.shelf ? item.shelf.id : ''}`;
   const groupName = () => (item.pack ? item.pack.title : isFlat() ? '未分类' : item.character.name);
 
   const stage = root.querySelector('.mp-stage');
@@ -193,6 +198,7 @@ export async function MediaView(root, id) {
       <div class="mp-actions">
         <button class="tb-btn" data-open>全屏查看</button>
         <button class="tb-btn" data-rename>重命名</button>
+        ${flatKind() === 'inbox' ? '' : '<button class="tb-btn" data-eject>移出库</button>'}
         <button class="tb-btn" data-reveal>打开位置</button>
         <button class="tb-btn danger" data-del>删除</button>
       </div>
@@ -209,6 +215,8 @@ export async function MediaView(root, id) {
       api.reveal('media', item.id).catch(() => toast('文件已丢失'))
     );
     info.querySelector('[data-del]').addEventListener('click', removeItem);
+    const ejectBtn = info.querySelector('[data-eject]');
+    if (ejectBtn) ejectBtn.addEventListener('click', ejectItem);
 
     root.querySelector('[data-prev]').classList.toggle('is-off', !prev);
     root.querySelector('[data-next]').classList.toggle('is-off', !next);
@@ -326,10 +334,42 @@ export async function MediaView(root, id) {
     toast('已重命名');
   }
 
+  /**
+   * 移出库：这张退回「全部库 → 未分发」，文件跟着搬（不复制）。
+   * 移完这一页已经不属于当前条目：有来源就退回去（列表会自己刷新），
+   * 没有来源（直接打开链接）就去全部库，免得停在一个「不属于任何人」的详情页上。
+   */
+  async function ejectItem() {
+    const ok = await confirmDialog(
+      '把这张移出当前库？',
+      '会移到「全部库 → 未分发」，之后可以在那里重新分发；磁盘上的文件跟着搬，不会复制。'
+    );
+    if (!ok) return;
+    try {
+      const r = await api.ejectMedia([item.id]);
+      toast(r.merged ? '全部库里已有同一份文件，已合并（原条目这边移除）' : '已移到「全部库」');
+      if (entryFrom) {
+        history.back();
+        return;
+      }
+      if (r.shelfId) {
+        history.pushState({}, '', `/s/${r.shelfId}`);
+        window.dispatchEvent(new CustomEvent('app:route'));
+      }
+    } catch (err) {
+      toast(err.message || '移出失败');
+    }
+  }
+
   async function removeItem() {
     const ok = await confirmDialog('删除这个媒体？', '磁盘上的原文件也会一起删除，不可恢复。');
     if (!ok) return;
-    await api.deleteMedia(item.id);
+    try {
+      await api.deleteMedia(item.id);
+    } catch (err) {
+      toast(err.message || '删除失败');
+      return;
+    }
     toast('已删除');
     if (siblings.length > 1) {
       const at = indexOf(item.id);
@@ -421,7 +461,7 @@ export async function MediaView(root, id) {
     history.pushState(
       {},
       '',
-      item.pack ? `/p/${item.pack.id}` : isFlat() ? `/e/${item.shelf.id}` : `/c/${item.character.id}`
+      item.pack ? `/p/${item.pack.id}` : isFlat() ? flatHome() : `/c/${item.character.id}`
     );
     window.dispatchEvent(new CustomEvent('app:route'));
   });

@@ -50,10 +50,35 @@ async function moveMedia(item, characterId, onChange) {
   onChange && onChange();
 }
 
+/**
+ * 移出库：从当前条目 / 图包退回到「全部库 → 未分发」，文件真的搬过去。
+ * 「全部库」里本来就有同一份内容时，后端只留一份（记录合并），这里照实提示。
+ */
+async function ejectMedia(item, onChange) {
+  const ok = await confirmDialog(
+    '把这张移出当前库？',
+    '会从条目 / 图包里移到「全部库 → 未分发」，之后可以在那里重新分发；磁盘上的文件跟着搬，不会复制。'
+  );
+  if (!ok) return;
+  try {
+    const r = await api.ejectMedia([item.id]);
+    toast(r.merged ? '全部库里已有同一份文件，已合并（原条目这边移除）' : '已移到「全部库」');
+    onChange && onChange();
+  } catch (err) {
+    toast(err.message || '移出失败');
+  }
+}
+
 async function removeMedia(item, onChange) {
   const ok = await confirmDialog('删除这个媒体？', '磁盘上的原文件也会一起删除，不可恢复。');
   if (!ok) return;
-  await api.deleteMedia(item.id);
+  try {
+    await api.deleteMedia(item.id);
+  } catch (err) {
+    // 文件被占用 / 只读：后端会保留记录并说明原因，别报「已删除」
+    toast(err.message || '删除失败');
+    return;
+  }
   toast('已删除');
   onChange && onChange();
 }
@@ -94,7 +119,7 @@ async function setOwnerCover(item, owner, onCover) {
 export function mediaMenu(
   event,
   item,
-  { characterId, onOpen, onChange, pack = null, owner = null, onCover = null } = {}
+  { characterId, onOpen, onChange, pack = null, owner = null, onCover = null, shelfKind = '' } = {}
 ) {
   const packRef = pack || (item.packId ? { id: item.packId, title: item.packTitle || '这个图包' } : null);
   const ownerRef = owner && owner.id ? owner : null;
@@ -109,6 +134,8 @@ export function mediaMenu(
     { label: '打开本地文件夹', onClick: () => api.reveal('media', item.id).catch(() => toast('文件已丢失')) },
     { separator: true },
     { label: '移动到其他图包', onClick: () => moveMedia(item, characterId, onChange) },
+    // 已经在「全部库」里的没必要再移一次
+    shelfKind === 'inbox' ? null : { label: '移出库', hint: '放到全部库', onClick: () => ejectMedia(item, onChange) },
     { separator: true },
     { label: '删除', danger: true, onClick: () => removeMedia(item, onChange) },
   ]);

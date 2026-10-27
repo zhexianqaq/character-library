@@ -798,28 +798,20 @@ img { display: block; }
 .tile img.loaded { opacity: 1; }
 .tile.ratio { aspect-ratio: var(--ar, 3 / 4); }
 
-.tile .play {
+/* 视频角标：右上角一个小图标。以前是盖满整块的大播放键 + 底部黑渐变，
+   竖屏视频正好把脸挡住；瓦片本来就点得开，不需要再喊一次「这里有视频」。 */
+.tile .vtag {
   position: absolute;
-  inset: 0;
+  right: 5px;
+  top: 5px;
+  width: 17px;
+  height: 15px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  color: #fff;
   display: grid;
   place-items: center;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.3), transparent 55%);
-}
-.tile .play i {
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.9);
-  display: grid;
-  place-items: center;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
-}
-.tile .play i::after {
-  content: "";
-  border-style: solid;
-  border-width: 8px 0 8px 14px;
-  border-color: transparent transparent transparent #1c1c1e;
-  margin-left: 3px;
 }
 .tile .dur {
   position: absolute;
@@ -2394,3 +2386,33 @@ img { display: block; }
   text-underline-offset: 2px;
 }
 .filter-note button:hover { opacity: 0.7; }
+
+/* ── 全部库 ─────────────────────────────────────────────── */
+/* 已分发可能上千条，用「加载更多」而不是无限滚动：位置确定，好接管 */
+.inbox-more { display: flex; justify-content: center; padding: 18px 0 6px; }
+.inbox-move .field { margin-bottom: 10px; }
+.inbox-move .field > span { display: block; margin-bottom: 6px; }
+
+/* 图包排序：维度下拉 + 升降序按钮，贴在一起当一个控件看 */
+.pack-sort { display: inline-flex; align-items: center; gap: 4px; }
+.pack-sort .sort-dir {
+  width: 30px;
+  min-width: 30px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+}
+
+/* 扁平库（表情 / 资源 / 小说 / 全部）嵌进首页时的库切换条：
+   左右 20px = .page 的 gap(8) + .toolbar 的 12，和下面那排工具条对齐 */
+.lib-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 1680px;
+  margin: 0 auto;
+  padding: 4px calc(var(--gap) + 12px) 0;
+}
+
+/* 小说库工具条里的搜索：比筛选条那个宽一点，别贴着分类分段控件 */
+.novel-search { flex: 0 0 220px; margin-left: 4px; }

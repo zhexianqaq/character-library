@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fadeIn, toast } from '../util.js';
+import { esc, fmtNum, fadeIn, toast, charDeleteMessage } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openContextMenu } from '../components/context-menu.js';
@@ -38,7 +38,9 @@ function wordsLabel(n) {
   return `${fmtNum(v)} 字`;
 }
 
-export async function NovelView(root, shelfId) {
+export async function NovelView(root, shelfId, opts = {}) {
+  /* 嵌入首页时不自带顶栏：顶栏和库切换条由 LibraryView 提供 */
+  const embedded = !!opts.embedded;
   const id = Number(shelfId);
   let data = await api.novelShelf(id);
   let shelf = data.shelf;
@@ -222,14 +224,14 @@ export async function NovelView(root, shelfId) {
 
   function paintShell() {
     root.innerHTML =
-      topbarHtml({
-        back: true,
-        title: shelf.name,
-        sub: '',
-        search: true,
-        placeholder: '搜索书名或作者',
-        actions: `<button class="tb-btn" data-edit-shelf>编辑库</button>`,
-      }) +
+      (embedded
+        ? ''
+        : topbarHtml({
+            back: true,
+            title: shelf.name,
+            sub: '',
+            actions: `<button class="tb-btn" data-edit-shelf>编辑库</button>`,
+          })) +
       `<main class="page">
          <div class="shelf-head">
            <div class="sh-main">
@@ -241,6 +243,12 @@ export async function NovelView(root, shelfId) {
          </div>
          <div class="toolbar">
            <div class="segmented" data-view></div>
+           <label class="search filter-search novel-search">
+             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+               <circle cx="7" cy="7" r="4.6"/><path d="M10.6 10.6L14 14"/>
+             </svg>
+             <input type="search" placeholder="搜索书名或作者" autocomplete="off" spellcheck="false" />
+           </label>
            <span class="spacer"></span>
            <span class="count" data-count></span>
            <span data-sort></span>
@@ -248,7 +256,7 @@ export async function NovelView(root, shelfId) {
          <div data-body></div>
        </main>`;
 
-    bindTopbar(root);
+    if (!embedded) bindTopbar(root);
 
     const sortDD = createDropdown({
       options: SORTS,
@@ -324,7 +332,8 @@ export async function NovelView(root, shelfId) {
       await reload();
     });
 
-    root.querySelector('[data-edit-shelf]').addEventListener('click', async () => {
+    // 嵌入首页时没有这颗按钮（由 LibraryView 统一提供），绑定必须可选
+    root.querySelector('[data-edit-shelf]')?.addEventListener('click', async () => {
       const v = await openModal({
         title: '编辑库',
         fields: [{ name: 'name', label: '库名称', value: shelf.name, required: true }],
@@ -374,7 +383,7 @@ export async function NovelView(root, shelfId) {
           ],
         },
         { separator: true },
-        { label: '编辑库', onClick: () => root.querySelector('[data-edit-shelf]').click() },
+        { label: '编辑库', onClick: () => root.querySelector('[data-edit-shelf]')?.click() },
         { label: '刷新列表', onClick: () => reload() },
       ]);
     });
@@ -420,8 +429,8 @@ export async function NovelView(root, shelfId) {
     });
     if (!ok) return;
     try {
-      await api.deleteCharacter(item.id);
-      toast('已删除');
+      const res = await api.deleteCharacter(item.id);
+      toast(charDeleteMessage(res));
       await reload();
     } catch (err) {
       toast(err.message || '删除失败');

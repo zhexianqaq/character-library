@@ -38,9 +38,21 @@ const qs = (params) => {
  * 浏览器在同一份文档里再要同一个图片 URL 时，会直接用内存里那张，
  * 就算响应头是 `no-cache` 也不回源（实测：换完封面回列表还是旧图）。
  * 所以换封面后把这个 id 的版本号抬一下，之后 `api.thumb()` 拼出来的 URL 就变了。
- * 整个文档重新加载后表是空的，走服务端 ETag 回源，同样拿得到新图。
  */
 const thumbBumps = new Map();
+
+/**
+ * 缩略图 URL 的版本位 —— 用来作废「浏览器里已经存下的旧图」。
+ *
+ * `?v=` 这个位置是必须的，不是洁癖：v3.25 之前 `/t/:id` 是按 `immutable` 发的，
+ * 浏览器把它永久存下来，**连普通刷新都不回源**。于是「换了视频封面，刷新还是旧图」——
+ * 服务端明明已经返回新图（实测 /t/2603 与会话封面 sha1 一致），浏览器就是不问。
+ * immutable 一旦落盘，只有换 URL 能让它失效；加了这个参数，所有旧缓存项一次性作废。
+ *
+ * 什么时候 +1：改了缩略图生成方式、或又出现「同一个 URL 内容会变」的需求时。
+ * 代价是浏览器重新拉一遍缩略图（本地库三千多张，几秒钟、一次性）。
+ */
+const THUMB_REV = 2;
 
 export const api = {
   get: (url) => req(url),
@@ -51,7 +63,7 @@ export const api = {
   thumb: (id) => {
     if (!id) return '';
     const v = thumbBumps.get(Number(id));
-    return v ? `/t/${id}?v=${v}` : `/t/${id}`;
+    return `/t/${id}?v=${v || THUMB_REV}`;
   },
   /** 封面变了就抬版本号，让所有用到这张缩略图的地方都换 URL */
   bumpThumb: (id) => {
@@ -67,6 +79,7 @@ export const api = {
   shelfCharacters: (shelfId, params) => req(`/api/shelves/${shelfId}/characters${qs(params)}`),
   novelShelf: (shelfId, params) => req(`/api/shelves/${shelfId}/novel${qs(params)}`),
   emojiShelf: (shelfId) => req(`/api/shelves/${shelfId}/emoji`),
+  inboxShelf: (shelfId, params) => req(`/api/shelves/${shelfId}/inbox${qs(params)}`),
   resources: (shelfId) => req(`/api/shelves/${shelfId}/resources`),
   resource: (id) => req(`/api/resources/${id}`),
   resourceIndex: () => req('/api/resources/index'),
@@ -94,6 +107,8 @@ export const api = {
   bulkMedia: (ids, action, packId) => json('POST')('/api/media/bulk', { ids, action, packId }),
   bulkPacks: (ids, action) => json('POST')('/api/packs/bulk', { ids, action }),
   deleteMedia: (id) => req(`/api/media/${id}`, { method: 'DELETE' }),
+  /** 移出库：把素材退回到「全部库 → 未分发」，文件会搬过去 */
+  ejectMedia: (ids) => json('POST')('/api/media/eject', { ids }),
   // 视频封面：把第 at 秒那一帧存成缩略图；恢复默认就是删掉它
   setVideoPoster: (id, at) => json('POST')(`/api/media/${id}/poster`, { at }),
   resetVideoPoster: (id) => req(`/api/media/${id}/poster`, { method: 'DELETE' }),

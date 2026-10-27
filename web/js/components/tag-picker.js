@@ -47,6 +47,8 @@ export async function openTagPicker({ title = '编辑标签', selected = [], not
 
   const chosen = new Set(selected.map((t) => String(t)));
   const extra = [];  // 本次新输入、池子里还没有的标签
+  /** 下方列表的实时筛选词（跟着输入框走，回车添加后清空） */
+  let filter = '';
 
   return new Promise((resolve) => {
     const root = document.createElement('div');
@@ -56,7 +58,7 @@ export async function openTagPicker({ title = '编辑标签', selected = [], not
         <h3>${esc(title)}</h3>
         ${note ? `<p class="tag-note">${esc(note)}</p>` : ''}
         <div class="tag-input-row">
-          <input class="tag-input" type="text" placeholder="输入新标签，回车添加" autocomplete="off" maxlength="40" />
+          <input class="tag-input" type="text" placeholder="输入标签名：下方会实时筛选，回车新建" autocomplete="off" maxlength="40" />
           <button class="tb-btn" data-add>添加</button>
         </div>
         <div class="tag-hint" data-hint></div>
@@ -82,13 +84,25 @@ export async function openTagPicker({ title = '编辑标签', selected = [], not
 
     const renderPool = () => {
       const names = all();
-      totalEl.textContent = names.length ? `（${names.length}）` : '';
+      const q = filter.toLowerCase();
+      // 输入时把下面的列表收窄成「名字里含这段字」的；已选中的始终留着，
+      // 否则筛掉之后看不见，容易让人以为被取消了
+      const shown = q ? names.filter((n) => chosen.has(n) || n.toLowerCase().includes(q)) : names;
+      totalEl.textContent = shown.length
+        ? q && shown.length !== names.length
+          ? `（${shown.length} / ${names.length}）`
+          : `（${names.length}）`
+        : '';
       if (!names.length) {
         poolEl.innerHTML = '<span class="tag-empty">还没有任何标签，在上面输入第一个吧</span>';
         return;
       }
+      if (!shown.length) {
+        poolEl.innerHTML = `<span class="tag-empty">没有名字里含「${esc(filter)}」的标签，回车可以新建</span>`;
+        return;
+      }
       const counts = new Map(pool.map((p) => [p.name, p.count]));
-      poolEl.innerHTML = names
+      poolEl.innerHTML = shown
         .map(
           (n) => `<button class="tag-pill${chosen.has(n) ? ' on' : ''}" data-tag="${esc(n)}">
             ${esc(n)}${counts.get(n) ? `<i>${counts.get(n)}</i>` : ''}
@@ -125,6 +139,7 @@ export async function openTagPicker({ title = '编辑标签', selected = [], not
       if (same) {
         chosen.add(same);
         input.value = '';
+        filter = '';
         renderPool();
         setHint(`已经有「${esc(same)}」了，已帮你选中`);
         return;
@@ -151,6 +166,7 @@ export async function openTagPicker({ title = '编辑标签', selected = [], not
       extra.push(name);
       chosen.add(name);
       input.value = '';
+      filter = '';
       renderPool();
       setHint('');
       input.focus();
@@ -172,7 +188,11 @@ export async function openTagPicker({ title = '编辑标签', selected = [], not
         tryAdd();
       }
     });
-    input.addEventListener('input', () => setHint(''));
+    input.addEventListener('input', () => {
+      filter = input.value.trim();
+      renderPool();
+      setHint('');
+    });
 
     root.querySelector('[data-add]').addEventListener('click', () => tryAdd());
     root.querySelector('[data-cancel]').addEventListener('click', () => close(null));

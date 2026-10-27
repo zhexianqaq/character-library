@@ -1,8 +1,8 @@
 import { api } from '../api.js';
-import { esc, fmtNum, toast } from '../util.js';
+import { esc, fmtNum, toast, deleteSummary } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
-import { openModal } from '../components/modal.js';
+import { openModal, confirmDialog } from '../components/modal.js';
 import { openContextMenu, openMenuAtPoint } from '../components/context-menu.js';
 import { mediaMenu } from '../components/media-actions.js';
 import { addMediaMenuItems } from '../components/media-picker.js';
@@ -35,7 +35,7 @@ export async function PackView(root, id) {
   const resource = shelfKind === 'resource';
   const ownerNoun = shelfKind === 'work' ? '角色' : resource ? '资源' : '人物';
   // 资源库的图包回到资源详情（/r/:id），别把人带到条目页
-  const crumbHref = emoji ? `/e/${pack.shelf.id}` : resource ? `/r/${pack.character.id}` : `/c/${pack.character.id}`;
+  const crumbHref = emoji ? `/s/${pack.shelf.id}` : resource ? `/r/${pack.character.id}` : `/c/${pack.character.id}`;
   const crumbName = emoji ? pack.shelf.name : pack.character.name;
 
   root.innerHTML =
@@ -113,6 +113,7 @@ export async function PackView(root, id) {
                 pack: { id: pack.id, title: pack.title },
                 // 表情库挂在容器条目上，没有「人物 / 角色」可设
                 owner: emoji ? null : { id: pack.character.id, name: pack.character.name, noun: ownerNoun },
+                shelfKind: (pack.shelf && pack.shelf.kind) || '',
                 onCover: async (kind) => {
                   if (kind !== 'pack') return;
                   const next = await api.pack(id);
@@ -175,6 +176,7 @@ export async function PackView(root, id) {
       <span class="sel-n">已选 <b>0</b> 个媒体</span>
       <button data-sel="all">全选</button>
       <button data-sel="move">移动到…</button>
+      <button data-sel="eject">移出库</button>
       <button data-sel="del" class="danger">删除</button>
       <button data-sel="exit" class="primary">完成</button>`;
     bar.querySelectorAll('button[data-sel]').forEach((b) => {
@@ -237,6 +239,7 @@ export async function PackView(root, id) {
     if (!picked.size) return;
     if (action === 'del') bulkDelete();
     else if (action === 'move') bulkMove();
+    else if (action === 'eject') bulkEject();
   }
 
   async function bulkDelete() {
@@ -245,11 +248,36 @@ export async function PackView(root, id) {
     if (!ok) return;
     try {
       const res = await api.bulkMedia(ids, 'delete');
-      toast(`已删除 ${res.done} 个媒体`);
+      toast(deleteSummary(res, '媒体'));
       resetSelection();
       await reload();
     } catch (err) {
       toast(err.message || '删除失败');
+    }
+  }
+
+  /** 批量移出库：退回「全部库 → 未分发」，文件跟着搬 */
+  async function bulkEject() {
+    const ids = [...picked];
+    const ok = await confirmDialog(
+      `把 ${ids.length} 个素材移出当前图包？`,
+      '会移到「全部库 → 未分发」，之后可以在那里重新分发；磁盘上的文件跟着搬，不会复制。'
+    );
+    if (!ok) return;
+    try {
+      const r = await api.ejectMedia(ids);
+      const bad = (r.skipped || []).length;
+      toast(
+        bad
+          ? `已移出 ${r.moved} 个，${bad} 个没成功（${r.skipped[0].reason}）`
+          : r.merged
+            ? `已移出 ${r.moved} 个，${r.merged} 个与全部库重复已合并`
+            : `已移出 ${r.moved} 个素材`
+      );
+      exitSelect();
+      await reload();
+    } catch (err) {
+      toast(err.message || '移出失败');
     }
   }
 

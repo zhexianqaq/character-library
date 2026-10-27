@@ -50,6 +50,25 @@ export function toast(msg) {
 }
 
 /**
+ * 批量删除之后说什么。
+ * 后端的 `failed` 里每项都有原因（占用 / 只读 / 路径不对），只说「已删除 N 个」
+ * 会让「删了 3 个、其实 1 个还在磁盘上」看起来像全部成功。
+ */
+export function deleteSummary(res, noun, verb = '删除') {
+  const done = res && typeof res.done === 'number' ? res.done : 0;
+  const failed = (res && Array.isArray(res.failed) && res.failed) || [];
+  if (!failed.length) return `已${verb} ${done} 个${noun}`;
+  const why = failed[0] && failed[0].reason ? `：${failed[0].reason}` : '';
+  return `已${verb} ${done} 个${noun}，${failed.length} 个失败${why}`;
+}
+
+/** 删条目之后说什么：目录没删干净必须讲出来，不能只说「已删除」 */
+export function charDeleteMessage(res) {
+  if (res && res.dirRemoved === false && res.warning) return res.warning;
+  return '已删除';
+}
+
+/**
  * 复制文本。http 页面（非 secure context）没有 navigator.clipboard，
  * 所以要留一条 textarea + execCommand 的降级路径。
  */

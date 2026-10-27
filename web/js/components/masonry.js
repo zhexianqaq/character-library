@@ -13,19 +13,34 @@ function tileHtml(it, opts = {}, geo = null) {
     ? `left:${geo.x}px;top:${geo.y}px;width:${geo.w}px;height:${geo.h}px`
     : aspectStyle(it.width, it.height, fallback);
   return `<button class="tile${geo ? '' : ' ratio'}${picked ? ' is-sel' : ''}" style="${box}"
-      data-id="${it.id}" data-anim="${it.anim ? 1 : 0}">
+      data-id="${it.id}" data-anim="${!isVideo && it.anim ? 1 : 0}">
     <img src="${api.thumb(it.id)}" alt="${esc(it.fileName)}" loading="lazy" decoding="async">
-    ${isVideo ? '<span class="play"><i></i></span>' : ''}
+    ${isVideo ? VIDEO_BADGE : ''}
     ${!isVideo && it.anim ? '<span class="gif">GIF</span>' : ''}
     ${isVideo && it.durationMs ? `<span class="dur">${fmtDur(it.durationMs)}</span>` : ''}
     ${opts.selectable ? '<span class="tick" aria-hidden="true"></span>' : ''}
   </button>`;
 }
 
-/* ── 悬停播放 ──────────────────────────────────────────────
+/**
+ * 视频角标：右上角一个小图标就够了。
+ * 以前是盖在正中间的大播放键 + 底部黑渐变 —— 竖屏封面正好把脸挡住，
+ * 而且瓦片本来就点得开，不需要再喊一次「这里有视频」。
+ * 9px 见方里画「方框 + 三角」会糊成一团，所以只用一枚实心三角。
+ */
+const VIDEO_BADGE = `<span class="vtag" title="视频" aria-label="视频">
+  <svg viewBox="0 0 10 10" width="9" height="9" aria-hidden="true">
+    <path d="M2.6 1.9l5.3 3.1-5.3 3.1z" fill="currentColor"/>
+  </svg>
+</span>`;
+
+/* ── 悬停播放（只给动图）──────────────────────────────────
    停 420ms 后把这一张的缩略图换成 gif 原件播放，并轻微放大；
    移开就换回缩略图。同一时刻只有一个瓦片在动，开销就是一个 <img>。
-   刻意不做「所有动图自动播放」：上千个瓦片一起解码会直接卡死。 */
+   刻意不做「所有动图自动播放」：上千个瓦片一起解码会直接卡死。
+
+   **视频不参与**：以前视频的 anim 也是 true，跟着走了这条路径 ——
+   悬停就把整个 mp4 原件当图片塞进 <img> 里解码，既播不出来又白烧 IO/内存。 */
 const HOVER_DELAY = 420;
 let hoverTimer = 0;
 let liveTile = null;
