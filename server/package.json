@@ -9,6 +9,7 @@
     "start": "node src/index.js",
     "e2e": "node ../tools/e2e.mjs",
     "backup": "node ../tools/backup.mjs",
+    "sweep-inbox": "node ../tools/sweep-inbox.mjs",
     "shot": "node ../tools/shot.mjs"
   },
   "license": "UNLICENSED",

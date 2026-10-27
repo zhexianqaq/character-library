@@ -2639,6 +2639,7 @@ export function createApp() {
         continue;
       }
       if (!saved) {
+        await drop();
         skipped.push({ name: originalName, reason: '不支持的文件类型' });
         continue;
       }
@@ -2675,7 +2676,14 @@ export function createApp() {
       if (pack) touchedPacks.add(pack.id);
       // 正文文件没有缩略图，别往生成池里塞无解的活
       if (kind !== 'file') getDerivative(newId, 'thumb').catch(() => {});
+      // 入库成功：上传临时区那份「源文件」已经 moveFile 移走/复制完，
+      // 这里再补一刀 —— 跨盘复制后删源失败、或上面任何分支提前 continue，
+      // 都不该把副本留在 .cache/inbox 里（曾经堆了 500MB / 582 个文件）
+      await drop();
     }
+
+    // 万一某个文件在中途抛异常，循环外也清一次本次请求剩下的临时文件
+    await Promise.all(files.map((f) => fsp.unlink(f.path).catch(() => {})));
 
     for (const pid of touchedPacks) refreshPack(pid);
     // 连续上传时同一角色的统计合并成「立刻一次 + 窗口结束补一次」
