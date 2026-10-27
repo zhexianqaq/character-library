@@ -11,6 +11,7 @@ import { ResourceView } from './views/resource.js';
 import { ReaderView } from './views/reader.js';
 import { ComicView } from './views/comic.js';
 import { TagView } from './views/tag.js';
+import { OpsView } from './views/ops.js';
 import { initUploadHud } from './components/upload-hud.js';
 
 const app = document.getElementById('app');
@@ -31,6 +32,7 @@ const routes = [
   // 标签名里可能有空格 / # / 斜杠，整体 decode
   [/^\/tag\/(.+)$/, (m) => TagView(app, decodeURIComponent(m[1]))],
   [/^\/uploads$/, () => UploadsView(app)],
+  [/^\/ops$/, () => OpsView(app)],
 ];
 
 let busy = false;
@@ -142,7 +144,7 @@ export async function renderRoute() {
       app.innerHTML = '';
       const ret = await fn(m);
       if (typeof ret === 'function') cleanup = ret;
-      if (!/^\/(c|p|i|e|r|rs|n|x|cm|read|tag)\/|^\/uploads/.test(path)) document.title = '资料库';
+      if (!/^\/(c|p|i|e|r|rs|n|x|cm|read|tag)\/|^\/(uploads|ops)/.test(path)) document.title = '资料库';
       lastPath = here;
       if (shouldRestore || sameRoute) {
         restoreScroll(here);

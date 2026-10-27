@@ -215,6 +215,9 @@ export async function renamePackDir(db, packId) {
   const cur = dirs[0];
   if (dirOf(cur) !== parent) return { ok: false, reason: 'parent' };
   if (fs.existsSync(absPathOf(target))) return { ok: false, reason: 'exists' };
+  // 同条目搬包只改库，文件还留在原目录里 —— 这个目录可能同时住着别的包的文件。
+  // 直接整目录 rename 会把它们一起搬走（v3.45 踩过），这里必须核对「独享」。
+  if (!dirIsExclusive(cur, rows)) return { ok: false, reason: 'shared' };
 
   await fsp.rename(absPathOf(cur), absPathOf(target));
   const upd = db.prepare('UPDATE media SET rel_path = ? WHERE id = ?');
@@ -236,9 +239,13 @@ export async function renamePackDir(db, packId) {
  * 顺序：图包目录 → 未归包素材 → 清空空目录。
  * 简单改名走「整目录 rename + 批量改 rel_path」，散包才逐个文件搬。
  */
-export async function syncPackDirs(db, { dryRun = true } = {}) {
+export async function syncPackDirs(db, { dryRun = true, scope = null } = {}) {
   if (running) throw Object.assign(new Error('同步正在进行中'), { code: 'SYNC_BUSY' });
   running = true;
+  // 增量模式：只处理这些图包 / 媒体 / 条目，别的一概不碰
+  const packIds = scope && Array.isArray(scope.packIds) ? [...new Set(scope.packIds.map(Number).filter(Boolean))] : null;
+  const mediaIds = scope && Array.isArray(scope.mediaIds) ? [...new Set(scope.mediaIds.map(Number).filter(Boolean))] : null;
+  const scoped = !!(scope && (packIds || mediaIds));
   const journal = dryRun ? null : openJournal();
 
   const summary = {
@@ -261,17 +268,32 @@ export async function syncPackDirs(db, { dryRun = true } = {}) {
   const touchedDirs = new Set();
 
   try {
+    const packWhere = ['EXISTS (SELECT 1 FROM media m WHERE m.pack_id = p.id)'];
+    const packArgs = {};
+    if (packIds) {
+      if (!packIds.length) {
+        // 没有要处理的包：直接跳过整段
+        packWhere.push('0');
+      } else {
+        packWhere.push(`p.id IN (${packIds.map((_, i) => `@pk${i}`).join(',')})`);
+        packIds.forEach((id, i) => {
+          packArgs[`pk${i}`] = id;
+        });
+      }
+    }
     const packs = db
       .prepare(
         `SELECT p.id, p.title, p.category, c.name AS char_name, c.dir_slug
          FROM packs p JOIN characters c ON c.id = p.character_id
-         WHERE EXISTS (SELECT 1 FROM media m WHERE m.pack_id = p.id)
+         WHERE ${packWhere.join(' AND ')}
          ORDER BY p.id`
       )
-      .all();
-    summary.emptyPacks = db
-      .prepare(`SELECT COUNT(*) n FROM packs p WHERE NOT EXISTS (SELECT 1 FROM media m WHERE m.pack_id = p.id)`)
-      .get().n;
+      .all(packArgs);
+    summary.emptyPacks = scoped
+      ? 0
+      : db
+          .prepare(`SELECT COUNT(*) n FROM packs p WHERE NOT EXISTS (SELECT 1 FROM media m WHERE m.pack_id = p.id)`)
+          .get().n;
 
     const mediaStmt = db.prepare('SELECT id, rel_path, kind FROM media WHERE pack_id = ? ORDER BY id');
     const updPath = db.prepare('UPDATE media SET rel_path = ? WHERE id = ?');
@@ -280,8 +302,14 @@ export async function syncPackDirs(db, { dryRun = true } = {}) {
        上一次同步如果搬过目录，别的包的记录可能还指着旧路径。
        按文件名在条目目录里找一次：只有一个同名文件就认领，多个就不猜。 */
     const allRows = db
-      .prepare('SELECT m.id, m.rel_path FROM media m ORDER BY m.id')
-      .all();
+      .prepare('SELECT m.id, m.rel_path, m.pack_id FROM media m ORDER BY m.id')
+      .all()
+      .filter(
+        (r) =>
+          !scoped ||
+          (mediaIds && mediaIds.includes(r.id)) ||
+          (packIds && packIds.includes(r.pack_id))
+      );
     const missingRows = allRows.filter((r) => !fs.existsSync(absPathOf(r.rel_path)));
     if (missingRows.length) {
       const dirOfChar = new Map(
@@ -328,8 +356,17 @@ export async function syncPackDirs(db, { dryRun = true } = {}) {
       const baseName = slugify(p.title);
       let target = `${parent}/${baseName}`;
       let n = 2;
-      const taken = (t) =>
-        claimed.has(t.toLowerCase()) || (fs.existsSync(absPathOf(t)) && !dirs.includes(t));
+      // 「被占用」= 本轮认领过，或磁盘上有同名目录且里面**有文件**。
+      // 空目录不算被占：可以当目标用（直接往里搬，省一次改名）
+      const nonEmpty = (rel) => {
+        try {
+          const abs = absPathOf(rel);
+          return fs.existsSync(abs) && fs.readdirSync(abs).length > 0;
+        } catch {
+          return false;
+        }
+      };
+      const taken = (t) => claimed.has(t.toLowerCase()) || (nonEmpty(t) && !dirs.includes(t));
       while (taken(target) && n < 200) {
         target = `${parent}/${baseName}-${n}`;
         n += 1;
@@ -441,14 +478,25 @@ export async function syncPackDirs(db, { dryRun = true } = {}) {
     }
 
     /* ---------- 未归包素材：收回 <条目>/未分类/图片|视频|文件 ---------- */
-    const looseRows = db
-      .prepare(
-        `SELECT m.id, m.rel_path, m.kind, c.dir_slug
-         FROM media m JOIN characters c ON c.id = m.character_id
-         WHERE m.pack_id IS NULL
-         ORDER BY m.id`
-      )
-      .all();
+    const looseRows = mediaIds
+      ? mediaIds.length
+        ? db
+            .prepare(
+              `SELECT m.id, m.rel_path, m.kind, c.dir_slug
+               FROM media m JOIN characters c ON c.id = m.character_id
+               WHERE m.pack_id IS NULL AND m.id IN (${mediaIds.map((_, i) => `@lm${i}`).join(',')})
+               ORDER BY m.id`
+            )
+            .all(Object.fromEntries(mediaIds.map((id, i) => [`lm${i}`, id])))
+        : []
+      : db
+          .prepare(
+            `SELECT m.id, m.rel_path, m.kind, c.dir_slug
+             FROM media m JOIN characters c ON c.id = m.character_id
+             WHERE m.pack_id IS NULL
+             ORDER BY m.id`
+          )
+          .all();
     for (const m of looseRows) {
       const dir = `${m.dir_slug}/未分类/${typeDirOf(m.kind)}`;
       const to = `${dir}/${baseOf(m.rel_path)}`;
@@ -485,7 +533,7 @@ export async function syncPackDirs(db, { dryRun = true } = {}) {
     }
 
     /* ---------- 清空目录 / 数一下没人认领的文件 ---------- */
-    if (dryRun) {
+    if (dryRun && !scoped) {
       const allRows = db.prepare('SELECT rel_path FROM media').all();
       const have = new Set(allRows.map((r) => r.rel_path));
       // 记录还在、文件已经不在的（同步修不了，但要让人知道）
@@ -512,7 +560,7 @@ export async function syncPackDirs(db, { dryRun = true } = {}) {
         };
         walk(base);
       }
-    } else {
+    } else if (!dryRun) {
       summary.dirsRemoved = pruneEmptyDirs([...touchedDirs], charDirs);
     }
   } finally {

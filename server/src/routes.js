@@ -35,6 +35,8 @@ import { monthOfFileName, monthTitle } from './importer.js';
 import { splitTitleTags } from './pack-tags.js';
 import { extractArchive, isArchiveName } from './archive.js';
 import { syncPackDirs, renamePackDir, pruneDirsOf } from './pack-sync.js';
+import { logOp, initialStatus, opsSummary, listOps, archiveOps } from './ops-log.js';
+import { applyOps } from './ops-apply.js';
 
 const MIME = {
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
@@ -1619,6 +1621,12 @@ export function createApp() {
     }
     const row = db.prepare(`${CHAR_SELECT} WHERE c.id = ?`).get(id);
     const dirName = dirSlug.split('/').pop();
+    logOp(db, {
+      entity: 'character',
+      entityId: id,
+      action: 'create',
+      payload: { name, dirSlug, kind: shelf.kind || '' },
+    });
     res.json({ ...mapChar(row, tagsOf(db, id)), dirRenamed: dirName !== slugify(name) });
   });
 
@@ -1836,6 +1844,12 @@ export function createApp() {
       return res.status(500).json({ error: `文件已删除，但记录没删掉（${err.message}）`, characterId: row.id });
     }
     pruneOrphanTags(db); // 名字标签别留在池里变成幽灵
+    logOp(db, {
+      entity: 'character',
+      entityId: row.id,
+      action: 'delete',
+      payload: { name: row.name, dir: row.dir_slug },
+    });
     res.json({ ok: true, dirRemoved: !!row.dir_slug });
   });
 
@@ -1939,6 +1953,13 @@ export function createApp() {
           JSON.stringify(packTagsFor(db, charId, title))
         ).lastInsertRowid
     );
+    logOp(db, {
+      entity: 'pack',
+      entityId: id,
+      action: 'create',
+      status: initialStatus('pack.create'),
+      payload: { title, month, category, charId },
+    });
     res.json({ id, title, month, category, autoMonth: !hasTitle && !hasMonth });
   });
 
@@ -2022,6 +2043,14 @@ export function createApp() {
       } catch (err) {
         dirRename = { ok: false, reason: String(err.message || err) };
       }
+      logOp(db, {
+        entity: 'pack',
+        entityId: id,
+        action: 'rename',
+        status: dirRename && dirRename.ok ? 'done' : 'failed',
+        reason: dirRename && !dirRename.ok ? dirRename.reason || '目录没跟上' : null,
+        payload: { from: row.title, to: fresh.title, dir: dirRename || null },
+      });
     }
     res.json({
       ok: true,
@@ -2090,15 +2119,13 @@ export function createApp() {
     const row = db.prepare('SELECT * FROM packs WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ error: '图包不存在' });
     const withMedia = String(req.query.withMedia || '') === '1';
-    const dirsBefore = [
-      ...new Set(
-        db.prepare('SELECT rel_path FROM media WHERE pack_id = ?').all(id).map((m) => m.rel_path.split('/').slice(0, -1).join('/'))
-      ),
-    ];
+    // 删之前先把涉及的文件记下来：记录删掉以后，日志里的路径快照就是唯一的线索
+    const allMedia = db.prepare('SELECT id, rel_path FROM media WHERE pack_id = ?').all(id);
+    const dirsBefore = [...new Set(allMedia.map((m) => m.rel_path.split('/').slice(0, -1).join('/')))];
     let removed = 0;
     const failed = [];
     if (withMedia) {
-      const items = db.prepare('SELECT id, rel_path FROM media WHERE pack_id = ?').all(id);
+      const items = allMedia;
       const delOne = db.prepare('DELETE FROM media WHERE id = ?');
       for (const m of items) {
         // 先删文件，删不掉就留着这条记录（变成未归包），别让「已删除」变成谎话
@@ -2123,6 +2150,29 @@ export function createApp() {
     } catch {
       /* ignore */
     }
+    logOp(
+      db,
+      withMedia
+        ? {
+            entity: 'pack',
+            entityId: id,
+            action: 'delete',
+            status: failed.length ? 'failed' : 'done',
+            reason: failed.length ? `${failed.length} 个文件没删掉` : null,
+            payload: { title: row.title, items: allMedia.map((m) => ({ id: m.id, path: m.rel_path })) },
+          }
+        : {
+            entity: 'pack',
+            entityId: id,
+            action: 'dissolve',
+            status: initialStatus('pack.dissolve'),
+            payload: {
+              title: row.title,
+              mediaIds: allMedia.map((m) => m.id),
+              dirs: dirsBefore,
+            },
+          }
+    );
     res.json({ ok: true, removed, failed, dirsRemoved });
   });
 
@@ -2137,7 +2187,7 @@ export function createApp() {
     if (!ids.length) return res.status(400).json({ error: '没有选择图包' });
     if (action !== 'dissolve' && action !== 'delete') return res.status(400).json({ error: '未知操作' });
 
-    const getPack = db.prepare('SELECT id, character_id FROM packs WHERE id = ?');
+    const getPack = db.prepare('SELECT id, character_id, title FROM packs WHERE id = ?');
     const delPack = db.prepare('DELETE FROM packs WHERE id = ?');
 
     let done = 0;
@@ -2151,8 +2201,9 @@ export function createApp() {
       const pack = getPack.get(id);
       if (!pack) continue;
       chars.add(pack.character_id);
+      const rows = db.prepare('SELECT id, rel_path FROM media WHERE pack_id = ?').all(id);
+      const failIds = new Set();
       if (action === 'delete') {
-        const rows = db.prepare('SELECT id, rel_path FROM media WHERE pack_id = ?').all(id);
         for (const r of rows) {
           dirsToPrune.push(r.rel_path.split('/').slice(0, -1).join('/'));
           const del = await removeLibraryFile(r.rel_path);
@@ -2160,6 +2211,7 @@ export function createApp() {
             delOneMedia.run(r.id);
             removed += 1;
           } else {
+            failIds.add(r.id);
             failed.push({ id: r.id, packId: id, reason: whyDeleteFailed(del), code: del.code || null });
             looseMedia.run(r.id); // 留在「未归包」里，用户还看得见、能再来一次
           }
@@ -2168,6 +2220,29 @@ export function createApp() {
       // dissolve 时 media.pack_id 有 ON DELETE SET NULL，会自动变成未归包
       delPack.run(id);
       done += 1;
+      logOp(
+        db,
+        action === 'delete'
+          ? {
+              entity: 'pack',
+              entityId: id,
+              action: 'delete',
+              status: failIds.size ? 'failed' : 'done',
+              reason: failIds.size ? `${failIds.size} 个文件没删掉` : null,
+              payload: { title: pack.title, items: rows.map((r) => ({ id: r.id, path: r.rel_path })) },
+            }
+          : {
+              entity: 'pack',
+              entityId: id,
+              action: 'dissolve',
+              status: initialStatus('pack.dissolve'),
+              payload: {
+                title: pack.title,
+                mediaIds: rows.map((r) => r.id),
+                dirs: [...new Set(rows.map((r) => r.rel_path.split('/').slice(0, -1).join('/')))],
+              },
+            }
+      );
     }
     for (const cid of chars) {
       refreshCharacterPacks(cid);
@@ -2206,6 +2281,45 @@ export function createApp() {
     }
   });
 
+  /* ── 操作日志：增量同步（v3.46） ──────────────────────────────────
+     老的 /api/sync/packs* 保留成「全量校验」，日常走下面这几个。 */
+
+  app.get('/api/ops/summary', (req, res) => {
+    res.json(opsSummary(getDb()));
+  });
+
+  app.get('/api/ops/preview', async (req, res) => {
+    try {
+      res.json(await applyOps(getDb(), { dryRun: true }));
+    } catch (err) {
+      res.status(400).json({ error: String(err.message || '预览失败') });
+    }
+  });
+
+  app.post('/api/ops/apply', async (req, res) => {
+    try {
+      res.json(await applyOps(getDb(), { dryRun: false }));
+    } catch (err) {
+      res.status(400).json({ error: String(err.message || '同步失败') });
+    }
+  });
+
+  app.get('/api/ops', (req, res) => {
+    res.json(
+      listOps(getDb(), {
+        limit: req.query.limit,
+        offset: req.query.offset,
+        status: String(req.query.status || ''),
+        q: String(req.query.q || ''),
+      })
+    );
+  });
+
+  app.post('/api/ops/archive', (req, res) => {
+    const days = Number((req.body && req.body.days) || 365);
+    res.json({ ok: true, removed: archiveOps(getDb(), days) });
+  });
+
   /** 媒体批量操作：delete 删记录和磁盘文件；move 只改分组（限同一批条目） */
   app.post('/api/media/bulk', async (req, res) => {
     const db = getDb();
@@ -2223,9 +2337,11 @@ export function createApp() {
     if (action === 'delete') {
       let done = 0;
       const failed = [];
+      const items = [];
       for (const id of ids) {
         const row = getRow.get(id);
         if (!row) continue;
+        items.push({ id, path: row.rel_path });
         // 先删文件：文件被占用/权限不足时不要谎报成功，记录留在原处等重试
         const del = await removeLibraryFile(row.rel_path);
         if (!del.ok && !del.alreadyGone) {
@@ -2239,6 +2355,14 @@ export function createApp() {
       }
       for (const cid of chars) refreshCharacter(cid);
       for (const pid of packs) refreshPack(pid);
+      logOp(db, {
+        entity: 'media',
+        entityId: ids[0],
+        action: 'delete',
+        status: failed.length ? 'failed' : 'done',
+        reason: failed.length ? `${failed.length} 个文件没删掉` : null,
+        payload: { items },
+      });
       return res.json({ ok: true, done, skipped: ids.length - done, failed });
     }
 
@@ -2250,6 +2374,7 @@ export function createApp() {
     const upd = db.prepare('UPDATE media SET pack_id = ?, sort_order = ? WHERE id = ?');
     let done = 0;
     let skipped = 0;
+    const movedIds = [];
     for (const id of ids) {
       const row = getRow.get(id);
       // 跨条目移动要搬文件，走 POST /api/packs/:id/media（单个接口）
@@ -2260,12 +2385,22 @@ export function createApp() {
       order += 1;
       upd.run(pack.id, order, id);
       if (row.pack_id) packs.add(row.pack_id);
+      movedIds.push(id);
       done += 1;
     }
     chars.add(pack.character_id);
     packs.add(pack.id);
     for (const pid of packs) refreshPack(pid);
     for (const cid of chars) refreshCharacter(cid);
+    if (movedIds.length) {
+      logOp(db, {
+        entity: 'media',
+        entityId: movedIds[0],
+        action: 'move',
+        status: initialStatus('media.move'),
+        payload: { ids: movedIds, toPackId: pack.id, title: pack.title },
+      });
+    }
     res.json({ ok: true, done, skipped });
   });
 
@@ -2398,6 +2533,8 @@ export function createApp() {
 
     let order = maxOrder.get(packId).n;
     const moved = [];
+    const sameMoved = [];   // 同条目：只改库，同步时才搬文件
+    const crossDirs = new Set(); // 跨条目：搬完把空掉的源目录交给同步去收
     const skipped = [];
     const warnings = [];
     const touched = new Set([pack.character_id]);
@@ -2417,6 +2554,7 @@ export function createApp() {
         order += 1;
         sameCharMove.run(packId, order, id);
         moved.push(id);
+        sameMoved.push(id);
         continue;
       }
 
@@ -2431,6 +2569,7 @@ export function createApp() {
        * - 搬之前落一条意图（journal），进程被杀也能在下次启动时收尾
        * - 写库失败就把文件搬回去；搬不回去记 recovery.log，别把不一致悄悄留下
        */
+      crossDirs.add(row.rel_path.split('/').slice(0, -1).join('/'));
       let info = null;
       let dropIntent = null;
       let intentRel = null;
@@ -2486,6 +2625,43 @@ export function createApp() {
 
     refreshPack(packId);
     for (const cid of touched) refreshCharacter(cid);
+
+    if (sameMoved.length) {
+      logOp(db, {
+        entity: 'media',
+        entityId: sameMoved[0],
+        action: 'move',
+        status: initialStatus('media.move'),
+        payload: { ids: sameMoved, toPackId: packId, title: pack.title },
+      });
+    }
+    const sameSet = new Set(sameMoved);
+    const crossMoved = moved.filter((id) => !sameSet.has(id));
+    if (crossMoved.length) {
+      logOp(db, {
+        entity: 'media',
+        entityId: crossMoved[0],
+        action: 'move',
+        status: 'done',
+        payload: { ids: crossMoved, toPackId: packId, cross: true, title: pack.title },
+      });
+    }
+    const emptyDirs = [...crossDirs].filter((d) => {
+      try {
+        return fs.readdirSync(absPathOf(d)).length === 0;
+      } catch {
+        return false;
+      }
+    });
+    if (emptyDirs.length) {
+      logOp(db, {
+        entity: 'media',
+        entityId: null,
+        action: 'dir.prune',
+        status: initialStatus('dir.prune'),
+        payload: { dirs: emptyDirs },
+      });
+    }
     res.json({ ok: true, moved: moved.length, skipped, warnings, ids: moved });
   });
 
@@ -2519,6 +2695,7 @@ export function createApp() {
     let order = maxOrder.get(box.id).n;
     const moved = [];
     const merged = [];
+    const srcDirs = new Set();
     const skipped = [];
     const warnings = [];
     const chars = new Set();
@@ -2548,10 +2725,11 @@ export function createApp() {
           skipped.push({ id, reason: `全部库里已有同一份文件，但这份删不掉（${gone.code || gone.error}）` });
           continue;
         }
+        srcDirs.add(row.rel_path.split('/').slice(0, -1).join('/'));
         clearCharCover.run(id);
         clearPackCover.run(id);
         delRow.run(id);
-        merged.push(id);
+        merged.push({ id, path: row.rel_path });
         chars.add(row.character_id);
         if (row.pack_id) packs.add(row.pack_id);
         continue;
@@ -2575,10 +2753,11 @@ export function createApp() {
       try {
         if (info.action === 'reused') {
           // 全部库里躺着同一份内容（刚比过全量 sha256）：文件不重复存，这条记录收掉
+          srcDirs.add(row.rel_path.split('/').slice(0, -1).join('/'));
           clearCharCover.run(id);
           clearPackCover.run(id);
           delRow.run(id);
-          merged.push(id);
+          merged.push({ id, path: row.rel_path });
         } else {
           order += 1;
           moveRow.run(box.id, info.relPath, order, id);
@@ -2620,6 +2799,40 @@ export function createApp() {
     for (const pid of packs) refreshPack(pid);
     for (const cid of chars) refreshCharacter(cid);
     refreshCharacter(box.id);
+    if (moved.length) {
+      logOp(db, {
+        entity: 'media',
+        entityId: moved[0],
+        action: 'move',
+        status: 'done',
+        payload: { ids: moved, toCharId: box.id, cross: true, title: '移出库' },
+      });
+    }
+    if (merged.length) {
+      logOp(db, {
+        entity: 'media',
+        entityId: merged[0].id,
+        action: 'delete',
+        reason: '全部库已有同一份内容，合并',
+        payload: { items: merged },
+      });
+    }
+    const emptySrcDirs = [...srcDirs].filter((d) => {
+      try {
+        return fs.readdirSync(absPathOf(d)).length === 0;
+      } catch {
+        return false;
+      }
+    });
+    if (emptySrcDirs.length) {
+      logOp(db, {
+        entity: 'media',
+        entityId: null,
+        action: 'dir.prune',
+        status: initialStatus('dir.prune'),
+        payload: { dirs: emptySrcDirs },
+      });
+    }
     res.json({ ok: true, moved: moved.length, merged: merged.length, shelfId: shelf.id, skipped, warnings, ids: moved });
   });
 
@@ -2805,6 +3018,14 @@ export function createApp() {
       files.map((f) => ({ path: f.path, name: decodeName(f.originalname) })),
       { forcedPackId, category }
     );
+    if (out.added.length) {
+      logOp(db, {
+        entity: 'media',
+        entityId: out.added[0],
+        action: 'add',
+        payload: { ids: out.added, charId, packId: forcedPackId, category },
+      });
+    }
     res.json({ added: out.added.length, skipped: out.skipped, ids: out.added });
   });
 
@@ -2961,6 +3182,19 @@ export function createApp() {
         refreshCharacter(charId); // ingestFiles 里刚统计过，这里把包数改回来
       }
 
+      if (out.added.length) {
+        logOp(db, {
+          entity: 'media',
+          entityId: out.added[0],
+          action: 'add',
+          payload: {
+            ids: out.added,
+            charId,
+            packId: pack ? pack.id : null,
+            archive: req.file ? req.file.originalname : '',
+          },
+        });
+      }
       const summary = {
         added: out.added.length,
         ids: out.added,
@@ -3030,6 +3264,15 @@ export function createApp() {
       db.prepare('UPDATE media SET pack_id = ? WHERE id = ?').run(pid, id);
       refreshPack(row.pack_id);
       if (pid) refreshPack(pid);
+      if (pid !== row.pack_id) {
+        logOp(db, {
+          entity: 'media',
+          entityId: id,
+          action: 'move',
+          status: initialStatus('media.move'),
+          payload: { ids: [id], toPackId: pid, fromPackId: row.pack_id },
+        });
+      }
     }
     if (typeof b.sortOrder === 'number') {
       db.prepare('UPDATE media SET sort_order = ? WHERE id = ?').run(b.sortOrder, id);
@@ -3062,6 +3305,14 @@ export function createApp() {
     // 先删文件：删不掉就返回 409 并保留记录，用户还能看见它、重试一次
     const del = await removeLibraryFile(row.rel_path);
     if (!del.ok && !del.alreadyGone) {
+      logOp(db, {
+        entity: 'media',
+        entityId: row.id,
+        action: 'delete',
+        status: 'failed',
+        reason: whyDeleteFailed(del),
+        payload: { items: [{ id: row.id, path: row.rel_path }] },
+      });
       return res.status(409).json({
         error: `文件删不掉：${whyDeleteFailed(del)}`,
         code: del.code || null,
@@ -3071,6 +3322,12 @@ export function createApp() {
     db.prepare('DELETE FROM media WHERE id = ?').run(row.id);
     refreshPack(row.pack_id);
     refreshCharacter(row.character_id);
+    logOp(db, {
+      entity: 'media',
+      entityId: row.id,
+      action: 'delete',
+      payload: { items: [{ id: row.id, path: row.rel_path }] },
+    });
     res.json({ ok: true });
   });
 
@@ -3359,6 +3616,15 @@ export function createApp() {
         }
       }
 
+      if (added.length) {
+        logOp(db, {
+          entity: 'media',
+          entityId: added[0],
+          action: 'add',
+          source: 'shell',
+          payload: { ids: added, charId, packId: packId || null },
+        });
+      }
       res.json({ added: added.length, ids: added, skipped, removed, kept });
     } finally {
       await Promise.all(

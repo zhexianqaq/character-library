@@ -3059,3 +3059,55 @@ button.pack-tag:hover { background: var(--fill-2); color: var(--text); }
 .pw-item:hover { background: rgba(0, 0, 0, 0.075); }
 .pw-item:active { background: rgba(0, 0, 0, 0.1); }
 .pw-empty { font-size: 12px; color: var(--text-3); line-height: 1.6; }
+
+/* ============ 操作记录 / 同步角标（v3.46） ============ */
+.tb-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--text);
+  color: #fff;
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.op-list { display: flex; flex-direction: column; gap: 4px; }
+.op-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--r-md);
+  background: var(--fill);
+  font-size: 12.5px;
+}
+.op-row:hover { background: var(--fill-2); }
+.op-time {
+  flex: 0 0 auto;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.op-act { flex: 0 0 76px; color: var(--text-2); }
+.op-main { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.op-st { flex: 0 0 auto; font-size: 11px; color: var(--text-3); }
+.op-st.is-wait { color: #b07d1a; }
+.op-st.is-bad { color: #c0392b; }
+.op-why {
+  flex: 0 1 200px;
+  min-width: 0;
+  color: #c0392b;
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.op-more { display: flex; justify-content: center; padding: 14px 0 24px; }
+.op-more[hidden] { display: none; }

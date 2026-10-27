@@ -109,6 +109,12 @@ export const api = {
   /** 磁盘同步：preview 只算不动，run 会移动文件（不删文件） */
   syncPreview: () => req('/api/sync/packs/preview'),
   syncRun: () => json('POST')('/api/sync/packs', {}),
+  /** 操作日志：日常走增量（只处理 pending + 待校验），上面的 sync* 留作全量校验 */
+  opsSummary: () => req('/api/ops/summary'),
+  opsPreview: () => req('/api/ops/preview'),
+  opsApply: () => json('POST')('/api/ops/apply', {}),
+  opsList: (params) => req(`/api/ops${qs(params)}`),
+  opsArchive: (days = 365) => json('POST')('/api/ops/archive', { days }),
   novelShelf: (shelfId, params) => req(`/api/shelves/${shelfId}/novel${qs(params)}`),
   novelBags: (shelfId) => req(`/api/shelves/${shelfId}/novelbags`),
   createNovelBag: (shelfId, title) => json('POST')(`/api/shelves/${shelfId}/novelbags`, { title }),

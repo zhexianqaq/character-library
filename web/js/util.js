@@ -216,6 +216,7 @@ export function dirRenameNote(dirRename) {
   if (why === 'scattered') return '磁盘上这个图包散在多个目录，点「同步文件夹」合并一次';
   if (why === 'exists') return '磁盘上已有同名目录，点「同步文件夹」处理一下';
   if (why === 'parent') return '目录层级对不上，点「同步文件夹」处理一下';
+  if (why === 'shared') return '这个目录里还有别的包的文件，点「同步文件夹」搬开';
   if (why === 'empty') return '';
   return '磁盘目录没跟上，点「同步文件夹」处理一下';
 }

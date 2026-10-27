@@ -52,6 +52,12 @@ function tabsHtml(shelves, currentId) {
 
 export async function LibraryView(root, shelfId) {
   const state = { q: '', shelfId: Number(shelfId) || null, sort: 'media', embedQ: '' };
+  // 顶栏「同步文件夹」角标 = 待应用 + 失败的操作数
+  let badgeN = 0;
+  const syncBtn = () =>
+    `<button class="tb-btn" data-sync-packs title="按操作记录增量同步磁盘">同步文件夹${
+      badgeN ? `<i class="tb-badge">${badgeN > 99 ? '99+' : badgeN}</i>` : ''
+    }</button>`;
   // 列表数据放在视图层：搜索时只重画列表，不重建顶栏 —— 顶栏一重建，输入框就失焦了
   let chars = { items: [], total: 0 };
   let activeShelf = null;
@@ -188,49 +194,50 @@ export async function LibraryView(root, shelfId) {
    * 先预览（只算不动），真有差异才弹确认，再真跑。**整个流程不删任何文件**，
    * 重名的文件自动加后缀，只有空出来的目录才会被回收。
    */
+  /**
+   * 同步文件夹（增量）：读操作日志，只把「没落实的」和「没校验过的」处理掉。
+   * 不再全库扫描 —— 改一个包的名字就只动那个包。
+   */
   async function syncFolders(btn) {
-    const label = btn ? btn.textContent : '';
+    const label = btn ? btn.innerHTML : '';
     if (btn) {
       btn.disabled = true;
       btn.textContent = '检查中…';
     }
     try {
-      const p = await api.syncPreview();
-      const rename = p.packs.renamed || 0;
-      const merge = p.packs.merged || 0;
-      const loose = p.loose.items || 0;
-      const files = (p.filesMoved || 0) + (p.loose.filesMoved || 0);
-      if (!rename && !merge && !loose) {
-        toast('磁盘已经是同步的');
+      const sum = await api.opsSummary();
+      if (!sum.pending && !sum.failed && !sum.unverified) {
+        toast('没有待同步的改动');
         return;
       }
+      const p = await api.opsPreview();
+      const g = p.groups || {};
+      const lines = [
+        `待应用 ${p.pending} 条记录 · 待校验 ${p.unverified} 条：`,
+        `· 新建图包目录 ${g.create || 0} 个`,
+        `· 移动素材 ${g.move || 0} 个（同条目搬包 / 解散归位）`,
+        `· 重试删除 ${g.delete || 0} 个文件`,
+        `· 收空目录 ${g.prune || 0} 个`,
+        '',
+        '不会删除没有标记的文件；重名自动加后缀。',
+      ];
       const ok = await openModal({
         title: '同步文件夹？',
-        description:
-          `按数据库里的图包名整理磁盘：\n` +
-          `· 改名 ${rename} 个图包目录\n` +
-          `· 合并 ${merge} 个散开的图包（文件搬到一起）\n` +
-          `· ${loose} 个「未归包」素材收进「未分类」\n` +
-          `共移动 ${files} 个文件。\n` +
-          `不会删除任何文件；重名自动加后缀，空出来的目录才会清掉。`,
+        description: lines.join('\n'),
         submitText: '开始同步',
       });
       if (!ok) return;
       if (btn) btn.textContent = '同步中…';
-      const r = await api.syncRun();
-      const moved = (r.filesMoved || 0) + (r.loose.filesMoved || 0);
-      const bad = (r.errors || []).length;
-      toast(
-        `同步完成：改名 ${r.packs.renamed} · 合并 ${r.packs.merged} · 移动 ${moved} 个文件` +
-          (bad ? ` · ${bad} 个失败` : '')
-      );
+      const r = await api.opsApply();
+      const tail = r.failed ? ` · ${r.failed} 项失败（右键空白处 → 操作记录）` : '';
+      toast(`同步完成：应用 ${r.applied} · 校验 ${r.checked} · 修复 ${r.repaired}${tail}`);
       await render();
     } catch (err) {
       toast(err.message || '同步失败');
     } finally {
       if (btn) {
         btn.disabled = false;
-        btn.textContent = label;
+        btn.innerHTML = label;
       }
     }
   }
@@ -246,7 +253,7 @@ export async function LibraryView(root, shelfId) {
         search: searchable,
         placeholder: '搜索资源名称 / 标签',
         searchValue: state.embedQ,
-        actions: `<button class="tb-btn" data-sync-packs title="把磁盘上的图包目录改成数据库里的名字">同步文件夹</button>
+        actions: `${syncBtn()}
           <button class="tb-btn" data-edit-shelf>编辑库</button>`,
       }) +
       `<div class="lib-bar"><div class="segmented" data-tabs>${tabsHtml(shelves, active.id)}</div></div>
@@ -276,7 +283,8 @@ export async function LibraryView(root, shelfId) {
   }
 
   async function render({ push = false } = {}) {
-    const ov = await api.overview();
+    const [ov, ops] = await Promise.all([api.overview(), api.opsSummary().catch(() => null)]);
+    badgeN = ops ? (ops.pending || 0) + (ops.failed || 0) : 0;
     const shelves = ov.shelves;
     if (!state.shelfId || !shelves.some((s) => s.id === state.shelfId)) {
       state.shelfId = shelves[0] ? shelves[0].id : null;
@@ -306,7 +314,7 @@ export async function LibraryView(root, shelfId) {
         placeholder: '搜索名称 / 别名 / 标签',
         search: true,
         searchValue: state.q,
-        actions: `<button class="tb-btn" data-sync-packs title="把磁盘上的图包目录改成数据库里的名字">同步文件夹</button>
+        actions: `${syncBtn()}
           <button class="tb-btn primary" data-new-char>＋ 新建${noun}</button>`,
       }) +
       `<main class="page">
@@ -352,6 +360,10 @@ export async function LibraryView(root, shelfId) {
           { label: `新建${noun}`, onClick: () => root.querySelector('[data-new-char]').click() },
           { label: '新建库', onClick: () => root.querySelector('[data-new-shelf]').click() },
           { separator: true },
+          { label: '操作记录', hint: '磁盘操作日志', onClick: () => {
+              history.pushState({}, '', '/ops');
+              window.dispatchEvent(new CustomEvent('app:route'));
+            } },
           { label: '刷新', onClick: () => render() },
         ]);
         return;

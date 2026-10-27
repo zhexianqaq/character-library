@@ -88,6 +88,43 @@ CREATE INDEX IF NOT EXISTS idx_media_pack ON media(pack_id, sort_order, file_nam
 CREATE INDEX IF NOT EXISTS idx_media_char ON media(character_id, kind);
 CREATE INDEX IF NOT EXISTS idx_chars_shelf ON characters(shelf_id, sort_order, name);
 CREATE INDEX IF NOT EXISTS idx_media_sha ON media(sha256);
+
+/* ── 磁盘操作日志（v3.46） ──────────────────────────────────────────
+   前端的每次改动都记一条：改了什么、涉及哪些路径、落盘了没有。
+   同步按钮只处理这里没落实的（pending / failed）和还没校验过的，
+   不再全库扫描。payload 里存路径快照 —— 记录被删了也要知道动哪些文件。 */
+CREATE TABLE IF NOT EXISTS fs_ops (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at  TEXT NOT NULL,
+  source      TEXT NOT NULL DEFAULT 'ui',      -- ui | shell | cli | sync
+  entity      TEXT NOT NULL,                   -- pack | media | character
+  entity_id   INTEGER,
+  action      TEXT NOT NULL,                   -- create|rename|move|delete|dissolve|add|alias
+  payload     TEXT NOT NULL DEFAULT '{}',      -- {from,to,paths[],mediaIds[],packId,title}
+  status      TEXT NOT NULL DEFAULT 'done',    -- pending | done | failed | canceled
+  reason      TEXT,
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  applied_at  TEXT,
+  verified_at TEXT,                            -- 同步时核对通过的标记
+  run_id      INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_fs_ops_open ON fs_ops(status, id);
+CREATE INDEX IF NOT EXISTS idx_fs_ops_unverified ON fs_ops(verified_at) WHERE verified_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_fs_ops_entity ON fs_ops(entity, entity_id, id);
+
+CREATE TABLE IF NOT EXISTS fs_sync_runs (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at   TEXT NOT NULL,
+  finished_at  TEXT,
+  mode         TEXT NOT NULL DEFAULT 'incremental',  -- incremental | full
+  applied      INTEGER NOT NULL DEFAULT 0,
+  verified     INTEGER NOT NULL DEFAULT 0,
+  repaired     INTEGER NOT NULL DEFAULT 0,
+  failed       INTEGER NOT NULL DEFAULT 0,
+  files_moved  INTEGER NOT NULL DEFAULT 0,
+  dirs_removed INTEGER NOT NULL DEFAULT 0,
+  note         TEXT
+);
 `;
 
 let db = null;
