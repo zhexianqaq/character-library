@@ -2765,7 +2765,36 @@ export function createApp() {
     /**
      * 解压失败时把压缩包留下来（挪到 .cache/failed/）。
      * 以前失败也照删 —— 用户那边源文件早删了的话，就只剩「重新下载」一条路。
+     * 但用户重试成功之后这份就成垃圾了，所以顺手做一次清理：只留最近 3 个、总量不超过 300MB。
      */
+    const pruneFailed = async () => {
+      const dir = path.join(CACHE_DIR, 'failed');
+      let names = [];
+      try {
+        names = await fsp.readdir(dir);
+      } catch {
+        return;
+      }
+      const stats = [];
+      for (const n of names) {
+        try {
+          const st = await fsp.stat(path.join(dir, n));
+          stats.push({ n, mtime: st.mtimeMs, size: st.size });
+        } catch {
+          /* 已被别的请求清理掉 */
+        }
+      }
+      stats.sort((a, b) => b.mtime - a.mtime);
+      let kept = 0;
+      let bytes = 0;
+      for (const s of stats) {
+        kept += 1;
+        bytes += s.size;
+        if (kept > 3 || bytes > 300 * 1024 ** 2) {
+          await fsp.unlink(path.join(dir, s.n)).catch(() => {});
+        }
+      }
+    };
     const keepArchive = async () => {
       if (!archivePath) return null;
       const dir = path.join(CACHE_DIR, 'failed');
@@ -2774,6 +2803,7 @@ export function createApp() {
         const dest = path.join(dir, `${Date.now()}-${path.basename(archivePath)}`);
         await fsp.rename(archivePath, dest);
         archivePath = null;
+        await pruneFailed();
         return dest;
       } catch {
         return null;
