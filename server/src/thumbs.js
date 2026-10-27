@@ -13,6 +13,10 @@ const execFileAsync = promisify(execFile);
 // 基准（24 张真实图，420px WebP q74）：串行 19 张/秒 → 并发8+内部2线程 66 张/秒。
 // 内部线程给太多会和外部并发互相争抢，2 是最优点。
 sharp.concurrency(2);
+// 关键：默认的 libvips 文件缓存会**把打开的图片句柄一直攥着**（默认缓存 20 个文件）。
+// 后果是「刚导入 / 刚上传的文件立刻删」永远 EBUSY（实测 metadata() 之后 unlink 直接失败），
+// 重复文件清理、删除素材都会踩到。关掉文件缓存，只留内存缓存。
+sharp.cache({ files: 0 });
 
 /**
  * 派生图生成池。

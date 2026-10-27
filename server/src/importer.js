@@ -1,9 +1,48 @@
 import fs from 'node:fs/promises';
+import { statSync } from 'node:fs';
 import path from 'node:path';
 import { getDb, nowIso, refreshCharacter, refreshCharacterPacks } from './db.js';
-import { importFileFromPath, uniqueDirName, kindOfExt, removeLibraryFile } from './store.js';
+import { importFileFromPath, uniqueDirName, kindOfExt, removeLibraryFile, absPathOf } from './store.js';
 import { splitTitleTags } from './pack-tags.js';
 import { getDerivative } from './thumbs.js';
+
+/**
+ * 删掉已经空掉的多层子目录（只删子目录，根目录保留）。
+ * 返回删掉的目录数；有任何文件残留的目录都原样留着。
+ */
+async function pruneEmptyDirs(root) {
+  let removed = 0;
+  const walk = async (dir) => {
+    let entries = [];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return 1;
+    }
+    let remaining = 0;
+    for (const e of entries) {
+      if (!e.isDirectory()) {
+        remaining += 1;
+        continue;
+      }
+      const sub = path.join(dir, e.name);
+      const left = await walk(sub);
+      if (left === 0) {
+        try {
+          await fs.rmdir(sub);
+          removed += 1;
+        } catch {
+          remaining += 1;
+        }
+      } else {
+        remaining += 1;
+      }
+    }
+    return remaining;
+  };
+  await walk(root);
+  return removed;
+}
 
 const POST_RE = /^(.+?)-(\d{8})-(\d{6,})(?:_(\d{1,3}))?$/;
 const DATE_RE = /(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])/;
@@ -54,8 +93,19 @@ async function walkFiles(dir) {
 /**
  * 把外部一个角色目录整体导入自己的库。
  * 按月份自动建图包；已存在同 sha256 的媒体会跳过（可重复执行）。
+ *
+ * moveSource = true 时是「搬」而不是「抄」：每个文件在**确认库里已有一份完整副本**之后
+ * 才删源文件（复制失败 / 尺寸对不上 / 重复判定却在库里找不到实体，一律保留源文件）。
+ * 跑完会把源目录里已经空掉的多层子目录清掉，**根目录本身保留**。
  */
-export async function importCharacterDir({ shelfId, sourceDir, name, account, onProgress }) {
+export async function importCharacterDir({
+  shelfId,
+  sourceDir,
+  name,
+  account,
+  moveSource = false,
+  onProgress,
+}) {
   const db = getDb();
   const dirName = path.basename(sourceDir);
   const parsed = parseDirName(dirName);
@@ -126,12 +176,42 @@ export async function importCharacterDir({ shelfId, sourceDir, name, account, on
     `INSERT INTO media(character_id, pack_id, kind, rel_path, file_name, ext, bytes, sha256, width, height, anim, sort_order, created_at)
      VALUES(?,?,?,?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM media WHERE pack_id=?),?)`
   );
-  const findBySha = db.prepare('SELECT id FROM media WHERE character_id = ? AND sha256 = ?');
+  const findBySha = db.prepare('SELECT id, rel_path, bytes FROM media WHERE character_id = ? AND sha256 = ?');
 
   let done = 0;
   let skipped = 0;
+  let moved = 0;
+  const keptSources = [];
   const added = [];
   const thumbJobs = [];
+
+  /** 库里那份确认可用（存在且字节数一致）才允许删源文件；任何不确定都留着 */
+  const libCopyIsSafe = (relPath, bytes) => {
+    if (!relPath) return false;
+    const abs = absPathOf(relPath);
+    try {
+      return statSync(abs).size === bytes;
+    } catch {
+      return false;
+    }
+  };
+
+  const dropSource = async (abs, bytes) => {
+    try {
+      const st = await fs.stat(abs);
+      // 导入期间源文件被改过（尺寸变了）就不动它，宁可留一份
+      if (bytes && st.size !== bytes) {
+        keptSources.push(abs);
+        return false;
+      }
+      await fs.unlink(abs);
+      moved += 1;
+      return true;
+    } catch {
+      keptSources.push(abs);
+      return false;
+    }
+  };
 
   for (const file of files) {
     const fileName = path.basename(file);
@@ -151,11 +231,23 @@ export async function importCharacterDir({ shelfId, sourceDir, name, account, on
     }
     if (!saved) continue;
 
-    if (findBySha.get(charId, saved.sha256)) {
-      // 重复文件：删掉刚复制进来的这一份。删不掉不算失败，但要留个记录
-      const del = await removeLibraryFile(saved.relPath);
+    const existing = findBySha.get(charId, saved.sha256);
+    if (existing) {
+      // 重复文件：删掉刚复制进来的这一份。刚写完的文件常被杀软 / 索引短暂占用，
+      // 隔 1.2s 再试一次；还删不掉就留着，但要如实报出来（不丢数据，只是多一份）
+      let del = await removeLibraryFile(saved.relPath);
       if (!del.ok && !del.alreadyGone) {
-        console.warn(`[import] 重复文件删不掉：${saved.relPath}（${del.code || del.error}）`);
+        await new Promise((r) => setTimeout(r, 1200));
+        del = await removeLibraryFile(saved.relPath);
+        if (!del.ok && !del.alreadyGone) {
+          console.warn(`[import] 重复文件删不掉：${saved.relPath}（${del.code || del.error}）`);
+        }
+      }
+      // 搬家模式：库里原本就有同内容，确认那条记录的文件还在，源文件可以删
+      if (moveSource && libCopyIsSafe(existing.rel_path, saved.bytes)) {
+        await dropSource(file, saved.bytes);
+      } else if (moveSource) {
+        keptSources.push(file);
       }
       skipped += 1;
       done += 1;
@@ -181,11 +273,27 @@ export async function importCharacterDir({ shelfId, sourceDir, name, account, on
     const newId = Number(info.lastInsertRowid);
     added.push(newId);
     thumbJobs.push(getDerivative(newId, 'thumb').catch(() => {}));
+    // 搬模式：确认库里的副本字节数一致才删源
+    if (moveSource) await dropSource(file, saved.bytes);
     done += 1;
     if (onProgress) onProgress({ done, total: files.length, name: fileName });
   }
 
   await Promise.all(thumbJobs);
   const stat = refreshCharacter(charId);
-  return { characterId: charId, dirSlug: baseRel, name: finalName, files: files.length, added: added.length, skipped, ...stat };
+  // 搬完之后把源目录里空掉的多层子目录清掉（根目录保留，免得把用户给的路径整个删了）
+  let prunedDirs = 0;
+  if (moveSource) prunedDirs = await pruneEmptyDirs(sourceDir);
+  return {
+    characterId: charId,
+    dirSlug: baseRel,
+    name: finalName,
+    files: files.length,
+    added: added.length,
+    skipped,
+    moved,
+    keptSources,
+    prunedDirs,
+    ...stat,
+  };
 }
