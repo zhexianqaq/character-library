@@ -271,7 +271,9 @@ export async function ResourcesView(root, shelfId, opts = {}) {
         })),
       },
       { separator: true },
-      { label: '编辑库', onClick: () => root.querySelector('[data-edit-shelf]')?.click() },
+      ...(root.querySelector('[data-edit-shelf]')
+        ? [{ label: '编辑库', onClick: () => root.querySelector('[data-edit-shelf]').click() }]
+        : []),
       { label: '刷新列表', onClick: () => reload() },
     ];
   }

@@ -705,7 +705,10 @@ export async function EmojiView(root, shelfId, opts = {}) {
         { label: '打开上传队列', onClick: () => { history.pushState({}, '', '/uploads'); window.dispatchEvent(new CustomEvent('app:route')); } },
         { label: '新建图包', onClick: () => root.querySelector('[data-new-pack]').click() },
         { separator: true },
-        { label: '编辑库', onClick: () => root.querySelector('[data-edit]')?.click() },
+        // 嵌入首页时这颗按钮在 LibraryView 的顶栏里，菜单里就不重复放一个点了没反应的项
+        ...(root.querySelector('[data-edit]')
+          ? [{ label: '编辑库', onClick: () => root.querySelector('[data-edit]').click() }]
+          : []),
       ]);
     });
   }
