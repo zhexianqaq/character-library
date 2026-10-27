@@ -2720,6 +2720,77 @@ body.cm-locked { overflow: hidden; }
   transition: opacity 0.24s var(--ease);
 }
 .comic .rb-meta b { color: var(--text-2); font-weight: 600; }
+.cm-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.cm-right { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+
+/* 竖向进度条：只在侧栏布局里出现 */
+.cm-vbar {
+  display: none;
+  position: relative;
+  width: 4px;
+  height: 132px;
+  margin: 4px 0 2px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  touch-action: none;
+}
+.cm-vbar i {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 0;
+  border-radius: 999px;
+  background: var(--text);
+  pointer-events: none;
+}
+.cm-vbar::after {
+  /* 加粗命中区：4px 的条子拿鼠标点太难受 */
+  content: '';
+  position: absolute;
+  inset: -6px -10px;
+}
+
+/* ── 侧栏布局：舞台两侧有空白时，控件竖排到左右两边 ── */
+.comic.is-rail { padding: 0; }
+.comic.is-rail .reader-bar { display: contents; }
+.comic.is-rail > .spacer { display: none; }
+.comic.is-rail .cm-left,
+.comic.is-rail .cm-right {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 62;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 56px;
+  padding: 10px 8px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.84);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  box-shadow: var(--s1);
+  transition: opacity 0.24s var(--ease);
+}
+.comic.is-rail .cm-left { left: 10px; }
+.comic.is-rail .cm-right { right: 10px; gap: 4px; }
+.comic.is-rail .cm-left .rb-name { display: none; }
+.comic.is-rail .cm-left .rb-meta { font-size: 11px; line-height: 1.3; text-align: center; }
+.comic.is-rail .cm-left .rb-btn { height: 30px; min-width: 34px; font-size: 19px; }
+.comic.is-rail .cm-vbar { display: block; }
+.comic.is-rail .cm-seg { flex-direction: column; gap: 2px; padding: 0; background: transparent; }
+.comic.is-rail .cm-seg button { height: 28px; padding: 0 8px; font-size: 11.5px; border-radius: 10px; }
+.comic.is-rail .cm-right .rb-btn { height: 28px; min-width: 34px; padding: 0 5px; font-size: 11.5px; }
+.comic.is-rail .cm-hud { display: none; }
+/* 侧栏里「选中」的白底压在白胶囊上看不出来，直接用黑底反白 */
+.comic.is-rail .cm-seg button.on { background: var(--text); color: var(--on-accent); box-shadow: none; }
+.comic.is-rail .cm-seg button:hover { background: var(--fill); color: var(--text); }
+.comic.is-rail .cm-seg button.on:hover { background: var(--text); color: var(--on-accent); }
+.comic.is-rail .cm-vbar { height: 170px; }
+.comic.is-rail .cm-vbar:hover { background: rgba(0, 0, 0, 0.2); }
 
 /* 模式切换：三段式，和站内 segmented 一套语言，只是小一号 */
 .cm-seg {
@@ -2812,9 +2883,14 @@ body.cm-locked { overflow: hidden; }
 .cm-hud-n b { color: var(--text); font-weight: 600; }
 
 /* 全屏：没有浏览器的边，留一点呼吸位；静止 2.4s 淡出控件 */
-.comic:fullscreen { height: 100vh; background: #f0f0f1; }
+/* 全屏是 <html> 进全屏（.comic 自己进全屏后文档不能滚），这里只调间距 */
+.comic.is-fs { padding: 0; }
 .comic.is-fs[data-mode="scroll"] { padding-bottom: 74px; }
+.comic.is-fs[data-mode="single"],
+.comic.is-fs[data-mode="spread"] { padding-bottom: 0; }
 .comic.is-idle .reader-bar,
+.comic.is-idle .cm-left,
+.comic.is-idle .cm-right,
 .comic.is-idle .cm-hud { opacity: 0; pointer-events: none; }
 .comic.is-idle { cursor: none; }
 .cm-strip {

@@ -13,8 +13,13 @@ import { escDepth } from '../esc.js';
  * 方向（左→右 / 右→左）只影响单页、双页的按键与点击区：日漫按右→左读，
  * 此时「下一页」在左边，方向键也要跟着翻过来。
  *
- * 所有偏好（模式 / 方向 / 适应方式）存在 localStorage，跨本、跨次都沿用；
- * 进度按「第几页」存，所以三种模式之间切换、以及刷新回来，都是同一页。
+ * 控件位置会自己找地方：舞台两侧有空白（页面没占满宽度）时，收起顶栏、
+ * 把返回 / 页码 / 进度与模式 / 方向 / 适应 / 全屏竖排到左右两条侧栏上；
+ * 页面顶满宽度时退回顶部胶囊 + 底部滑块。判断靠实测页面宽度，不看屏幕宽度 ——
+ * 双页对开时页面经常是满的，那时侧栏会盖住画。
+ *
+ * 全屏是把 <html> 整个放进全屏，而不是 .comic 自己：
+ * 元素自己进全屏后文档不再滚动，滚动模式下滚轮会失效。
  */
 
 const posKey = (id) => `cl-comic:${id}`;
@@ -141,20 +146,25 @@ export async function ComicView(root, packId) {
   root.innerHTML = `
     <div class="comic" data-mode="${mode}" data-dir="${dir}" data-fit="${fit}">
       <header class="reader-bar comic-bar">
-        <button class="rb-btn" data-back aria-label="返回图包">‹</button>
-        <div class="rb-text">
-          <div class="rb-name">${esc(pack.title)}</div>
-          <div class="rb-meta"><b data-pos>1</b> / ${total}</div>
+        <div class="cm-left">
+          <button class="rb-btn" data-back aria-label="返回图包">‹</button>
+          <div class="rb-text">
+            <div class="rb-name">${esc(pack.title)}</div>
+            <div class="rb-meta"><b data-pos>1</b> / ${total}</div>
+          </div>
+          <div class="cm-vbar" data-vbar title="进度：点或拖都可跳页"><i data-vfill></i></div>
         </div>
         <span class="spacer"></span>
-        <div class="cm-seg" data-modes>
-          ${MODES.map(
-            (m) => `<button data-mode="${m.v}" class="${m.v === mode ? 'on' : ''}">${m.label}</button>`
-          ).join('')}
+        <div class="cm-right">
+          <div class="cm-seg" data-modes>
+            ${MODES.map(
+              (m) => `<button data-mode="${m.v}" class="${m.v === mode ? 'on' : ''}">${m.label}</button>`
+            ).join('')}
+          </div>
+          <button class="rb-btn" data-dir-btn title="阅读方向（右 → 左适合日漫）">${dir === 'rtl' ? '←' : '→'}</button>
+          <button class="rb-btn" data-fit-btn title="适应方式">${fit === 'width' ? '适宽' : '适高'}</button>
+          <button class="rb-btn" data-fs-btn title="全屏（F）">全屏</button>
         </div>
-        <button class="rb-btn" data-dir-btn title="阅读方向（右 → 左适合日漫）">${dir === 'rtl' ? '←' : '→'}</button>
-        <button class="rb-btn" data-fit-btn title="适应方式">${fit === 'width' ? '适宽' : '适高'}</button>
-        <button class="rb-btn" data-fs-btn title="全屏（F）">全屏</button>
       </header>
       <div class="cm-stage" data-stage></div>
       <div class="cm-hud" data-hud>
@@ -166,6 +176,8 @@ export async function ComicView(root, packId) {
   const el = root.querySelector('.comic');
   const stage = root.querySelector('[data-stage]');
   const slider = root.querySelector('[data-slider]');
+  const vbar = root.querySelector('[data-vbar]');
+  const vfill = root.querySelector('[data-vfill]');
   const posEls = [...root.querySelectorAll('[data-pos], [data-hud-pos]')];
 
   // ---------------- 进度 ----------------
@@ -175,14 +187,8 @@ export async function ComicView(root, packId) {
       n.textContent = String(cur);
     });
     if (slider.value !== String(cur)) slider.value = String(cur);
+    if (vfill) vfill.style.height = `${(cur / total) * 100}%`;
   };
-  /** 双页模式下把页码对齐到「这一对的第一页」，否则滑块拖到 61 会显示 61 却在看 60-61 */
-  const snapToSpread = () => {
-    if (mode !== 'spread') return;
-    const sp = spreads[spreadIndexAt(cur)];
-    if (sp) cur = sp[0] + 1;
-  };
-
   const setPos = (n, { save = true, scroll = false } = {}) => {
     cur = Math.min(total, Math.max(1, Number(n) || 1));
     snapToSpread();
@@ -194,6 +200,35 @@ export async function ComicView(root, packId) {
     }
     if (scroll && mode === 'scroll') window.scrollTo(0, Math.max(0, pageTop(cur - 1) - 8));
   };
+
+  /** 双页模式下把页码对齐到「这一对的第一页」，否则滑块拖到 61 会显示 61 却在看 60-61 */
+  function snapToSpread() {
+    if (mode !== 'spread') return;
+    const sp = spreads[spreadIndexAt(cur)];
+    if (sp) cur = sp[0] + 1;
+  }
+
+  // ---------------- 侧栏 / 顶栏 ----------------
+  /**
+   * 页面两侧还有没有空白？有就把控件竖排过去。
+   * 用实测图片宽度判断，不看屏幕宽度 —— 双页对开、宽图适宽时页面是满的。
+   */
+  function syncRail() {
+    if (mode === 'scroll') {
+      el.classList.remove('is-rail');
+      return;
+    }
+    const imgs = [...stage.querySelectorAll('.cm-shot img')];
+    if (!imgs.length) {
+      el.classList.remove('is-rail');
+      return;
+    }
+    const w =
+      imgs.reduce((a, img) => a + img.getBoundingClientRect().width, 0) + (imgs.length > 1 ? 8 : 0);
+    const side = (stage.clientWidth - w) / 2;
+    const want = side >= 92;
+    if (want !== el.classList.contains('is-rail')) el.classList.toggle('is-rail', want);
+  }
 
   // ---------------- 滚动模式 ----------------
   let tiles = [];
@@ -215,6 +250,7 @@ export async function ComicView(root, packId) {
 
   function renderScroll() {
     stage.classList.remove('is-paged');
+    el.classList.remove('is-rail');
     stage.innerHTML = `<div class="cm-strip">${pages
       .map((m, i) => {
         const r = ratioOf(m);
@@ -271,8 +307,15 @@ export async function ComicView(root, packId) {
     return [...wrap.children];
   };
 
+  let lastKey = '';
   function paintPaged() {
     const list = mode === 'single' ? [cur - 1] : currentSpread();
+    // 换页后回到页首：适宽时上一页滚到一半的位置不该带到下一页
+    const key = list.join('-');
+    if (key !== lastKey) {
+      lastKey = key;
+      stage.scrollTop = 0;
+    }
     const slots = ensureSlots(list.length);
     slots.forEach((slot, i) => {
       const p = pages[list[i]];
@@ -281,6 +324,7 @@ export async function ComicView(root, packId) {
       // 同一页不动 src：换页时浏览器复用已解码的那张，不会白闪
       if (slot.dataset.pid !== String(p.id)) {
         slot.dataset.pid = String(p.id);
+        img.onload = () => syncRail();
         img.src = api.preview(p.id);
       }
       slot.querySelector('.cm-no').textContent = String(p.pageNo || list[i] + 1);
@@ -293,6 +337,7 @@ export async function ComicView(root, packId) {
         ? [cur - 2, cur - 1, cur, cur + 1]
         : [...currentSpread(), ...(spreads[spreadIndexAt(cur) + 1] || []), ...(spreads[spreadIndexAt(cur) - 1] || [])];
     near.forEach((i) => warmPage(i));
+    requestAnimationFrame(syncRail);
   }
 
   function renderPaged() {
@@ -343,6 +388,7 @@ export async function ComicView(root, packId) {
     savePrefs({ mode, dir, fit });
     el.dataset.fit = fit;
     root.querySelector('[data-fit-btn]').textContent = fit === 'width' ? '适宽' : '适高';
+    requestAnimationFrame(syncRail);
   };
 
   // ---------------- 事件 ----------------
@@ -362,10 +408,22 @@ export async function ComicView(root, packId) {
     fsBtn.textContent = on ? '退出' : '全屏';
     el.classList.toggle('is-fs', on);
     if (on) wake();
+    // 视口高度变了，滚动模式的页顶位置要重新量；单双页交给 CSS 自动适配
+    requestAnimationFrame(() => {
+      if (mode === 'scroll') {
+        measure();
+        window.scrollTo(0, Math.max(0, pageTop(cur - 1) - 8));
+      } else {
+        syncRail();
+      }
+    });
   };
   const toggleFs = () => {
     if (document.fullscreenElement) document.exitFullscreen?.();
-    else el.requestFullscreen?.().catch(() => toast('这个浏览器不支持全屏'));
+    // 整页进全屏：.comic 自己进全屏后文档不再滚动，滚动模式会滚不动
+    else (document.documentElement.requestFullscreen?.() || Promise.reject()).catch(() =>
+      toast('这个浏览器不支持全屏')
+    );
   };
   fsBtn.addEventListener('click', toggleFs);
   document.addEventListener('fullscreenchange', onFsChange);
@@ -376,6 +434,31 @@ export async function ComicView(root, packId) {
     setPos(n);
     if (mode !== 'scroll') paintPaged();
   });
+
+  /* 侧栏上的竖向进度条：点一下或按住拖都能跳页（原生 range 竖排在部分版本里不生效，
+     这里自己画一个 4px 的轨道，行为可控） */
+  let dragging = false;
+  const seekFromEvent = (e) => {
+    const r = vbar.getBoundingClientRect();
+    if (!r.height) return;
+    const y = Math.min(r.bottom, Math.max(r.top, e.clientY));
+    const ratio = 1 - (y - r.top) / r.height;
+    goto(Math.round(ratio * (total - 1)) + 1);
+  };
+  const onVbarDown = (e) => {
+    dragging = true;
+    seekFromEvent(e);
+    e.preventDefault();
+  };
+  const onVbarMove = (e) => {
+    if (dragging) seekFromEvent(e);
+  };
+  const onVbarUp = () => {
+    dragging = false;
+  };
+  vbar.addEventListener('pointerdown', onVbarDown);
+  window.addEventListener('pointermove', onVbarMove);
+  window.addEventListener('pointerup', onVbarUp);
 
   /** 点击翻页：单页 / 双页里点右（右→左时点左）翻下一页，另一侧上一页，中间不动 */
   stage.addEventListener('click', (e) => {
@@ -435,11 +518,12 @@ export async function ComicView(root, packId) {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       if (mode === 'scroll') measure();
+      else syncRail();
     }, 200);
   };
   window.addEventListener('resize', onResize);
 
-  /** 全屏时鼠标静止 2.4s 就把顶栏和进度条淡掉，动一下再回来 */
+  /** 全屏时鼠标静止 2.4s 就把控件淡掉，动一下再回来 */
   let idleTimer = 0;
   const wake = () => {
     el.classList.remove('is-idle');
@@ -528,13 +612,14 @@ export async function ComicView(root, packId) {
     window.removeEventListener('scroll', onScrollThrottled);
     window.removeEventListener('resize', onResize);
     window.removeEventListener('mousemove', wake);
+    window.removeEventListener('pointermove', onVbarMove);
+    window.removeEventListener('pointerup', onVbarUp);
     clearTimeout(scrollTimer);
     clearTimeout(resizeTimer);
     clearTimeout(idleTimer);
     clearTimeout(saveTimer);
     if (io) io.disconnect();
     document.body.classList.remove('cm-locked');
-    // 全屏状态下离开这一页：元素被移除后浏览器一般会自动退出，显式收一次更稳
     if (document.fullscreenElement) document.exitFullscreen?.();
     savePos(id, cur);
   };

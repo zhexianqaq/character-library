@@ -767,10 +767,50 @@ export async function CharacterView(root, id) {
     loadPacks();
   }
 
+  /** 右键「编辑图包」：改名 / 改日期，改完原地刷新 */
+  async function editPackInfo(p) {
+    const v = await openModal({
+      title: '编辑图包',
+      fields: [
+        { name: 'title', label: '名称', value: p.title, required: true },
+        {
+          name: 'month',
+          label: '拍摄日期（可选）',
+          type: 'month',
+          value: p.month || '',
+          hint: '留空则显示创建日期',
+        },
+      ],
+      submitText: '保存',
+    });
+    if (!v) return;
+    try {
+      await api.updatePack(p.id, { title: v.title, month: v.month || null });
+      toast('已保存');
+      await loadPacks();
+    } catch (err) {
+      toast(err.message || '保存失败');
+    }
+  }
+
+  /** 右键「编辑标签」：和图包页那套标签选择器共用 */
+  async function editPackTags(p) {
+    const next = await openTagPicker({ title: '编辑图包标签', selected: p.tags || [] });
+    if (!next) return;
+    try {
+      await api.updatePack(p.id, { tags: next });
+      toast(next.length ? `已保存 ${next.length} 个标签` : '已清空标签');
+      await loadPacks();
+    } catch (err) {
+      toast(err.message || '保存失败');
+    }
+  }
+
   async function dissolvePack(pack) {
     const ok = await confirmDialog(
       '解散这个图包？',
-      `「${pack.title}」里的 ${pack.mediaCount} 个媒体会变成未归包，不会被删除。`
+      `「${pack.title}」里的 ${pack.mediaCount} 个媒体会变成未归包，不会被删除。`,
+      '解散'
     );
     if (!ok) return;
     await api.deletePack(pack.id);
@@ -904,7 +944,11 @@ export async function CharacterView(root, id) {
     bar.innerHTML = `
       <span class="sel-n">已选 <b>0</b> ${mode === 'packs' ? '个图包' : '个媒体'}</span>
       <button data-sel="all">全选</button>
-      ${mode === 'packs' ? '<button data-sel="dissolve">解散</button>' : '<button data-sel="move">移动到…</button><button data-sel="eject">移出库</button>'}
+      ${
+        mode === 'packs'
+          ? '<button data-sel="dissolve">解散</button><button data-sel="eject">移出库</button>'
+          : '<button data-sel="move">移动到…</button><button data-sel="eject">移出库</button>'
+      }
       <button data-sel="del" class="danger">删除</button>
       <button data-sel="exit" class="primary">完成</button>`;
     bar.querySelectorAll('button[data-sel]').forEach((b) => {
@@ -979,7 +1023,8 @@ export async function CharacterView(root, id) {
     if (action === 'dissolve') bulkPacks('dissolve');
     else if (action === 'del') mode === 'packs' ? bulkPacks('delete') : bulkMediaDelete();
     else if (action === 'move') bulkMediaMove();
-    else if (action === 'eject') bulkEject();
+    // 图包视图的「移出库」= 把整包素材退回全部库，而不是逐个素材挑
+    else if (action === 'eject') (mode === 'packs' ? bulkEjectPacks() : bulkEject());
   }
 
   async function bulkPacks(action) {
@@ -989,7 +1034,8 @@ export async function CharacterView(root, id) {
       del ? `删除 ${ids.length} 个图包和里面的媒体？` : `解散 ${ids.length} 个图包？`,
       del
         ? '图包里的图片 / 视频会一起删掉，磁盘文件也会删，不可恢复。'
-        : '只删图包这个壳，里面的媒体会变成未归包，文件一个都不动。'
+        : '只删图包这个壳，里面的媒体会变成未归包，文件一个都不动。',
+      del ? '删除' : '解散'
     );
     if (!ok) return;
     try {
@@ -1025,12 +1071,63 @@ export async function CharacterView(root, id) {
     }
   }
 
+  /**
+   * 图包批量「移出库」：把选中图包里的素材整体退回「全部库 → 未分发」。
+   * 走的是和单个素材一样的 eject 接口（会合并同 sha 的重复文件），
+   * 搬空之后这些图包没有意义了，顺手解散 —— 和单个素材的语义保持一致。
+   */
+  async function bulkEjectPacks() {
+    const ids = [...picked];
+    const count = packsShown
+      .filter((p) => ids.includes(p.id))
+      .reduce((a, p) => a + (p.mediaCount || 0), 0);
+    const empty = count === 0;
+    const ok = await confirmDialog(
+      empty ? `解散这 ${ids.length} 个空图包？` : `把 ${ids.length} 个图包里的 ${count} 个素材移出当前${noun()}？`,
+      empty
+        ? '这些图包是空的，解散不会动任何文件。'
+        : '素材会移到「全部库 → 未分发」，之后可以在那里重新分发；图包搬空后会被解散。磁盘文件跟着搬，不会复制。',
+      empty ? '解散' : '移出'
+    );
+    if (!ok) return;
+    try {
+      const mediaIds = [];
+      for (const pid of ids) {
+        const d = await api.packMedia(pid);
+        (d.items || []).forEach((m) => mediaIds.push(m.id));
+      }
+      let moved = 0;
+      let merged = 0;
+      let bad = 0;
+      if (mediaIds.length) {
+        const r = await api.ejectMedia(mediaIds);
+        moved = r.moved || 0;
+        merged = r.merged || 0;
+        bad = (r.skipped || []).length;
+      }
+      await api.bulkPacks(ids, 'dissolve');
+      const bits = [];
+      if (mediaIds.length) bits.push(`已移出 ${moved} 个素材`);
+      if (merged) bits.push(`${merged} 个与全部库重复已合并`);
+      if (bad) bits.push(`${bad} 个没成功`);
+      bits.push(`解散 ${ids.length} 个图包`);
+      toast(bits.join(' · '));
+      resetSelection();
+      c = await api.character(id);
+      paint();
+      await loadPacks();
+    } catch (err) {
+      toast(err.message || '移出失败');
+    }
+  }
+
   /** 批量移出库：退回「全部库 → 未分发」，文件跟着搬 */
   async function bulkEject() {
     const ids = [...picked];
     const ok = await confirmDialog(
       `把 ${ids.length} 个素材移出当前${noun()}？`,
-      '会移到「全部库 → 未分发」，之后可以在那里重新分发；磁盘上的文件跟着搬，不会复制。'
+      '会移到「全部库 → 未分发」，之后可以在那里重新分发；磁盘上的文件跟着搬，不会复制。',
+      '移出'
     );
     if (!ok) return;
     try {
@@ -1146,6 +1243,8 @@ export async function CharacterView(root, id) {
       if (k in counts) counts[k] += 1;
       else uncategorized += 1;
     }
+    // 关联图包显示在 cosplay 分栏，计数也得算上，否则「cosplay 0」里却有卡片
+    if (isWorkShelf() && linkedPacks.length) counts.cosplay += linkedPacks.length;
     const tabs = CATEGORIES.map((k) => ({ k, n: counts[k] }));
     if (uncategorized) tabs.push({ k: '未分类', n: uncategorized });
     el.innerHTML = tabs
@@ -1162,57 +1261,47 @@ export async function CharacterView(root, id) {
   }
 
   /**
-   * 跨库「关联图包」：只读入口，图包还在原来的库里。
-   * 匹配靠标签精确等于本条目名（别人给图包打上「卡芙卡」就能挂过来）。
+   * 跨库「关联图包」：别的库里标签**正好等于**本条目名的图包，只读挂在这里。
+   * 角色库挂在 cosplay 分栏（那本来就是同人 / cos 素材的位置），其他库直接跟在图包后面。
+   * 包还在原来的库里，不复制、不移动，点进去还是 /p/:id。
    */
   let linkedPacks = [];
-  async function loadLinked() {
-    try {
-      linkedPacks = (await api.linkedPacks(c.id)).items || [];
-    } catch {
-      linkedPacks = [];
-    }
-    paintLinked();
-  }
+  const showLinked = () => !isWorkShelf() || cat === 'cosplay';
 
-  function paintLinked() {
-    const slot = root.querySelector('[data-linked-packs]');
-    if (!slot) return;
-    if (!linkedPacks.length) {
-      slot.innerHTML = '';
-      return;
-    }
-    slot.innerHTML = `<div class="linked-head"><b>关联图包</b><i>${linkedPacks.length}</i><span>来自其他库 · 只读入口</span></div>
-      <div class="pack-grid">${linkedPacks
-        .map((p) => {
-          const img = p.coverMediaId ? api.thumb(p.coverMediaId) : '';
-          return `<div class="pack-card is-linked" data-pack="${p.id}">
-            <a class="pack-hit" href="/p/${p.id}" data-link aria-label="${esc(p.title)}"></a>
-            <div class="cover single">
-              ${img ? `<img src="${img}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : '<div class="cover-empty">空</div>'}
-              <span class="linked-from">${esc(p.shelf.name || '其他库')}</span>
-            </div>
-            <div class="info">
-              <div class="t">${esc(p.title)}</div>
-              <div class="m">${esc(p.owner.name)} · ${p.mediaCount || 0} 项</div>
-            </div>
-          </div>`;
-        })
-        .join('')}</div>`;
-    slot.querySelectorAll('img').forEach(fadeIn);
+  function linkedCardsHtml() {
+    return linkedPacks
+      .map((p) => {
+        const img = p.coverMediaId ? api.thumb(p.coverMediaId) : '';
+        return `<div class="pack-card is-linked" data-linked="1" data-pack="${p.id}">
+          <a class="pack-hit" href="/p/${p.id}" data-link aria-label="${esc(p.title)}"></a>
+          <div class="cover single">
+            ${img ? `<img src="${img}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : '<div class="cover-empty">空</div>'}
+            <span class="linked-from">${esc(p.shelf.name || '其他库')}</span>
+          </div>
+          <div class="info">
+            <div class="t">${esc(p.title)}</div>
+            <div class="m">${esc(p.owner.name)} · ${p.mediaCount || 0} 项</div>
+          </div>
+        </div>`;
+      })
+      .join('');
   }
 
   async function loadPacks() {
     const body = root.querySelector('[data-body]');
-    body.innerHTML = '<div data-linked-packs></div><div class="pack-grid" data-packs></div>';
-    const data = await api.packs(c.id);
+    body.innerHTML = '<div class="pack-grid" data-packs></div>';
+    // 关联图包要和自己的图包一起到：cosplay 的计数里也算它们
+    const [data, linked] = await Promise.all([
+      api.packs(c.id),
+      api.linkedPacks(c.id).catch(() => ({ items: [] })),
+    ]);
+    linkedPacks = linked.items || [];
     packsCache = data.items;
     paintCats();
     let items = isWorkShelf() ? data.items.filter((p) => (p.category || '未分类') === cat) : data.items;
     if (resFilter) items = items.filter((p) => (p.tags || []).includes(resFilter));
     packsShown = items;
     renderPacks();
-    loadLinked();
   }
 
   /** 进漫画阅读器 */
@@ -1234,7 +1323,9 @@ export async function CharacterView(root, id) {
     // 每次画都按当前排序来；packsShown 同步成显示顺序，Shift 连选的区间才对得上
     const items = sortPacks(packsShown, PACK_SORT.key, PACK_SORT.desc);
     packsShown = items;
-    if (!items.length) {
+    // 关联图包（别处打上本条目标签的包）接在自己图包后面，只读
+    const linkedHtml = showLinked() ? linkedCardsHtml() : '';
+    if (!items.length && !linkedHtml) {
       holder.innerHTML = `<div class="empty" style="grid-column:1/-1">
         <b>${
           resFilter
@@ -1254,8 +1345,9 @@ export async function CharacterView(root, id) {
       </div>`;
       return;
     }
-    holder.innerHTML = items
-      .map((p) => {
+    holder.innerHTML =
+      items
+        .map((p) => {
         const img = p.coverMediaId ? api.thumb(p.coverMediaId) : '';
         const comic = p.kind === 'comic';
         const meta = comic
@@ -1276,8 +1368,8 @@ export async function CharacterView(root, id) {
             <div class="m">${meta || '0 项'}</div>
           </div>
         </div>`;
-      })
-      .join('');
+        })
+        .join('') + linkedHtml;
     holder.querySelectorAll('img').forEach(fadeIn);
 
     /* 图包右键：转漫画 / 转回图包。委托在网格容器上，只挂一次 ——
@@ -1287,26 +1379,52 @@ export async function CharacterView(root, id) {
       holder.addEventListener('contextmenu', (e) => {
         const card = e.target.closest('.pack-card');
         if (!card || selecting) return;
-        const p = packsShown.find((x) => x.id === Number(card.dataset.pack));
-        if (!p) return;
         e.preventDefault();
         e.stopPropagation();
+        const pid = Number(card.dataset.pack);
+
+        // 关联图包是别处的，只能打开看看
+        if (card.dataset.linked) {
+          const lp = linkedPacks.find((x) => x.id === pid);
+          openContextMenu(e, [
+            { label: '打开', onClick: () => card.querySelector('.pack-hit')?.click() },
+            {
+              label: '打开本地文件夹',
+              onClick: () => api.reveal('pack', pid).catch(() => toast('目录已丢失')),
+            },
+            ...(lp ? [{ label: '来自', hint: `${lp.shelf.name} · ${lp.owner.name}` }] : []),
+          ]);
+          return;
+        }
+
+        const p = packsShown.find((x) => x.id === pid);
+        if (!p) return;
         const comic = p.kind === 'comic';
+        // 真人（人物库）的照片合集不是漫画，不给这个入口
+        const canComic = !!(c.shelf && c.shelf.kind !== 'people');
         openContextMenu(e, [
           { label: '打开', onClick: () => card.querySelector('.pack-hit')?.click() },
           ...(comic
+            ? [{ label: '阅读', hint: `${p.imageCount || 0} 页`, onClick: () => openComic(p.id) }]
+            : []),
+          { separator: true },
+          { label: '编辑图包', onClick: () => editPackInfo(p) },
+          { label: '编辑标签', onClick: () => editPackTags(p) },
+          {
+            label: '打开本地文件夹',
+            onClick: () => api.reveal('pack', p.id).catch(() => toast('目录已丢失')),
+          },
+          ...(canComic
             ? [
-                {
-                  label: '阅读',
-                  hint: `${p.imageCount || 0} 页`,
-                  onClick: () => openComic(p.id),
-                },
+                { separator: true },
+                comic
+                  ? { label: '转回普通图包', onClick: () => convertPack(p) }
+                  : { label: '转为漫画包', hint: '按文件名排页序', onClick: () => convertPack(p) },
               ]
             : []),
           { separator: true },
-          comic
-            ? { label: '转回普通图包', onClick: () => convertPack(p) }
-            : { label: '转为漫画包', hint: '按文件名排页序', onClick: () => convertPack(p) },
+          { label: '解散图包', hint: '素材变未归包', onClick: () => dissolvePack(p) },
+          { label: '删除图包', hint: '连素材一起删', danger: true, onClick: () => removePack(p) },
         ]);
       });
     }
@@ -1317,7 +1435,7 @@ export async function CharacterView(root, id) {
         'click',
         (e) => {
           const card = e.target.closest('.pack-card');
-          if (!card) return;
+          if (!card || card.dataset.linked) return;
           e.preventDefault();
           e.stopPropagation();
           pickByClick(Number(card.dataset.pack), e);

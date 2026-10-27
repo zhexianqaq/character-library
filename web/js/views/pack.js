@@ -42,6 +42,8 @@ export async function PackView(root, id) {
   const shelfKind = (pack.shelf && pack.shelf.kind) || 'people';
   // 漫画包：页序由 media.page_no 决定，和「图包排序」是两回事
   const isComic = pack.kind === 'comic';
+  // 真人（人物库）里是照片合集，不给「转成漫画」；小说袋也由后端拒绝
+  const canComic = shelfKind !== 'people' && shelfKind !== 'novel';
   const lastPage = (() => {
     if (!isComic) return 0;
     try {
@@ -496,12 +498,16 @@ export async function PackView(root, id) {
       { label: '添加素材', hint: '4 种来源', children: addMediaItems() },
       { label: '编辑图包', onClick: () => root.querySelector('[data-rename]').click() },
       { label: '编辑标签', onClick: editTags },
-      { separator: true },
-      // 图包 ⇄ 漫画：只改类型和页序，文件、封面、标签都不动
-      isComic
-        ? { label: '转回普通图包', onClick: () => convertKind('pack') }
-        : { label: '转为漫画包', hint: '按文件名排页序', onClick: () => convertKind('comic') },
       { label: '打开本地文件夹', onClick: () => api.reveal('pack', pack.id).catch(() => toast('目录已丢失')) },
+      ...(canComic
+        ? [
+            { separator: true },
+            // 图包 ⇄ 漫画：只改类型和页序，文件、封面、标签都不动
+            isComic
+              ? { label: '转回普通图包', onClick: () => convertKind('pack') }
+              : { label: '转为漫画包', hint: '按文件名排页序', onClick: () => convertKind('comic') },
+          ]
+        : []),
     ]);
   });
 
