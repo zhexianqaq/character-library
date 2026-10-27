@@ -1,6 +1,6 @@
 # 資料庫 · Character Library
 
-[English](README.en.md) · **日本語** · [한국어](README.ko.md) · [繁體中文](README.zh-TW.md) · [简体中文](README.md)
+[English](README.en.md) · **日本語** · [한국어](README.ko.md) · [繁體中文](README.zh-TW.md) · [Русский](README.ru.md) · [Français](README.fr.md) · [简体中文](README.md)
 
 > 自分のマシンだけで動く、アニメ・コスプレ向けのローカル素材ライブラリ。
 > 画像と動画は **ライブラリ → エントリー → パック → 画像 | 動画** の四階層で管理され、

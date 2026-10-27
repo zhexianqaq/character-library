@@ -1,6 +1,6 @@
 # 资料库 · Character Library
 
-[English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [繁體中文](README.zh-TW.md) · **简体中文**
+[English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [繁體中文](README.zh-TW.md) · [Русский](README.ru.md) · [Français](README.fr.md) · **简体中文**
 
 > 一个跑在本机的动漫 / cosplay 素材库。图片和视频按「库 → 条目 → 图包 → 图片|视频」四层归置，
 > 磁盘目录和界面层级一一对应；瀑布流浏览、标签体系、漫画阅读器、压缩包解压入库、
@@ -88,7 +88,7 @@ start.bat
 - [版本历史](#版本历史) —— v2.0 → v3.48 全表
 - [CHANGELOG.md](CHANGELOG.md) —— 每个版本的详细改动与踩过的坑
 
-> 本页是**完整手册**。其他语言为精简介绍（英文 / 日文 / 韩文 / 繁体），技术细节仍以本页为准。
+> 本页是**完整手册**。其他语言为精简介绍（英文 / 日文 / 韩文 / 繁体 / 俄语 / 法语），技术细节仍以本页为准。
 
 ### 桌面壳（单文件 exe）
 

@@ -1,6 +1,6 @@
 # 資料庫 · Character Library
 
-[English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · **繁體中文** · [简体中文](README.md)
+[English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · **繁體中文** · [Русский](README.ru.md) · [Français](README.fr.md) · [简体中文](README.md)
 
 > 只在自己電腦上跑的動漫 / cosplay 素材庫。
 > 圖片和影片以 **資料庫 → 條目 → 圖包 → 圖片 | 影片** 四層歸位，磁碟上的資料夾結構和畫面階層一一對應。

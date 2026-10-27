@@ -1,6 +1,6 @@
 # Character Library
 
-**English** · [日本語](README.ja.md) · [한국어](README.ko.md) · [繁體中文](README.zh-TW.md) · [简体中文](README.md)
+**English** · [日本語](README.ja.md) · [한국어](README.ko.md) · [繁體中文](README.zh-TW.md) · [Русский](README.ru.md) · [Français](README.fr.md) · [简体中文](README.md)
 
 > A self-hosted gallery for anime / cosplay material that runs entirely on your own machine.
 > Images and videos live in a four-level tree — **library → entry → pack → images | videos** — and the

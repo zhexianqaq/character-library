@@ -1,6 +1,6 @@
 # 자료실 · Character Library
 
-[English](README.en.md) · [日本語](README.ja.md) · **한국어** · [繁體中文](README.zh-TW.md) · [简体中文](README.md)
+[English](README.en.md) · [日本語](README.ja.md) · **한국어** · [繁體中文](README.zh-TW.md) · [Русский](README.ru.md) · [Français](README.fr.md) · [简体中文](README.md)
 
 > 내 컴퓨터에서만 돌아가는 애니메이션 · 코스프레 자료 라이브러리입니다.
 > 이미지와 영상은 **라이브러리 → 항목 → 팩 → 이미지 | 영상** 4단계로 정리되고,
