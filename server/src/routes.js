@@ -63,6 +63,20 @@ function tagsOf(db, charId) {
 }
 
 /** 标签清洗：去空白、去重、限长、最多 30 个 */
+/**
+ * 图包标签里始终保留一条「和图包同名」的。
+ *
+ * 包内媒体会继承图包标签（v3.15），所以名字能对上，按标签就能把整包取出来；
+ * 改名时把旧名字那条换掉，用户自己加的标签一律保留。
+ */
+function packTagsKeepingName(tags, oldTitle, newTitle) {
+  const drop = String(oldTitle || '').trim();
+  const keep = (Array.isArray(tags) ? tags : []).filter((t) => String(t || '') !== drop);
+  const next = String(newTitle || '').trim();
+  if (next) keep.push(next);
+  return cleanTags(keep);
+}
+
 function cleanTags(list) {
   const out = [];
   const seen = new Set();
@@ -272,10 +286,10 @@ function ensurePackFor(db, charId, month, category = null) {
   const id = Number(
     db
       .prepare(
-        `INSERT INTO packs(character_id, title, month, category, sort_order, created_at)
-         VALUES(?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?)`
+        `INSERT INTO packs(character_id, title, month, category, tags, sort_order, created_at)
+         VALUES(?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?)`
       )
-      .run(charId, title, month, category, charId, nowIso()).lastInsertRowid
+      .run(charId, title, month, category, JSON.stringify(cleanTags([title])), charId, nowIso()).lastInsertRowid
   );
   return { id, title };
 }
@@ -430,10 +444,10 @@ async function ensureOfficialPack(db, charId, dirSlug) {
     const id = Number(
       db
         .prepare(
-          `INSERT INTO packs(character_id, title, month, category, sort_order, created_at)
-           VALUES(?,?,NULL,NULL,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?)`
+          `INSERT INTO packs(character_id, title, month, category, sort_order, created_at, tags)
+           VALUES(?,?,NULL,NULL,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?,?)`
         )
-        .run(charId, OFFICIAL_PACK, charId, nowIso()).lastInsertRowid
+        .run(charId, OFFICIAL_PACK, charId, nowIso(), JSON.stringify([OFFICIAL_PACK])).lastInsertRowid
     );
     pack = { id };
   }
@@ -1571,10 +1585,18 @@ export function createApp() {
     const id = Number(
       db
         .prepare(
-          `INSERT INTO packs(character_id, title, month, category, sort_order, created_at)
-           VALUES(?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?)`
+          `INSERT INTO packs(character_id, title, month, category, sort_order, created_at, tags)
+           VALUES(?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?,?)`
         )
-        .run(charId, title.slice(0, 100), month, category, charId, nowIso()).lastInsertRowid
+        .run(
+          charId,
+          title.slice(0, 100),
+          month,
+          category,
+          charId,
+          nowIso(),
+          JSON.stringify(cleanTags([title]))
+        ).lastInsertRowid
     );
     res.json({ id, title, month, category, autoMonth: !hasTitle && !hasMonth });
   });
@@ -1616,7 +1638,11 @@ export function createApp() {
     const b = req.body || {};
     try {
       if (typeof b.title === 'string' && b.title.trim()) {
-        db.prepare('UPDATE packs SET title = ? WHERE id = ?').run(b.title.trim().slice(0, 100), id);
+        const nextTitle = b.title.trim().slice(0, 100);
+        db.prepare('UPDATE packs SET title = ? WHERE id = ?').run(nextTitle, id);
+        // 名字变了，那条同名标签跟着改；用户自己加的其他标签保留
+        const tags = packTagsKeepingName(safeJson(row.tags), row.title, nextTitle);
+        db.prepare('UPDATE packs SET tags = ? WHERE id = ?').run(JSON.stringify(tags), id);
       }
       if (b.month !== undefined) {
         const m = String(b.month || '').trim();

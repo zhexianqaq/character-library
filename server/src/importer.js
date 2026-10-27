@@ -95,10 +95,10 @@ export async function importCharacterDir({ shelfId, sourceDir, name, account, on
       const id = Number(
         db
           .prepare(
-            `INSERT INTO packs(character_id, title, month, sort_order, created_at)
-             VALUES(?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?)`
+            `INSERT INTO packs(character_id, title, month, sort_order, created_at, tags)
+             VALUES(?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?,?)`
           )
-          .run(charId, title, month, charId, ts).lastInsertRowid
+          .run(charId, title, month, charId, ts, JSON.stringify([title])).lastInsertRowid
       );
       pack = { id, title };
     }
