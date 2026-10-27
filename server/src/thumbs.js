@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import sharp from 'sharp';
-import { cachePathFor, THUMB_WIDTH, PREVIEW_WIDTH, ffmpegPath, ffprobePath } from './config.js';
+import { cachePathFor, posterPathFor, THUMB_WIDTH, PREVIEW_WIDTH, ffmpegPath, ffprobePath, DATA_DIR, POSTER_DIR } from './config.js';
 import { absPathOf } from './store.js';
 import { getDb } from './db.js';
 
@@ -136,10 +136,27 @@ export function absolutePathOf(row) {
   return absPathOf(row.rel_path);
 }
 
+/**
+ * 有自定义封面就直接用它。
+ *
+ * 文件不在了（比如手动删了 .covers）就当没设过：宁可回落到自动首帧，
+ * 也不要把一个 404 的路径丢给 `<img>`。
+ */
+export function posterPathIfAny(row) {
+  if (!row || row.kind !== 'video' || !row.poster_rel) return null;
+  const abs = absPathOf(row.poster_rel);
+  return existsSync(abs) ? abs : null;
+}
+
 /** 返回派生图路径；不存在则排队生成 */
 export async function getDerivative(mediaId, size = 'thumb') {
   const row = loadMediaRow(mediaId);
   if (!row) return null;
+  // 视频设过封面 → 缩略图就是那一帧，别再抽首帧（抽了也不会被用到）
+  if (size === 'thumb') {
+    const poster = posterPathIfAny(row);
+    if (poster) return poster;
+  }
   const dst = cachePathFor(size, row.id);
   if (existsSync(dst)) return dst;
 
@@ -178,6 +195,114 @@ export async function getDerivative(mediaId, size = 'thumb') {
   } finally {
     inflight.delete(key);
   }
+}
+
+/**
+ * 把视频某一帧存成这个媒体的封面。
+ *
+ * 用户在播放器上停到哪里就抽哪里（播放中也可以，`currentTime` 是点击那一刻的值）。
+ * 抽帧用输入侧 `-ss`：ffmpeg 会从最近的关键帧解码到目标时间，够精确又不慢。
+ */
+export async function capturePoster(mediaId, atSec) {
+  const row = loadMediaRow(mediaId);
+  if (!row) {
+    const err = new Error('媒体不存在');
+    err.status = 404;
+    throw err;
+  }
+  if (row.kind !== 'video') {
+    const err = new Error('只有视频可以设封面');
+    err.status = 400;
+    throw err;
+  }
+
+  const srcAbs = absolutePathOf(row);
+  if (!existsSync(srcAbs)) {
+    const err = new Error('文件已丢失，无法抽帧');
+    err.status = 410;
+    throw err;
+  }
+
+  // 时长优先用库里已有的（入库时 ffprobe 过），没有再探一次
+  const durationMs = Number(row.duration_ms) || (await probeVideo(srcAbs)).durationMs || 0;
+  const dur = durationMs / 1000;
+  let at = Number(atSec);
+  if (!Number.isFinite(at) || at < 0) at = 0;
+  // 最后一帧常常是黑场，也别让 ffmpeg 读到超出范围
+  if (dur > 0) at = Math.min(at, Math.max(0, dur - 0.06));
+
+  const dst = posterPathFor(row.id);
+  const tmpJpg = `${dst}.${process.pid}.frame.jpg`;
+  await fs.mkdir(path.dirname(dst), { recursive: true });
+  try {
+    await execFileAsync(
+      ffmpegPath,
+      [
+        '-v', 'error',
+        '-ss', at.toFixed(3),
+        '-i', srcAbs,
+        '-frames:v', '1',
+        '-vf', `scale=${THUMB_WIDTH}:-2:flags=lanczos`,
+        '-q:v', '3',
+        '-y', tmpJpg,
+      ],
+      { timeout: 60000, maxBuffer: 8 * 1024 * 1024 }
+    );
+    const buf = await sharp(tmpJpg).webp({ quality: 74, effort: 2 }).toBuffer();
+    await writeBufferAtomic(dst, buf);
+  } finally {
+    await fs.unlink(tmpJpg).catch(() => {});
+  }
+
+  const rel = path.relative(DATA_DIR, dst).split(path.sep).join('/');
+  const posterMs = Math.round(at * 1000);
+  getDb().prepare('UPDATE media SET poster_rel = ?, poster_ms = ?, thumb_state = 1 WHERE id = ?').run(rel, posterMs, row.id);
+  return { posterMs, posterRel: rel };
+}
+
+/**
+ * 启动时清一遍没人认领的封面文件。
+ *
+ * 删媒体 / 删图包 / 删条目都是直接删行，`.covers` 里的 webp 不会跟着消失。
+ * 这些文件很小，但不该越积越多；启动时对一遍 id 就够（几百个 stat，可以忽略）。
+ */
+export async function sweepOrphanPosters() {
+  const db = getDb();
+  let dirs = [];
+  try {
+    dirs = await fs.readdir(POSTER_DIR, { withFileTypes: true });
+  } catch {
+    return { removed: 0 };
+  }
+  let removed = 0;
+  for (const d of dirs) {
+    if (!d.isDirectory()) continue;
+    const bucket = path.join(POSTER_DIR, d.name);
+    const files = await fs.readdir(bucket).catch(() => []);
+    for (const f of files) {
+      const m = /^(\d+)\.webp$/.exec(f);
+      if (!m) continue;
+      if (db.prepare('SELECT 1 FROM media WHERE id = ?').get(Number(m[1]))) continue;
+      await fs.unlink(path.join(bucket, f)).catch(() => {});
+      removed += 1;
+    }
+    // 桶空了就一起收掉，别在数据盘上留一堆空目录
+    await fs.rmdir(bucket).catch(() => {});
+  }
+  return { removed };
+}
+
+/** 恢复默认封面：删掉抽出来的那一帧，缩略图回落到自动首帧 */
+export async function clearPoster(mediaId) {
+  const row = loadMediaRow(mediaId);
+  if (!row) {
+    const err = new Error('媒体不存在');
+    err.status = 404;
+    throw err;
+  }
+  if (row.poster_rel) await fs.unlink(absPathOf(row.poster_rel)).catch(() => {});
+  getDb().prepare('UPDATE media SET poster_rel = NULL, poster_ms = NULL WHERE id = ?').run(row.id);
+  return { ok: true };
 }
 
 export const warmState = {

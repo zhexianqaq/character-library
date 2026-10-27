@@ -32,13 +32,31 @@ const qs = (params) => {
   return str ? `?${str}` : '';
 };
 
+/**
+ * 换过封面的视频：
+ *
+ * 浏览器在同一份文档里再要同一个图片 URL 时，会直接用内存里那张，
+ * 就算响应头是 `no-cache` 也不回源（实测：换完封面回列表还是旧图）。
+ * 所以换封面后把这个 id 的版本号抬一下，之后 `api.thumb()` 拼出来的 URL 就变了。
+ * 整个文档重新加载后表是空的，走服务端 ETag 回源，同样拿得到新图。
+ */
+const thumbBumps = new Map();
+
 export const api = {
   get: (url) => req(url),
   post: json('POST'),
   patch: json('PATCH'),
   del: (url) => req(url, { method: 'DELETE' }),
 
-  thumb: (id) => (id ? `/t/${id}` : ''),
+  thumb: (id) => {
+    if (!id) return '';
+    const v = thumbBumps.get(Number(id));
+    return v ? `/t/${id}?v=${v}` : `/t/${id}`;
+  },
+  /** 封面变了就抬版本号，让所有用到这张缩略图的地方都换 URL */
+  bumpThumb: (id) => {
+    if (id) thumbBumps.set(Number(id), Date.now());
+  },
   preview: (id) => (id ? `/pv/${id}` : ''),
   original: (id) => `/m/${id}`,
 
@@ -76,6 +94,9 @@ export const api = {
   bulkMedia: (ids, action, packId) => json('POST')('/api/media/bulk', { ids, action, packId }),
   bulkPacks: (ids, action) => json('POST')('/api/packs/bulk', { ids, action }),
   deleteMedia: (id) => req(`/api/media/${id}`, { method: 'DELETE' }),
+  // 视频封面：把第 at 秒那一帧存成缩略图；恢复默认就是删掉它
+  setVideoPoster: (id, at) => json('POST')(`/api/media/${id}/poster`, { at }),
+  resetVideoPoster: (id) => req(`/api/media/${id}/poster`, { method: 'DELETE' }),
 
   warm: () => json('POST')('/api/warm', {}),
   tasks: () => req('/api/tasks'),

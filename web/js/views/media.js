@@ -55,6 +55,10 @@ export async function MediaView(root, id) {
           <button class="mp-x" data-close aria-label="关闭">✕</button>
         </div>
         <div class="mp-canvas" data-canvas></div>
+        <div class="mp-actions" data-actions hidden>
+          <button class="mp-cover" data-cover>设为视频封面</button>
+          <button class="mp-cover ghost" data-cover-reset hidden>恢复默认封面</button>
+        </div>
         <button class="mp-nav prev" data-prev aria-label="上一个">‹</button>
         <button class="mp-nav next" data-next aria-label="下一个">›</button>
       </section>
@@ -69,6 +73,16 @@ export async function MediaView(root, id) {
   const canvas = root.querySelector('.mp-canvas');
   const info = root.querySelector('[data-info]');
   const chipName = root.querySelector('[data-chip-name]');
+  const actions = root.querySelector('[data-actions]');
+  const coverBtn = root.querySelector('[data-cover]');
+  const resetBtn = root.querySelector('[data-cover-reset]');
+
+  /** 封面按钮只在视频上有；「恢复默认」只在真的设过封面时出现 */
+  function syncCoverButtons() {
+    const isVideo = item.kind === 'video';
+    actions.hidden = !isVideo;
+    resetBtn.hidden = !isVideo || item.posterMs === null || item.posterMs === undefined;
+  }
 
   /**
    * 视频画布贴合视频本身的比例，不要撑满整块再留一圈黑边。
@@ -78,8 +92,10 @@ export async function MediaView(root, id) {
     const v = canvas.querySelector('video');
     if (!v || !v.videoWidth || !v.videoHeight) return;
     const box = stage.getBoundingClientRect();
+    // 视频下面那条按钮栏占的高度要扣掉，否则视频底边会顶到按钮
+    const actionsH = actions && !actions.hidden ? actions.offsetHeight + 10 : 0;
     const availW = Math.max(160, box.width - 16);
-    const availH = Math.max(160, box.height - 16);
+    const availH = Math.max(160, box.height - 16 - actionsH);
     const ar = v.videoWidth / v.videoHeight;
     let w = availW;
     let h = w / ar;
@@ -128,6 +144,7 @@ export async function MediaView(root, id) {
       img.addEventListener('click', () => openLightbox(siblings, indexOf(item.id)));
     }
     stage.classList.toggle('is-video', isVideo);
+    syncCoverButtons();
   }
 
   function renderInfo() {
@@ -337,6 +354,63 @@ export async function MediaView(root, id) {
 
   root.querySelector('[data-prev]').addEventListener('click', () => step(-1));
   root.querySelector('[data-next]').addEventListener('click', () => step(1));
+
+  /**
+   * 把当前画面存成这个视频的封面。
+   *
+   * 播放中也能点：取的是**点击那一刻**的 currentTime，不是暂停时的。
+   * 换完要抬一下这个 id 的缩略图版本号 —— 同一份文档里浏览器不会为一个
+   * 没变过的 URL 回源，光靠 no-cache 清不掉内存里那张。
+   */
+  function applyPoster() {
+    const v = canvas.querySelector('video');
+    if (!v) return;
+    v.poster = api.thumb(item.id);
+    syncCoverButtons();
+  }
+
+  coverBtn.addEventListener('click', async () => {
+    const v = canvas.querySelector('video');
+    const dur = v ? v.duration : 0;
+    if (!v || !dur || !Number.isFinite(dur)) {
+      toast('视频还没加载好，稍等一下');
+      return;
+    }
+    const at = Math.max(0, Math.min(v.currentTime || 0, dur - 0.06));
+    const wasPlaying = !v.paused;
+    if (wasPlaying) v.pause(); // 抽帧时画面停住，看得见存的是哪一帧
+    coverBtn.disabled = true;
+    coverBtn.textContent = '保存中…';
+    try {
+      const r = await api.setVideoPoster(item.id, at);
+      item.posterMs = r.posterMs;
+      api.bumpThumb(item.id);
+      applyPoster();
+      toast('视频封面已更新');
+      fitVideo();
+    } catch (err) {
+      toast(err.message || '设置封面失败');
+    } finally {
+      coverBtn.disabled = false;
+      coverBtn.textContent = '设为视频封面';
+    }
+  });
+
+  resetBtn.addEventListener('click', async () => {
+    resetBtn.disabled = true;
+    try {
+      await api.resetVideoPoster(item.id);
+      item.posterMs = null;
+      api.bumpThumb(item.id);
+      applyPoster();
+      toast('已恢复默认封面');
+    } catch (err) {
+      toast(err.message || '恢复失败');
+    } finally {
+      resetBtn.disabled = false;
+    }
+  });
+
   root.querySelector('[data-close]').addEventListener('click', () => {
     // 有来源就正常后退（翻页没往历史里叠加，所以一定是退到来源页）
     if (entryFrom) {

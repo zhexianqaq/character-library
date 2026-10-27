@@ -2,11 +2,14 @@ import { exec } from 'node:child_process';
 import { PORT, HOST, DATA_DIR, CACHE_DIR, assertStorageReady } from './config.js';
 import { createApp } from './routes.js';
 import { getDb, mainLibrary } from './db.js';
+import { sweepOrphanPosters } from './thumbs.js';
 
 assertStorageReady();
 
 const db = getDb();
 mainLibrary();
+// 删条目 / 删图包只删行，封面文件不会跟着走；启动时顺手清一遍孤儿
+sweepOrphanPosters().catch(() => {});
 const app = createApp();
 
 app.listen(PORT, HOST, () => {

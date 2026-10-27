@@ -3,7 +3,7 @@
  * 用法：node tools/e2e.mjs
  * 前置：服务已在 http://127.0.0.1:7788 运行
  */
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -2071,7 +2071,114 @@ try {
     (f1Detail.tags || []).join(' / ')
   );
 
+  // 11. 视频封面：只有视频有这颗按钮；抽当前帧；能恢复默认
+  const FFMPEG = process.env.CL_FFMPEG || 'C:\\Users\\35155\\.local\\bin\\ffmpeg.exe';
+  const vChar = await jpost('/api/characters', { shelfId: 1, name: `E2E视频${tag}` });
+  const vidFile = path.join(os.tmpdir(), `e2e-cover-${tag}.mp4`);
+  await new Promise((res, rej) =>
+    execFile(
+      FFMPEG,
+      ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=12', '-t', '4', '-pix_fmt', 'yuv420p', '-y', vidFile],
+      (err) => (err ? rej(err) : res())
+    )
+  );
+  const vidB64 = fs.readFileSync(vidFile).toString('base64');
+  const vidUp = await evaluate(`(async () => {
+    const bin = atob('${vidB64}');
+    const u = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) u[i] = bin.charCodeAt(i);
+    const fd = new FormData();
+    fd.append('files', new File([u], 'e2e-cover-20250317.mp4', { type: 'video/mp4' }));
+    return (await (await fetch('/api/characters/${vChar.id}/media', { method: 'POST', body: fd })).json());
+  })()`);
+  const vidId = (vidUp.ids || [])[0];
+  fs.rmSync(vidFile, { force: true });
+
+  // 缩略图字节 + 缓存头（no-store 直连服务端，绕开一切缓存）
+  const thumbOf = () =>
+    evaluate(`(async () => {
+      const r = await fetch('/t/${vidId}', { cache: 'no-store' });
+      const b = new Uint8Array(await r.arrayBuffer());
+      let h = 0;
+      for (let i = 0; i < b.length; i += 7) h = (h * 31 + b[i]) >>> 0;
+      return { cc: r.headers.get('cache-control'), len: b.length, sig: h };
+    })()`);
+  const thumbBefore = await thumbOf();
+
+  await goto(`${BASE}/i/${vidId}`, 2600);
+  const coverUi = await evaluate(`(() => {
+    const box = document.querySelector('[data-actions]');
+    return {
+      visible: !!box && !box.hidden,
+      label: (document.querySelector('[data-cover]') || {}).textContent || '',
+      resetHidden: (document.querySelector('[data-cover-reset]') || {}).hidden,
+      kind: document.querySelector('.mp-stage').classList.contains('is-video'),
+    };
+  })()`);
+  check(
+    '视频详情页有「设为视频封面」，默认不显示「恢复默认」',
+    coverUi.visible && coverUi.kind && coverUi.label.includes('设为视频封面') && coverUi.resetHidden === true,
+    JSON.stringify(coverUi)
+  );
+
+  await evaluate(`(async () => {
+    const v = document.querySelector('video');
+    if (v) {
+      v.pause();
+      v.currentTime = 1.6;
+      await new Promise((r) => setTimeout(r, 700));
+    }
+    document.querySelector('[data-cover]').click();
+    return true;
+  })()`);
+  const coverToast = await waitFor(
+    `document.querySelector('#toast')?.textContent || ''`,
+    (t) => t.includes('视频封面已更新')
+  );
+  const thumbAfter = await thumbOf();
+  const vidDetail = await (await fetch(`${BASE}/api/media/${vidId}`)).json();
+  check('成功后提示「视频封面已更新」', coverToast.ok, String(coverToast.value).trim());
+  check(
+    '封面存的是点击那一帧（缩略图字节变了）',
+    vidDetail.posterMs > 0 && thumbAfter.sig !== thumbBefore.sig,
+    `posterMs=${vidDetail.posterMs} · ${thumbBefore.len}B/${thumbBefore.sig} → ${thumbAfter.len}B/${thumbAfter.sig}`
+  );
+  check('视频缩略图回源取（no-cache）', thumbBefore.cc === 'no-cache', String(thumbBefore.cc));
+
+  const resetUi = await evaluate(`(async () => {
+    const off = document.querySelector('[data-cover-reset]');
+    const shown = !!off && !off.hidden;
+    off.click();
+    await new Promise((r) => setTimeout(r, 1000));
+    return { shown, hiddenAfter: off.hidden, toast: (document.querySelector('#toast') || {}).textContent || '' };
+  })()`);
+  const vidDetail2 = await (await fetch(`${BASE}/api/media/${vidId}`)).json();
+  const thumbReset = await thumbOf();
+  check(
+    '「恢复默认封面」能撤销，缩略图回到自动首帧',
+    resetUi.shown && resetUi.hiddenAfter && vidDetail2.posterMs === null && thumbReset.sig === thumbBefore.sig,
+    `shown=${resetUi.shown} · posterMs=${vidDetail2.posterMs} · sig=${thumbReset.sig}/${thumbBefore.sig}`
+  );
+
+  // 图片没有这颗按钮；接口也不许给图片设封面
+  const anyImage = await (await fetch(`${BASE}/api/media/pick?scope=all&kind=image&limit=1`)).json();
+  const imgId = (anyImage.items || [])[0]?.id;
+  if (imgId) {
+    await goto(`${BASE}/i/${imgId}`, 1400);
+    const imgUi = await evaluate(`document.querySelector('[data-actions]')?.hidden`);
+    check('图片详情页不显示视频封面按钮', imgUi === true, `hidden=${imgUi}`);
+
+    const imgPoster = await fetch(`${BASE}/api/media/${imgId}/poster`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ at: 1 }),
+    });
+    check('给图片设封面会被接口拒绝（400）', imgPoster.status === 400, `HTTP ${imgPoster.status}`);
+  }
+
   // 清理测试数据
+  await fetch(`${BASE}/api/characters/${vChar.id}`, { method: 'DELETE' });
+
   for (const b of [b1, b2]) await fetch(`${BASE}/api/characters/${b.id}`, { method: 'DELETE' });
   await fetch(`${BASE}/api/shelves/${ns.id}`, { method: 'DELETE' });
   await fetch(`${BASE}/api/characters/${f1.id}`, { method: 'DELETE' });

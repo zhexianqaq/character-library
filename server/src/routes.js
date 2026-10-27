@@ -16,7 +16,7 @@ import {
   ensureShelfContainer,
   pruneOrphanTags,
 } from './db.js';
-import { getDerivative, warmAll, warmState } from './thumbs.js';
+import { getDerivative, capturePoster, clearPoster, warmAll, warmState } from './thumbs.js';
 import { WEB_DIR, INBOX_DIR, DATA_DIR, slugify } from './config.js';
 import {
   absPathOf,
@@ -233,6 +233,8 @@ function mapMedia(r) {
     bytes: r.bytes,
     // 真动图：按帧数标记（视频也算），gif 扩展名不算
     anim: r.kind === 'video' ? true : !!r.anim,
+    // 视频自定义封面抽的是第几毫秒；null = 用自动首帧
+    posterMs: r.poster_ms ?? null,
     sortOrder: r.sort_order,
     tags: own,
     // 自己手动打的标签；tags 会被调用方替换成「含继承」的完整集合
@@ -1968,13 +1970,34 @@ export function createApp() {
     res.json({ ok: true });
   });
 
+  /**
+   * 视频封面：抽当前这一帧当缩略图。
+   * 只影响这一条媒体的缩略图（/t/:id），所以图包封面、条目封面、
+   * 列表瓦片只要用的是同一个 id，都会跟着变。
+   */
+  app.post('/api/media/:id/poster', async (req, res) => {
+    const r = await capturePoster(Number(req.params.id), (req.body || {}).at);
+    res.json({ ok: true, ...r, thumb: `/t/${Number(req.params.id)}` });
+  });
+
+  // 恢复默认封面：删掉抽出来的那一帧，回落到自动首帧
+  app.delete('/api/media/:id/poster', async (req, res) => {
+    await clearPoster(Number(req.params.id));
+    res.json({ ok: true, thumb: `/t/${Number(req.params.id)}` });
+  });
+
   // ---------- 派生图与原文件 ----------
   // 注意：缓存放在 .catalog 下，send 库默认拒绝 dotfile，必须显式 dotfiles:'allow'
   app.get('/t/:id', async (req, res) => {
     try {
       const p = await getDerivative(Number(req.params.id), 'thumb');
       if (!p) return res.status(404).end();
-      res.set('Cache-Control', 'public, max-age=31536000, immutable');
+      /* 视频缩略图不能 immutable：封面可以从任意一帧重设，URL 却一直是 /t/:id。
+         immutable 一旦落到浏览器里，换封面后它根本不会再来问服务器 —— 列表、
+         图包封面、角色封面就会一直显示旧的那一帧。
+         no-cache = 可以存，但每次用之前必须带 ETag 回来问一次，没变就是 304。 */
+      const kind = getDb().prepare('SELECT kind FROM media WHERE id = ?').get(Number(req.params.id));
+      res.set('Cache-Control', kind && kind.kind === 'video' ? 'no-cache' : 'public, max-age=31536000, immutable');
       res.sendFile(p, { dotfiles: 'allow' }, (err) => {
         if (err && !res.headersSent) res.status(404).end();
       });

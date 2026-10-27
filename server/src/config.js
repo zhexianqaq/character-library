@@ -24,6 +24,11 @@ export const THUMB_DIR = path.join(CACHE_DIR, 'thumbs');
 export const PREVIEW_DIR = path.join(CACHE_DIR, 'preview');
 export const INBOX_DIR = path.join(CACHE_DIR, 'inbox');
 
+/* 视频自定义封面（从某一帧抽出来的图）。
+   放在数据盘而不是缓存盘：这是用户挑出来的画面，清缓存不该把它清掉，
+   而且备份脚本会连目录一起拷走（缓存盘那两个目录从来不进备份）。 */
+export const POSTER_DIR = path.join(DATA_DIR, '.covers');
+
 export const PORT = Number(process.env.PORT || 7788);
 export const HOST = '127.0.0.1';
 
@@ -34,7 +39,7 @@ export const ffmpegPath = 'C:\\Users\\35155\\.local\\bin\\ffmpeg.exe';
 export const ffprobePath = 'C:\\Users\\35155\\.local\\bin\\ffprobe.exe';
 
 export function ensureDirs() {
-  for (const d of [DATA_DIR, CATALOG_DIR, CACHE_DIR, THUMB_DIR, PREVIEW_DIR, INBOX_DIR]) {
+  for (const d of [DATA_DIR, CATALOG_DIR, CACHE_DIR, THUMB_DIR, PREVIEW_DIR, INBOX_DIR, POSTER_DIR]) {
     fs.mkdirSync(d, { recursive: true });
   }
 }
@@ -43,6 +48,11 @@ export function ensureDirs() {
 export function cachePathFor(size, mediaId) {
   const base = size === 'preview' ? PREVIEW_DIR : THUMB_DIR;
   return path.join(base, String(mediaId % 256), `${mediaId}.webp`);
+}
+
+/** 自定义封面分桶规则与缩略图一致（同一个 id 落在同一个桶） */
+export function posterPathFor(mediaId) {
+  return path.join(POSTER_DIR, String(mediaId % 256), `${mediaId}.webp`);
 }
 
 /** 把角色名变成安全的目录名 */

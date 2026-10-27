@@ -123,6 +123,11 @@ function migrate(d) {
   addColumnIfMissing('media', 'intro', `intro TEXT NOT NULL DEFAULT ''`);
   // 真动图标记：按帧数（pages>1）判定，不是按扩展名
   addColumnIfMissing('media', 'anim', `anim INTEGER NOT NULL DEFAULT 0`);
+  /* 视频自定义封面：poster_rel 是相对 DATA_DIR 的 webp（.covers/<桶>/<id>.webp），
+     poster_ms 记录抽的是第几毫秒那一帧。
+     两列都为空 = 用自动首帧；清了缓存盘也不影响，因为它不在缓存盘上。 */
+  addColumnIfMissing('media', 'poster_rel', `poster_rel TEXT`);
+  addColumnIfMissing('media', 'poster_ms', `poster_ms INTEGER`);
   // 库类型：people 真人 / work 虚拟角色 / emoji 表情包 / resource 资源库 / novel 小说库
   addColumnIfMissing('shelves', 'kind', `kind TEXT NOT NULL DEFAULT 'people'`);
   // 小说库细分：original 原创 / fanfic 同人（其他库留空）
