@@ -253,6 +253,8 @@ function mapMedia(r) {
     // 视频自定义封面抽的是第几毫秒；null = 用自动首帧
     posterMs: r.poster_ms ?? null,
     sortOrder: r.sort_order,
+    // 入库时间：图包内「按时间排序」的兜底键（文件名里有日期时优先用文件名）
+    createdAt: r.created_at,
     tags: own,
     // 自己手动打的标签；tags 会被调用方替换成「含继承」的完整集合
     ownTags: own,

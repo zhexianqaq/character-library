@@ -42,14 +42,22 @@ export function sortPacks(list, key = 'date', desc = true) {
 }
 
 /**
- * 图包排序控件：一个维度下拉 + 一个升降序按钮。
+ * 排序控件：一个维度下拉 + 一个升降序按钮。
+ *
+ * 图包列表和图包内的媒体共用它，维度通过 `keys` 传（默认图包那四种）。
  *
  * @param {object} opts
  * @param {string} opts.key    初始维度（date / name / count / size）
  * @param {boolean} opts.desc   初始是否倒序（默认 true：新的 / 大的在前）
+ * @param {Array<{value:string,label:string}>} opts.keys  可选维度
  * @param {(key:string, desc:boolean)=>void} opts.onChange
  */
-export function createPackSort({ key = 'date', desc = true, onChange = null } = {}) {
+export function createPackSort({
+  key = 'date',
+  desc = true,
+  keys = PACK_SORT_KEYS,
+  onChange = null,
+} = {}) {
   let curKey = key;
   let curDesc = desc !== false;
 
@@ -70,7 +78,7 @@ export function createPackSort({ key = 'date', desc = true, onChange = null } = 
   };
 
   const dd = createDropdown({
-    options: PACK_SORT_KEYS,
+    options: keys,
     value: curKey,
     allowEmpty: false,
     className: 'sort-dd',

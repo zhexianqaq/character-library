@@ -5,6 +5,7 @@ import { renderMasonry } from '../components/masonry.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openContextMenu, openMenuAtPoint } from '../components/context-menu.js';
 import { mediaMenu } from '../components/media-actions.js';
+import { sortMedia, createMediaSort, mediaSortState, setMediaSort } from '../components/media-sort.js';
 import { addMediaMenuItems } from '../components/media-picker.js';
 import { bindDropUpload } from '../components/dropzone.js';
 import { queue } from '../upload-queue.js';
@@ -52,6 +53,7 @@ export async function PackView(root, id) {
          </div>
          <span class="spacer"></span>
          <span class="count" data-count></span>
+         <span data-media-sort></span>
          <button class="tb-btn" data-select-toggle>选取</button>
          <button class="tb-btn" data-add-media>＋ 添加素材</button>
        </div>
@@ -83,21 +85,25 @@ export async function PackView(root, id) {
     countEl.textContent = `${fmtNum(items.length)} 项${pack.counts && pack.counts.video ? ` · ${pack.counts.video} 个视频` : ''}`;
   }
 
+  /** 当前展示顺序（排序后的副本）：点击、Shift 连选、全选都按这个顺序算 */
+  let shown = [];
+
   function paintMedia() {
     syncCount();
+    shown = sortMedia(items, mediaSortState.key, mediaSortState.desc);
     holder.innerHTML = '';
-    if (!items.length) {
+    if (!shown.length) {
       holder.innerHTML =
         '<div class="empty" style="flex:1"><b>这个图包是空的</b>点右上角「添加素材」，从已有素材里挑，或者把文件拖进来</div>';
       return;
     }
     requestAnimationFrame(() => {
-      renderMasonry(holder, items, (i, ev) => {
+      renderMasonry(holder, shown, (i, ev) => {
         if (selecting) {
-          pickByClick(items[i].id, ev);
+          pickByClick(shown[i].id, ev);
           return;
         }
-        gotoMedia(items[i].id);
+        gotoMedia(shown[i].id);
       }, {
         selectable: selecting,
         isPicked: (it) => picked.has(it.id),
@@ -210,13 +216,13 @@ export async function PackView(root, id) {
   }
 
   function pickByClick(id, ev) {
-    const r = applyPickClick({ picked, ordered: items.map((m) => m.id), id, ev, anchorId });
+    const r = applyPickClick({ picked, ordered: shown.map((m) => m.id), id, ev, anchorId });
     anchorId = r.anchorId;
     syncPickMarks();
   }
 
   function selectAllShown() {
-    const ids = items.map((m) => m.id);
+    const ids = shown.map((m) => m.id);
     const allOn = ids.length > 0 && ids.every((id) => picked.has(id));
     if (allOn) picked.clear();
     else ids.forEach((id) => picked.add(id));
@@ -391,6 +397,18 @@ export async function PackView(root, id) {
   }
 
   addBtn.addEventListener('click', () => openAddMenu(addBtn));
+
+  // 图包内媒体排序：名称 / 时间 / 大小 / 类型 + 升降序（只影响显示顺序，不动磁盘文件）
+  const mediaSortCtl = createMediaSort({
+    key: mediaSortState.key,
+    desc: mediaSortState.desc,
+    onChange: (key, desc) => {
+      setMediaSort(key, desc);
+      paintMedia();
+    },
+  });
+  root.querySelector('[data-media-sort]').replaceWith(mediaSortCtl.el);
+
   root.querySelector('[data-select-toggle]').addEventListener('click', () => {
     if (selecting) exitSelect();
     else enterSelect();

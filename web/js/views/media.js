@@ -3,6 +3,7 @@ import { esc, fmtBytes, fmtDur, toast, fadeIn } from '../util.js';
 import { openLightbox } from '../components/lightbox.js';
 import { openTagPicker } from '../components/tag-picker.js';
 import { openModal, confirmDialog } from '../components/modal.js';
+import { sortMedia, mediaSortState } from '../components/media-sort.js';
 import { escDepth } from '../esc.js';
 
 /** 2026-10-22 */
@@ -33,6 +34,8 @@ export async function MediaView(root, id) {
     /* 序列拿不到就自己一个 */
   }
   if (!siblings.some((x) => x.id === item.id)) siblings = [item, ...siblings];
+  // ← → 的序列跟着图包页的排序走：那边按大小 / 类型排过，这里不能还按文件名翻
+  siblings = sortMedia(siblings, mediaSortState.key, mediaSortState.desc);
 
   const indexOf = (mid) => siblings.findIndex((x) => x.id === mid);
 
