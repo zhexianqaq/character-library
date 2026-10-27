@@ -123,12 +123,25 @@ function migrate(d) {
   addColumnIfMissing('media', 'intro', `intro TEXT NOT NULL DEFAULT ''`);
   // 真动图标记：按帧数（pages>1）判定，不是按扩展名
   addColumnIfMissing('media', 'anim', `anim INTEGER NOT NULL DEFAULT 0`);
-  // 库类型：people 真人 / work 虚拟角色 / emoji 表情包（没有条目层级）
+  // 库类型：people 真人 / work 虚拟角色 / emoji 表情包 / resource 资源库 / novel 小说库
   addColumnIfMissing('shelves', 'kind', `kind TEXT NOT NULL DEFAULT 'people'`);
+  // 小说库细分：original 原创 / fanfic 同人（其他库留空）
+  addColumnIfMissing('shelves', 'variant', `variant TEXT`);
   // 表情库这类「扁平库」用一个隐藏条目承载图包和媒体，不当作真实条目展示
   addColumnIfMissing('characters', 'is_container', `is_container INTEGER NOT NULL DEFAULT 0`);
   // 资源库用：游戏 / 动画 / 电影 / 剧集（其他库留空）
   addColumnIfMissing('characters', 'category', `category TEXT`);
+  /* 小说库（kind='novel'）
+     novel_group   归类文件夹：原创=小说类型（玄幻/都市…），同人=原作品名（原神/明日方舟…）
+                   同时也是磁盘上的一层目录：<库>/<novel_group>/<书名>/
+     novel_subtype 分类视图：原创=出版/网络，同人=短篇/长篇。**不落磁盘**，只做筛选 */
+  addColumnIfMissing('characters', 'novel_group', `novel_group TEXT`);
+  addColumnIfMissing('characters', 'novel_subtype', `novel_subtype TEXT`);
+  addColumnIfMissing('characters', 'author', `author TEXT`);
+  addColumnIfMissing('characters', 'word_count', `word_count INTEGER NOT NULL DEFAULT 0`);
+  addColumnIfMissing('characters', 'novel_status', `novel_status TEXT`);
+  // 索引必须在补列之后建（老库一开始没有 novel_group 这一列）
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_chars_novel_group ON characters(shelf_id, novel_group)`);
   ensureSelfTags(d);
 }
 
@@ -149,7 +162,7 @@ export function pruneOrphanTags(d = getDb()) {
     .prepare(
       `SELECT t.id, t.name FROM tags t
         WHERE NOT EXISTS (SELECT 1 FROM character_tags ct WHERE ct.tag_id = t.id)
-          AND t.name NOT IN ('人物', '角色')`
+          AND t.name NOT IN ('人物', '角色', '小说')`
     )
     .all();
   if (!rows.length) return 0;

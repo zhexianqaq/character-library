@@ -4,6 +4,7 @@ import { PackView } from './views/pack.js';
 import { UploadsView } from './views/uploads.js';
 import { MediaView } from './views/media.js';
 import { EmojiView } from './views/emoji.js';
+import { NovelView } from './views/novel.js';
 import { ResourcesView } from './views/resources.js';
 import { ResourceView } from './views/resource.js';
 import { initUploadHud } from './components/upload-hud.js';
@@ -15,6 +16,7 @@ const routes = [
   [/^\/s\/(\d+)$/, (m) => LibraryView(app, Number(m[1]))],
   [/^\/c\/(\d+)$/, (m) => CharacterView(app, Number(m[1]))],
   [/^\/e\/(\d+)$/, (m) => EmojiView(app, Number(m[1]))],
+  [/^\/n\/(\d+)$/, (m) => NovelView(app, Number(m[1]))],
   [/^\/rs\/(\d+)$/, (m) => ResourcesView(app, Number(m[1]))],
   [/^\/r\/(\d+)$/, (m) => ResourceView(app, Number(m[1]))],
   [/^\/p\/(\d+)$/, (m) => PackView(app, Number(m[1]))],
@@ -79,7 +81,7 @@ export async function renderRoute() {
       app.innerHTML = '';
       const ret = await fn(m);
       if (typeof ret === 'function') cleanup = ret;
-      if (!/^\/(c|p|i|e|r|rs)\/|^\/uploads/.test(path)) document.title = '资料库';
+      if (!/^\/(c|p|i|e|r|rs|n)\/|^\/uploads/.test(path)) document.title = '资料库';
       lastPath = here;
       restoreScroll(here);
     } catch (err) {

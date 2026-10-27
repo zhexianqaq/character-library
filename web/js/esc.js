@@ -18,13 +18,18 @@ let seq = 0;
  *   防止「弹窗开着时整页被替换 / 组件自己移除 DOM 却没注销」在栈里留死层
  * @returns {() => void} 注销函数（关闭时务必调用）
  */
-export function pushEsc(fn, alive = null) {
-  const entry = { id: (seq += 1), fn, alive };
+export function pushEsc(fn, alive = null, label = '') {
+  const entry = { id: (seq += 1), fn, alive, label };
   stack.push(entry);
   return () => {
     const i = stack.indexOf(entry);
     if (i >= 0) stack.splice(i, 1);
   };
+}
+
+/** 调试用：看栈里每一层是谁、还活着吗（排查「一次 Esc 关掉两层」） */
+export function escDump() {
+  return stack.map((s) => ({ id: s.id, label: s.label, alive: s.alive ? !!s.alive() : true }));
 }
 
 /** 当前有几层弹层，页面级 Esc 用它决定要不要让路 */
@@ -35,6 +40,8 @@ export function escDepth() {
   return stack.length;
 }
 
+if (typeof window !== 'undefined') window.__escDump = escDump;
+
 /** 只给测试 / 调试用 */
 export function escStackSize() {
   return stack.length;
@@ -44,9 +51,24 @@ document.addEventListener(
   'keydown',
   (e) => {
     if (e.key !== 'Escape') return;
-    // 顺手清掉已经不存在的层（DOM 没了的弹窗不该再吃 Esc）
+    /* 顺手清掉已经不存在的层（DOM 没了的弹窗不该再吃 Esc）。
+       **清完就结束这次 Esc**：以前清完还会继续把下层一起关掉，
+       表现为「弹窗开着时按一下 Esc，下拉和弹窗同时消失」。
+       清幽灵层本身就算一次「作用在一层上」。 */
+    let cleaned = false;
     while (stack.length && stack[stack.length - 1].alive && !stack[stack.length - 1].alive()) {
-      stack.pop();
+      const dead = stack.pop();
+      try {
+        dead.fn(e);
+      } catch (err) {
+        console.error('[esc] 清理幽灵层失败', err);
+      }
+      cleaned = true;
+    }
+    if (cleaned) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
     }
     const top = stack[stack.length - 1];
     if (!top) return; // 没有弹层：交给页面自己处理（内联编辑、退出选取…）

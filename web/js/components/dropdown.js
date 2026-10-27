@@ -77,7 +77,7 @@ export function createDropdown({
     el.classList.toggle('drop-up', window.innerHeight - box.bottom < 300 && box.top > 300);
     document.addEventListener('mousedown', onDoc, true);
     document.addEventListener('keydown', onKey, true);
-    offEsc = pushEsc(() => close(), () => el.isConnected && !panel.hidden);
+    offEsc = pushEsc(() => close(), () => el.isConnected && !panel.hidden, 'dd:' + (name || 'x'));
   }
 
   function close() {

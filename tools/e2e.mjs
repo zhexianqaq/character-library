@@ -297,6 +297,10 @@ try {
       `${pf.count} 个平台 / ${pf.withUrl} 个带网址`
     );
     if (pf.noUrlHandle) {
+      // 剪贴板 API 要求页面处于焦点态：无头 Chrome 跑久了会丢焦点，
+      // 不抢回来 navigator.clipboard 和 execCommand 两条路都会失败
+      await send('Page.bringToFront', {});
+      await sleep(150);
       await evaluate(`([...document.querySelectorAll('.pf-card')].find((c) => !c.dataset.url)).click()`);
       await sleep(600);
       const copyToast = await evaluate(`document.querySelector('#toast')?.textContent || ''`);
@@ -304,7 +308,8 @@ try {
     }
 
     await evaluate(`document.querySelector('[data-add-platform]').click()`);
-    await sleep(400);
+    // 弹窗要先拉一次标签池再挂载，固定 sleep 在库变大后不够 —— 用轮询等它出现
+    await waitFor(`!!document.querySelector('.modal [data-cancel]')`, (v) => v === true, 5000, 150);
     const shape = await evaluate(`(async () => {
       const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       const m = document.querySelector('.modal');
@@ -343,8 +348,11 @@ try {
       '原生 datalist 已移除（只剩一个三角）',
       (await evaluate(`document.querySelectorAll('.modal datalist').length`)) === 0
     );
-    await evaluate(`document.querySelector('.modal [data-cancel]').click()`);
+    // 关闭弹窗：偶尔 Esc 派发后弹窗已被别处关掉，这里用可选链兜底，
+    // 再清一次残留遮罩，保证后面的用例拿到干净页面
+    await evaluate(`document.querySelector('.modal [data-cancel]')?.click()`);
     await sleep(300);
+    await evaluate(`document.querySelectorAll('.modal-mask').forEach((m) => m.remove()); true`);
 
     // 回归：真实点击卡片后，✎✕ 不能粘在卡片上（曾因 :focus-within 残留灰色块）
     if (pf.noUrlHandle && (await realClick('.pf-card[data-url=""]'))) {
@@ -572,6 +580,7 @@ try {
     && /^\/i\//.test(await evaluate(`location.pathname`)));
 
   // 翻页不应该往历史里叠加，点 ✕ 要一次退出来源页
+  await waitFor(`!!document.querySelector('[data-next]')`, (v) => v === true, 5000, 150);
   const nav = await evaluate(`(async () => {
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const before = location.pathname;
@@ -871,26 +880,61 @@ try {
   })()`);
   check('Esc 关闭弹窗', escModal.opened && escModal.closed, JSON.stringify(escModal));
 
-  const escLayer = await evaluate(`(async () => {
-    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    const esc = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
-    document.querySelector('[data-add-platform]').click();
-    await sleep(620);
-    const dd = document.querySelector('.modal .dd');
-    dd.querySelector('.dd-input').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-    await sleep(380);
-    esc();
-    await sleep(380);
-    const afterFirst = { panel: !dd.querySelector('.dd-panel').hidden, modal: !!document.querySelector('.modal') };
-    esc();
-    await sleep(420);
-    return { afterFirst, modalAfter: !!document.querySelector('.modal'), path: location.pathname };
+  // Esc 分层：真实按键（合成 KeyboardEvent 在长流程里会被残留层干扰，测不稳）
+  await evaluate(`document.querySelector('[data-add-platform]').click()`);
+  await sleep(1000);
+  const ddReady = await evaluate(`!!document.querySelector('.modal .dd')`);
+  if (ddReady) {
+    await evaluate(
+      `document.querySelector('.modal .dd .dd-input').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))`
+    );
+    await sleep(400);
+  }
+  const opened = await evaluate(`(() => {
+    const p = document.querySelector('.modal .dd .dd-panel');
+    return p ? !p.hidden : null;
   })()`);
+  // 诊断：Esc 栈里每层是谁（栈深为 1 说明下拉层根本没入栈；栈顶是 modal 说明顺序反了）
+  const escDbg = await evaluate(`({
+    stack: typeof window.__escDump === 'function' ? window.__escDump() : 'no-hook',
+    modals: document.querySelectorAll('.modal').length,
+    dds: [...document.querySelectorAll('.modal .dd')].map((d) => ({
+      n: d.querySelector('.dd-input')?.name || '',
+      open: !d.querySelector('.dd-panel').hidden,
+    })),
+  })`);
+  const escKey = async () => {
+    for (const type of ['keyDown', 'keyUp']) {
+      await send('Input.dispatchKeyEvent', {
+        type,
+        key: 'Escape',
+        code: 'Escape',
+        windowsVirtualKeyCode: 27,
+        nativeVirtualKeyCode: 27,
+      });
+    }
+    await sleep(420);
+  };
+  await send('Page.bringToFront', {});
+  await escKey();
+  const afterFirst = await evaluate(
+    `(() => {
+      const p = document.querySelector('.modal .dd .dd-panel');
+      return { panel: p ? !p.hidden : 'gone', modal: !!document.querySelector('.modal') };
+    })()`
+  );
+  await escKey();
+  const modalAfter = await evaluate(`!!document.querySelector('.modal')`);
+  const escLayer = { opened, escDbg, afterFirst, modalAfter, path: await evaluate(`location.pathname`) };
   check(
     'Esc 只关最上面一层（先下拉、后弹窗）',
-    escLayer.afterFirst.panel === false && escLayer.afterFirst.modal === true && escLayer.modalAfter === false,
+    escLayer.opened === true &&
+      escLayer.afterFirst.panel === false &&
+      escLayer.afterFirst.modal === true &&
+      escLayer.modalAfter === false,
     JSON.stringify(escLayer)
   );
+  await evaluate(`document.querySelectorAll('.modal-mask').forEach((m) => m.remove()); true`);
 
   const escSelect = await evaluate(`(async () => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1928,6 +1972,112 @@ try {
   check('删除测试角色', delRes.ok, `HTTP ${delRes.status}`);
   const stillThere = await fetch(`${BASE}/api/characters/${charId}`).then((r) => r.status);
   check('删除后角色确实不存在', stillThere === 404, `HTTP ${stillThere}`);
+
+  // 10. 小说库：分类视图（筛选）× 归类文件夹（磁盘层）
+  const DATA_ROOT = process.env.CL_DATA_DIR || 'E:\\CharacterLibrary';
+  const jbody = (method) => async (u, body) =>
+    (
+      await fetch(`${BASE}${u}`, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    ).json();
+  const jpost = jbody('POST');
+  const jpatch = jbody('PATCH');
+
+  let ns = (await (await fetch(`${BASE}/api/overview`)).json()).shelves.find((s) => s.name === 'E2E原创库');
+  if (!ns) ns = await jpost('/api/shelves', { name: 'E2E原创库', kind: 'novel', variant: 'original' });
+  // 每次跑用唯一后缀：小说库内重名会被 409 拦下，残留数据不能让下一轮直接失败
+  const tag = String(Date.now()).slice(-6);
+  const n1 = `E2E长夜${tag}`;
+  const n2 = `E2E短章${tag}`;
+  const g1 = `E2E玄幻${tag}`;
+  const g2 = `E2E文学${tag}`;
+  const g3 = `E2E都市${tag}`;
+  const b1 = await jpost('/api/characters', {
+    shelfId: ns.id,
+    name: n1,
+    novelGroup: g1,
+    novelSubtype: '网络',
+    author: 'E2E作者',
+    wordCount: 120000,
+  });
+  const b2 = await jpost('/api/characters', {
+    shelfId: ns.id,
+    name: n2,
+    novelGroup: g2,
+    novelSubtype: '出版',
+  });
+
+  await goto(`${BASE}/n/${ns.id}`, 1800);
+  const tabs = await evaluate(
+    `[...document.querySelectorAll('[data-view] button')].map(b => b.textContent.replace(/\\d+$/, ''))`
+  );
+  check('原创库分类视图 = 全部/出版/网络', tabs.join('/') === '全部/出版/网络', tabs.join('/'));
+
+  const groupNames = await evaluate(`[...document.querySelectorAll('.ng-head span')].map(x => x.textContent)`);
+  const folderIcons = await evaluate(`document.querySelectorAll('.ng-head .ng-ico').length`);
+  check(
+    '原创库按小说类型分组（标题带文件夹图标）',
+    groupNames.includes(g1) && groupNames.includes(g2) && folderIcons >= 2,
+    `${groupNames.join(' / ')} · 图标 ${folderIcons} 个`
+  );
+
+  const holder = await evaluate(`document.querySelector('.novel-card .cover-title span')?.textContent || ''`);
+  check('无封面时用书名占位', holder === n1 || holder === n2, holder);
+
+  await evaluate(`document.querySelector('[data-v="出版"]').click()`);
+  await sleep(250);
+  const pubOnly = await evaluate(`[...document.querySelectorAll('.novel-card .name')].map(x => x.textContent)`);
+  check('切到「出版」只剩出版的书', pubOnly.length === 1 && pubOnly[0] === n2, pubOnly.join(' / '));
+
+  const dirOf = (g, n) => path.join(DATA_ROOT, 'E2E原创库', g, n);
+  check(
+    '目录 = 库 / 类型 / 书名（含未分类/文件）',
+    fs.existsSync(path.join(dirOf(g1, n1), '未分类', '文件')),
+    dirOf(g1, n1)
+  );
+
+  await jpatch(`/api/characters/${b1.id}`, { novelGroup: g3 });
+  check(
+    '改类型后磁盘目录同步移动',
+    fs.existsSync(dirOf(g3, n1)) && !fs.existsSync(dirOf(g1, n1)),
+    `${g1} → ${g3}`
+  );
+
+  const dupStatus = (
+    await fetch(`${BASE}/api/characters`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shelfId: ns.id, name: n1, novelGroup: g3 }),
+    })
+  ).status;
+  check('同库重名被拦下（409）', dupStatus === 409, `HTTP ${dupStatus}`);
+
+  // 同人库：原作品名会自动变成标签，资源库那张作品卡才能关联到
+  let fans = (await (await fetch(`${BASE}/api/overview`)).json()).shelves.find((s) => s.name === 'E2E同人库');
+  if (!fans) fans = await jpost('/api/shelves', { name: 'E2E同人库', kind: 'novel', variant: 'fanfic' });
+  const f1 = await jpost('/api/characters', {
+    shelfId: fans.id,
+    name: `E2E同人篇${tag}`,
+    novelGroup: `E2E原作${tag}`,
+    novelSubtype: '短篇',
+  });
+  const f1Detail = await (await fetch(`${BASE}/api/characters/${f1.id}`)).json();
+  check(
+    '同人小说自动带「原作品名」标签',
+    (f1Detail.tags || []).includes(`E2E原作${tag}`),
+    (f1Detail.tags || []).join(' / ')
+  );
+
+  // 清理测试数据
+  for (const b of [b1, b2]) await fetch(`${BASE}/api/characters/${b.id}`, { method: 'DELETE' });
+  await fetch(`${BASE}/api/shelves/${ns.id}`, { method: 'DELETE' });
+  await fetch(`${BASE}/api/characters/${f1.id}`, { method: 'DELETE' });
+  await fetch(`${BASE}/api/shelves/${fans.id}`, { method: 'DELETE' });
+  fs.rmSync(path.join(DATA_ROOT, 'E2E原创库'), { recursive: true, force: true });
+  fs.rmSync(path.join(DATA_ROOT, 'E2E同人库'), { recursive: true, force: true });
 
   check('页面无 JS 报错', consoleErrors.length === 0, consoleErrors.slice(0, 2).join(' | '));
 } catch (err) {

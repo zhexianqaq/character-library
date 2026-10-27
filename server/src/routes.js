@@ -101,7 +101,9 @@ function mediaTagSet(db, charId) {
     .get(charId);
   if (!c) return [];
   if (c.is_container || c.kind === 'emoji') return [];
-  return mergeTags([c.name, c.kind === 'work' ? '角色' : '人物']);
+  // 条目自身的身份标签：角色库→角色、小说库→小说、其余→人物
+  const identity = c.kind === 'work' ? '角色' : c.kind === 'novel' ? '小说' : '人物';
+  return mergeTags([c.name, identity]);
 }
 
 /** 图包标签：所有库都会下发给包内每张图，标一次全包生效（读时合并，不落库） */
@@ -120,6 +122,12 @@ function mapChar(row, tags) {
     name: row.name,
     account: row.account,
     category: row.category || '',
+    // 小说库（其他库这几个字段为空）
+    novelGroup: row.novel_group || '',
+    novelSubtype: row.novel_subtype || '',
+    author: row.author || '',
+    wordCount: row.word_count || 0,
+    novelStatus: row.novel_status || '',
     intro: row.intro,
     dirSlug: row.dir_slug,
     coverMediaId: row.cover_media_id,
@@ -132,6 +140,8 @@ function mapChar(row, tags) {
       id: row.shelf_id,
       name: row.shelf_name || '',
       kind: row.shelf_kind || 'people',
+      // 小说库才有：original 原创 / fanfic 同人
+      variant: row.shelf_variant || '',
     },
   };
 }
@@ -149,13 +159,41 @@ function safeJson(raw) {
  * 库的类型：
  * people 真人（有社交账号）/ work 虚拟角色（标注出处）
  * emoji 表情包（没有条目层级，库里直接是图包 + 未分类 + 全部素材）
+ * resource 资源库（游戏 / 动画 / 电影 / 剧集，卡片按分类分组）
+ * novel 小说库（条目=一本小说，novel_group 是磁盘上的归类文件夹）
  */
 function normalizeShelfKind(v) {
   const k = String(v || '').toLowerCase();
   if (k === 'work') return 'work';
   if (k === 'emoji') return 'emoji';
   if (k === 'resource') return 'resource';
+  if (k === 'novel') return 'novel';
   return 'people';
+}
+
+/**
+ * 小说库的两个分支。分类视图（tab）的值域由它决定，且**只做筛选、不落磁盘**：
+ * 出版 / 网络、短篇 / 长篇是一本书的单一属性，做成文件夹会把同一类型劈成两半。
+ */
+const NOVEL_VIEWS = {
+  original: ['出版', '网络'],
+  fanfic: ['短篇', '长篇'],
+};
+
+function normalizeVariant(v) {
+  return String(v || '').toLowerCase() === 'fanfic' ? 'fanfic' : 'original';
+}
+
+/** 小说库视图值域；非小说库返回空数组 */
+function novelViewsOf(shelf) {
+  if (!shelf || shelf.kind !== 'novel') return [];
+  return NOVEL_VIEWS[normalizeVariant(shelf.variant)] || NOVEL_VIEWS.original;
+}
+
+/** 只收本库值域内的值，其余一律丢弃（避免脏值让书在所有 tab 里都不出现） */
+function pickNovelSubtype(shelf, v) {
+  const s = String(v || '').trim();
+  return novelViewsOf(shelf).includes(s) ? s : null;
 }
 
 /** 平台主页网址：只收 http/https；没写协议就补 https；非法值直接丢弃 */
@@ -174,7 +212,7 @@ function normalizeUrl(raw) {
 }
 
 const CHAR_SELECT = `
-  SELECT c.*, sh.name AS shelf_name, sh.kind AS shelf_kind,
+  SELECT c.*, sh.name AS shelf_name, sh.kind AS shelf_kind, sh.variant AS shelf_variant,
     (SELECT COUNT(*) FROM media m WHERE m.character_id = c.id) AS media_count,
     (SELECT COUNT(*) FROM packs p WHERE p.character_id = c.id) AS pack_count,
     (SELECT COALESCE(SUM(m.bytes),0) FROM media m WHERE m.character_id = c.id) AS total_bytes
@@ -256,10 +294,16 @@ function shelfSlugOf(db, shelfId) {
   return sample ? sample.dir_slug.split('/')[0] : slugify(shelf ? shelf.name : '角色库');
 }
 
-async function uniqueCharRelDir(db, shelfId, name) {
+/**
+ * 新建条目的目录：<库>/<条目>，小说库多一层归类文件夹 <库>/<novel_group>/<书名>。
+ * group 为空时退回两级，其他库的行为完全不变。
+ */
+async function uniqueCharRelDir(db, shelfId, name, group = '') {
   const shelfSlug = shelfSlugOf(db, shelfId);
-  const charSlug = await uniqueDirName(shelfSlug, name);
-  return `${shelfSlug}/${charSlug}`;
+  const g = String(group || '').trim();
+  const parent = g ? `${shelfSlug}/${slugify(g)}` : shelfSlug;
+  const charSlug = await uniqueDirName(parent, name);
+  return g ? `${parent}/${charSlug}` : `${shelfSlug}/${charSlug}`;
 }
 
 async function mkdirRel(relDir) {
@@ -272,14 +316,77 @@ async function mkdirRel(relDir) {
 }
 
 /**
+ * Windows 上重命名目录会遇到 EPERM：目录里只要还有一个文件被别的进程打开
+ * （缩略图生成、系统索引、杀软扫描、刚返回的 /m/:id 响应），整个目录就锁着。
+ * 先短暂重试，仍不行就降级成「整目录复制 + 删源」，别让一次改名直接失败。
+ */
+async function renameDirWithRetry(src, dst, tries = 4) {
+  let lastErr = null;
+  for (let i = 0; i < tries; i += 1) {
+    try {
+      await fsp.rename(src, dst);
+      return true;
+    } catch (err) {
+      lastErr = err;
+      if (err.code !== 'EPERM' && err.code !== 'EBUSY' && err.code !== 'EACCES') throw err;
+      await new Promise((r) => setTimeout(r, 120 * (i + 1)));
+    }
+  }
+  try {
+    await fsp.cp(src, dst, { recursive: true, force: true });
+    await fsp.rm(src, { recursive: true, force: true });
+    return true;
+  } catch {
+    await fsp.rm(dst, { recursive: true, force: true }).catch(() => {});
+    const err = new Error(`目录被占用，无法重命名。请关闭正在使用该目录的程序后重试`);
+    err.status = 423;
+    err.cause = lastErr;
+    throw err;
+  }
+}
+
+/**
+ * 小说库改书名 / 改归类文件夹时搬磁盘目录。
+ *
+ * 目录名就是归类层，DB 改了不动目录会立刻「界面一套、磁盘一套」。
+ * 只负责搬目录，DB 的 dir_slug / media.rel_path 由调用方在事务里一起改；
+ * 事务失败要把目录搬回来（返回的 moved 告诉调用方有没有真的动过）。
+ */
+async function moveNovelDir(db, row, targetRel) {
+  const oldRel = String(row.dir_slug || '');
+  if (!oldRel || oldRel === targetRel) return { moved: false, oldRel };
+
+  const oldAbs = absPathOf(oldRel);
+  const targetAbs = absPathOf(targetRel);
+  if (fs.existsSync(targetAbs)) {
+    const err = new Error(`目标目录已存在：${targetRel}`);
+    err.status = 409;
+    throw err;
+  }
+
+  const parentRel = targetRel.split('/').slice(0, -1).join('/');
+  await mkdirRel(parentRel);
+
+  const hasOld = fs.existsSync(oldAbs);
+  if (hasOld) await renameDirWithRetry(oldAbs, targetAbs);
+  return { moved: hasOld, oldRel, oldAbs, targetAbs };
+}
+
+/**
  * 新建条目时就把目录建出来，连「未分类/图片、未分类/视频」两个标准子目录一起建。
  *
  * 以前只在第一次上传时才 mkdir，结果前端建完人物、磁盘上什么都没有，
  * 「打开本地文件夹」还会报目录已丢失。建目录失败不拦建条目（上传时会再建一次）。
  */
-async function ensureCharDirs(relDir) {
+async function ensureCharDirs(relDir, novel = false) {
   if (!relDir) return;
   await mkdirRel(relDir);
+  // 小说库放的是正文文件 + 可能的插图，不建「视频」（空目录只是噪音）
+  if (novel) {
+    await mkdirRel(`${relDir}/未分类/文件`);
+    await mkdirRel(`${relDir}/未分类/图片`);
+    return;
+  }
   await mkdirRel(`${relDir}/未分类/图片`);
   await mkdirRel(`${relDir}/未分类/视频`);
 }
@@ -417,6 +524,7 @@ export function createApp() {
         name: s.name,
         note: s.note,
         kind: s.kind || 'people',
+        variant: s.variant || '',
         characterCount: s.character_count,
         packCount: s.pack_count,
         mediaCount: s.media_count,
@@ -434,47 +542,57 @@ export function createApp() {
     const name = String((req.body && req.body.name) || '').trim();
     if (!name) return res.status(400).json({ error: '角色库名称不能为空' });
     const lib = mainLibrary();
+    const kind = normalizeShelfKind(req.body.kind);
+    // variant 只有小说库有：原创库 / 同人库
+    const variant = kind === 'novel' ? normalizeVariant(req.body.variant) : null;
     const id = Number(
       db
         .prepare(
-          `INSERT INTO shelves(library_id, name, note, kind, sort_order, created_at, updated_at)
-           VALUES(?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM shelves WHERE library_id=?),?,?)`
+          `INSERT INTO shelves(library_id, name, note, kind, variant, sort_order, created_at, updated_at)
+           VALUES(?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM shelves WHERE library_id=?),?,?)`
         )
         .run(
           lib.id,
           name.slice(0, 60),
           String(req.body.note || '').slice(0, 500),
-          normalizeShelfKind(req.body.kind),
+          kind,
+          variant,
           lib.id,
           nowIso(),
           nowIso()
         )
         .lastInsertRowid
     );
-    const kind = normalizeShelfKind(req.body.kind);
     if (kind === 'emoji') ensureShelfContainer(id);
     // 库根目录建出来：否则资源管理器里少一个库，用户会以为数据没落盘
     await mkdirRel(shelfSlugOf(db, id));
-    res.json({ id, name, kind });
+    res.json({ id, name, kind, variant });
   });
 
   app.patch('/api/shelves/:id', (req, res) => {
     const db = getDb();
     const id = Number(req.params.id);
-    const { name, note, kind } = req.body || {};
+    const { name, note, kind, variant } = req.body || {};
     const row = db.prepare('SELECT * FROM shelves WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ error: '库不存在' });
     const nextKind = kind === undefined ? row.kind : normalizeShelfKind(kind);
-    db.prepare('UPDATE shelves SET name = ?, note = ?, kind = ?, updated_at = ? WHERE id = ?').run(
+    const nextVariant =
+      nextKind === 'novel'
+        ? variant === undefined
+          ? normalizeVariant(row.variant)
+          : normalizeVariant(variant)
+        : null;
+    db.prepare('UPDATE shelves SET name = ?, note = ?, kind = ?, variant = ?, updated_at = ? WHERE id = ?').run(
       typeof name === 'string' && name.trim() ? name.trim().slice(0, 60) : row.name,
       typeof note === 'string' ? note.slice(0, 500) : row.note,
       nextKind,
+      nextVariant,
       nowIso(),
       id
     );
     // 改成表情库时补一个容器条目，否则前端没有地方挂图包
     if (nextKind === 'emoji') ensureShelfContainer(id);
-    res.json({ ok: true, kind: nextKind });
+    res.json({ ok: true, kind: nextKind, variant: nextVariant });
   });
 
   app.delete('/api/shelves/:id', (req, res) => {
@@ -578,7 +696,7 @@ export function createApp() {
     const where = ['c.shelf_id = @shelfId', 'c.is_container = 0'];
     const params = { shelfId };
     if (q) {
-      where.push('(c.name LIKE @q OR c.account LIKE @q)');
+      where.push('(c.name LIKE @q OR c.account LIKE @q OR c.author LIKE @q)');
       params.q = `%${q}%`;
     }
     const order =
@@ -590,6 +708,102 @@ export function createApp() {
       .prepare(`${CHAR_SELECT} WHERE ${where.join(' AND ')} ${order}`)
       .all(params);
     res.json({ items: rows.map((r) => mapChar(r, tagsOf(db, r.id))), total: rows.length });
+  });
+
+  /**
+   * 小说库首页：分类视图（tab）+ 归类文件夹（分组）+ 书卡列表。
+   *
+   * 两个维度是正交的，别混：
+   *   view  = novel_subtype（出版/网络 或 短篇/长篇），只筛选，不落磁盘
+   *   group = novel_group（小说类型 或 原作品名），既是分组标题也是磁盘上的一层目录
+   * 所以 view 只影响「这页显示哪些书」，group 影响「书放在哪个文件夹」。
+   */
+  app.get('/api/shelves/:id/novel', (req, res) => {
+    const db = getDb();
+    const shelfId = Number(req.params.id);
+    const shelf = db.prepare('SELECT * FROM shelves WHERE id = ?').get(shelfId);
+    if (!shelf) return res.status(404).json({ error: '库不存在' });
+    if (shelf.kind !== 'novel') return res.status(400).json({ error: '不是小说库' });
+
+    const variant = normalizeVariant(shelf.variant);
+    const values = novelViewsOf(shelf);
+    const view = values.includes(String(req.query.view || '').trim()) ? String(req.query.view).trim() : '';
+    const group = String(req.query.group || '').trim();
+    const q = String(req.query.q || '').trim();
+    const sort = String(req.query.sort || 'media');
+
+    const base = ['c.shelf_id = @shelfId', 'c.is_container = 0'];
+    const baseParams = { shelfId };
+    if (view) {
+      base.push('c.novel_subtype = @view');
+      baseParams.view = view;
+    }
+
+    // 视图计数：只按整库算，不随 group / q 变化（切 tab 时数字必须稳）
+    const totalAll = db
+      .prepare('SELECT COUNT(*) n FROM characters WHERE shelf_id = ? AND is_container = 0')
+      .get(shelfId).n;
+    const subRows = db
+      .prepare(
+        `SELECT COALESCE(novel_subtype,'') AS v, COUNT(*) n FROM characters
+          WHERE shelf_id = ? AND is_container = 0 GROUP BY COALESCE(novel_subtype,'')`
+      )
+      .all(shelfId);
+    const subMap = Object.fromEntries(subRows.map((r) => [r.v, r.n]));
+    const views = [
+      { value: '', label: '全部', count: totalAll },
+      ...values.map((v) => ({ value: v, label: v, count: subMap[v] || 0 })),
+    ];
+    // 没填分类的书不会出现在任何子视图里，给前端留个提示用的计数
+    const unsorted = subRows.filter((r) => !values.includes(r.v)).reduce((a, r) => a + r.n, 0);
+
+    // 分组统计：跟着 view 走，但不跟 group / q（否则搜索一次分组就没了）
+    const groupRows = db
+      .prepare(
+        `SELECT COALESCE(c.novel_group,'') AS g, COALESCE(c.novel_subtype,'') AS v, COUNT(*) n
+           FROM characters c WHERE ${base.join(' AND ')}
+          GROUP BY COALESCE(c.novel_group,''), COALESCE(c.novel_subtype,'')`
+      )
+      .all(baseParams);
+    const groupMap = new Map();
+    for (const r of groupRows) {
+      const g = groupMap.get(r.g) || { name: r.g, count: 0, subs: {} };
+      g.count += r.n;
+      if (r.v) g.subs[r.v] = (g.subs[r.v] || 0) + r.n;
+      groupMap.set(r.g, g);
+    }
+    const groups = [...groupMap.values()].sort(
+      (a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-Hans-CN')
+    );
+
+    const where = [...base];
+    const params = { ...baseParams };
+    if (group) {
+      where.push(`COALESCE(c.novel_group,'') = @group`);
+      params.group = group;
+    }
+    if (q) {
+      where.push('(c.name LIKE @q OR c.author LIKE @q OR c.novel_group LIKE @q)');
+      params.q = `%${q}%`;
+    }
+    const order =
+      sort === 'name'
+        ? 'ORDER BY c.name COLLATE NOCASE'
+        : sort === 'words'
+          ? 'ORDER BY c.word_count DESC, media_count DESC, c.id DESC'
+          : sort === 'recent'
+            ? 'ORDER BY c.updated_at DESC, c.id DESC'
+            : 'ORDER BY media_count DESC, pack_count DESC, c.id DESC';
+    const rows = db.prepare(`${CHAR_SELECT} WHERE ${where.join(' AND ')} ${order}`).all(params);
+
+    res.json({
+      shelf: { id: shelf.id, name: shelf.name, note: shelf.note, kind: 'novel', variant },
+      views,
+      groups,
+      unsorted,
+      items: rows.map((r) => mapChar(r, tagsOf(db, r.id))),
+      total: rows.length,
+    });
   });
 
   /**
@@ -833,7 +1047,7 @@ export function createApp() {
            (SELECT COUNT(*) FROM media m WHERE m.character_id = c.id) AS media_count,
            (SELECT COUNT(*) FROM packs p WHERE p.character_id = c.id) AS pack_count
          FROM characters c JOIN shelves sh ON sh.id = c.shelf_id
-         WHERE c.is_container = 0 AND c.id <> @id AND sh.kind IN ('people','work')
+         WHERE c.is_container = 0 AND c.id <> @id AND sh.kind IN ('people','work','novel')
            AND (
              EXISTS (SELECT 1 FROM character_tags ct JOIN tags t ON t.id = ct.tag_id
                      WHERE ct.character_id = c.id AND t.name = @name)
@@ -875,12 +1089,30 @@ export function createApp() {
     const name = String(b.name || '').trim();
     if (!name) return res.status(400).json({ error: '角色名不能为空' });
     const shelfId = Number(b.shelfId) || defaultShelfId();
-    const dirSlug = await uniqueCharRelDir(db, shelfId, name);
+    const shelf = db.prepare('SELECT * FROM shelves WHERE id = ?').get(shelfId);
+    if (!shelf) return res.status(400).json({ error: '库不存在' });
+    const isNovel = shelf.kind === 'novel';
+
+    // 小说库：一本书必须落在某个归类文件夹里
+    const novelGroup = isNovel ? String(b.novelGroup || '').trim().slice(0, 60) : '';
+    if (isNovel && !novelGroup) return res.status(400).json({ error: '请先选一个归类文件夹' });
+
+    // 小说库内不允许重名（跨库同名合法：原创库《原神》与同人库分组「原神」互不干扰）。
+    // 人物 / 角色库保持原行为 —— 同名条目以前就允许，会各自生成「名字-2」目录。
+    if (isNovel) {
+      const dup = db
+        .prepare('SELECT id FROM characters WHERE shelf_id = ? AND is_container = 0 AND name = ?')
+        .get(shelfId, name.slice(0, 100));
+      if (dup) return res.status(409).json({ error: `这个库里已经有《${name}》了`, id: dup.id });
+    }
+
+    const dirSlug = await uniqueCharRelDir(db, shelfId, name, novelGroup);
     const ts = nowIso();
     const info = db
       .prepare(
-        `INSERT INTO characters(shelf_id, name, account, intro, dir_slug, category, sort_order, created_at, updated_at)
-         VALUES(?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM characters WHERE shelf_id=?),?,?)`
+        `INSERT INTO characters(shelf_id, name, account, intro, dir_slug, category,
+           novel_group, novel_subtype, author, word_count, novel_status, sort_order, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM characters WHERE shelf_id=?),?,?)`
       )
       .run(
         shelfId,
@@ -889,6 +1121,11 @@ export function createApp() {
         String(b.intro || '').slice(0, 20000),
         dirSlug,
         String(b.category || '').trim().slice(0, 20) || null,
+        isNovel ? novelGroup : null,
+        isNovel ? pickNovelSubtype(shelf, b.novelSubtype) : null,
+        isNovel ? String(b.author || '').trim().slice(0, 60) || null : null,
+        isNovel ? Math.max(0, Number(b.wordCount) || 0) : 0,
+        isNovel ? String(b.novelStatus || '').trim().slice(0, 20) || null : null,
         shelfId,
         ts,
         ts
@@ -896,10 +1133,15 @@ export function createApp() {
     const id = Number(info.lastInsertRowid);
     if (Array.isArray(b.tags) && b.tags.length) applyTags(db, id, b.tags);
     ensureSelfTags(db); // 新条目立刻带上自己的名字标签
-    const shelfKind = (db.prepare('SELECT kind FROM shelves WHERE id = ?').get(shelfId) || {}).kind || 'people';
-    if (shelfKind === 'people' || shelfKind === 'work') await ensureCharDirs(dirSlug);
+    if (shelf.kind === 'people' || shelf.kind === 'work') await ensureCharDirs(dirSlug);
+    // 小说库：正文文件目录 + 插图目录（不建视频，空目录只是噪音）
+    else if (isNovel) await ensureCharDirs(dirSlug, true);
     // 资源库：每张「作品」卡预置一个「官方」图包 + 对应目录
-    else if (shelfKind === 'resource') await ensureOfficialPack(db, id, dirSlug);
+    else if (shelf.kind === 'resource') await ensureOfficialPack(db, id, dirSlug);
+    // 同人小说自动带「原作品名」标签 —— 资源库那张作品卡的「关联条目」正是按同名标签统计的
+    if (isNovel && normalizeVariant(shelf.variant) === 'fanfic' && novelGroup) {
+      applyTags(db, id, [...new Set([...(Array.isArray(b.tags) ? b.tags : []), novelGroup])]);
+    }
     const row = db.prepare(`${CHAR_SELECT} WHERE c.id = ?`).get(id);
     const dirName = dirSlug.split('/').pop();
     res.json({ ...mapChar(row, tagsOf(db, id)), dirRenamed: dirName !== slugify(name) });
@@ -920,59 +1162,129 @@ export function createApp() {
     });
   });
 
-  app.patch('/api/characters/:id', (req, res) => {
+  app.patch('/api/characters/:id', async (req, res) => {
     const db = getDb();
     const id = Number(req.params.id);
     const row = db.prepare('SELECT * FROM characters WHERE id = ?').get(id);
     if (!row) return res.status(404).json({ error: '角色不存在' });
     const b = req.body || {};
-    const tx = db.transaction(() => {
-      if (typeof b.name === 'string' && b.name.trim()) {
-        db.prepare('UPDATE characters SET name = ?, updated_at = ? WHERE id = ?').run(b.name.trim().slice(0, 100), nowIso(), id);
+    const shelf = db.prepare('SELECT * FROM shelves WHERE id = ?').get(row.shelf_id);
+    const isNovel = !!shelf && shelf.kind === 'novel';
+
+    /* 小说库的目录 = <库>/<归类文件夹>/<书名>。
+       改书名或改归类文件夹时目录必须跟着搬，否则界面一套、磁盘一套。
+       目录搬运用异步 fs，放在事务外；DB 更新失败再把目录搬回去。 */
+    const nextName = typeof b.name === 'string' && b.name.trim() ? b.name.trim().slice(0, 100) : row.name;
+    const nextGroup =
+      typeof b.novelGroup === 'string' ? b.novelGroup.trim().slice(0, 60) : String(row.novel_group || '');
+    let targetRel = row.dir_slug;
+    if (isNovel) {
+      if (!nextGroup) return res.status(400).json({ error: '归类文件夹不能为空' });
+      if (nextName !== row.name) {
+        const dup = db
+          .prepare('SELECT id FROM characters WHERE shelf_id = ? AND is_container = 0 AND name = ? AND id <> ?')
+          .get(row.shelf_id, nextName, id);
+        if (dup) return res.status(409).json({ error: `这个库里已经有《${nextName}》了` });
       }
-      if (typeof b.account === 'string') {
-        db.prepare('UPDATE characters SET account = ?, updated_at = ? WHERE id = ?').run(b.account.slice(0, 100), nowIso(), id);
-      }
-      if (typeof b.intro === 'string') {
-        db.prepare('UPDATE characters SET intro = ?, updated_at = ? WHERE id = ?').run(b.intro.slice(0, 20000), nowIso(), id);
-      }
-      if (typeof b.category === 'string') {
-        db.prepare('UPDATE characters SET category = ?, updated_at = ? WHERE id = ?').run(
-          b.category.trim().slice(0, 20) || null,
-          nowIso(),
-          id
-        );
-      }
-      if (b.coverMediaId !== undefined) {
-        db.prepare('UPDATE characters SET cover_media_id = ?, updated_at = ? WHERE id = ?').run(
-          b.coverMediaId === null ? null : Number(b.coverMediaId), nowIso(), id
-        );
-      }
-      if (Array.isArray(b.tags)) applyTags(db, id, b.tags);
-      if (Array.isArray(b.platforms)) {
-        const clean = b.platforms
-          .filter((x) => x && (String(x.handle || '').trim() || String(x.url || '').trim()))
-          .slice(0, 30)
-          .map((x) => ({
-            platform: String(x.platform || '').trim().slice(0, 20) || '其他',
-            handle: String(x.handle || '').trim().slice(0, 80),
-            url: normalizeUrl(x.url),
-          }));
-        db.prepare('UPDATE characters SET platforms = ?, updated_at = ? WHERE id = ?').run(
-          JSON.stringify(clean),
-          nowIso(),
-          id
-        );
-      }
-      if (b.shelfId) {
-        db.prepare('UPDATE characters SET shelf_id = ?, updated_at = ? WHERE id = ?').run(Number(b.shelfId), nowIso(), id);
-      }
-    });
-    tx();
+      const shelfSlug = shelfSlugOf(db, row.shelf_id);
+      targetRel = `${shelfSlug}/${slugify(nextGroup)}/${slugify(nextName)}`;
+    }
+    let mv = null;
+    if (isNovel && targetRel !== row.dir_slug) mv = await moveNovelDir(db, row, targetRel);
+
+    try {
+      const tx = db.transaction(() => {
+        if (typeof b.name === 'string' && b.name.trim()) {
+          db.prepare('UPDATE characters SET name = ?, updated_at = ? WHERE id = ?').run(nextName, nowIso(), id);
+        }
+        if (typeof b.account === 'string') {
+          db.prepare('UPDATE characters SET account = ?, updated_at = ? WHERE id = ?').run(b.account.slice(0, 100), nowIso(), id);
+        }
+        if (typeof b.intro === 'string') {
+          db.prepare('UPDATE characters SET intro = ?, updated_at = ? WHERE id = ?').run(b.intro.slice(0, 20000), nowIso(), id);
+        }
+        if (typeof b.category === 'string') {
+          db.prepare('UPDATE characters SET category = ?, updated_at = ? WHERE id = ?').run(
+            b.category.trim().slice(0, 20) || null,
+            nowIso(),
+            id
+          );
+        }
+        if (b.coverMediaId !== undefined) {
+          db.prepare('UPDATE characters SET cover_media_id = ?, updated_at = ? WHERE id = ?').run(
+            b.coverMediaId === null ? null : Number(b.coverMediaId), nowIso(), id
+          );
+        }
+        if (Array.isArray(b.tags)) applyTags(db, id, b.tags);
+        if (Array.isArray(b.platforms)) {
+          const clean = b.platforms
+            .filter((x) => x && (String(x.handle || '').trim() || String(x.url || '').trim()))
+            .slice(0, 30)
+            .map((x) => ({
+              platform: String(x.platform || '').trim().slice(0, 20) || '其他',
+              handle: String(x.handle || '').trim().slice(0, 80),
+              url: normalizeUrl(x.url),
+            }));
+          db.prepare('UPDATE characters SET platforms = ?, updated_at = ? WHERE id = ?').run(
+            JSON.stringify(clean),
+            nowIso(),
+            id
+          );
+        }
+        if (b.shelfId) {
+          db.prepare('UPDATE characters SET shelf_id = ?, updated_at = ? WHERE id = ?').run(Number(b.shelfId), nowIso(), id);
+        }
+        if (isNovel) {
+          if (typeof b.novelGroup === 'string') {
+            db.prepare('UPDATE characters SET novel_group = ?, updated_at = ? WHERE id = ?').run(nextGroup, nowIso(), id);
+          }
+          if (b.novelSubtype !== undefined) {
+            db.prepare('UPDATE characters SET novel_subtype = ?, updated_at = ? WHERE id = ?').run(
+              pickNovelSubtype(shelf, b.novelSubtype),
+              nowIso(),
+              id
+            );
+          }
+          if (typeof b.author === 'string') {
+            db.prepare('UPDATE characters SET author = ?, updated_at = ? WHERE id = ?').run(
+              b.author.trim().slice(0, 60) || null,
+              nowIso(),
+              id
+            );
+          }
+          if (b.wordCount !== undefined) {
+            db.prepare('UPDATE characters SET word_count = ?, updated_at = ? WHERE id = ?').run(
+              Math.max(0, Number(b.wordCount) || 0),
+              nowIso(),
+              id
+            );
+          }
+          if (typeof b.novelStatus === 'string') {
+            db.prepare('UPDATE characters SET novel_status = ?, updated_at = ? WHERE id = ?').run(
+              b.novelStatus.trim().slice(0, 20) || null,
+              nowIso(),
+              id
+            );
+          }
+          // dir_slug 与所有媒体路径前缀一起换，媒体记录不能指向已经不存在的旧目录
+          if (targetRel !== row.dir_slug) {
+            db.prepare('UPDATE characters SET dir_slug = ? WHERE id = ?').run(targetRel, id);
+            db.prepare(
+              `UPDATE media SET rel_path = ? || substr(rel_path, ?)
+                WHERE character_id = ? AND substr(rel_path, 1, ?) = ?`
+            ).run(targetRel, row.dir_slug.length + 1, id, row.dir_slug.length, row.dir_slug);
+          }
+        }
+      });
+      tx();
+    } catch (err) {
+      if (mv && mv.moved) await fsp.rename(mv.targetAbs, mv.oldAbs).catch(() => {});
+      throw err;
+    }
     // 名字标签始终跟着条目走：改名补新名，手删了也会补回来
     ensureSelfTags(db);
     const fresh = db.prepare(`${CHAR_SELECT} WHERE c.id = ?`).get(id);
-    res.json(mapChar(fresh, tagsOf(db, id)));
+    res.json({ ...mapChar(fresh, tagsOf(db, id)), dirMoved: !!(mv && mv.moved) });
   });
 
   app.delete('/api/characters/:id', async (req, res) => {
@@ -1739,6 +2051,17 @@ export function createApp() {
   app.use((req, res) => {
     if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'not found' });
     serveIndex(req, res);
+  });
+
+  // 错误兜底：接口一律回 JSON。没有这一层时，抛错会返回 HTML 错误页，
+  // 前端 JSON 解析失败，toast 只剩一句 "Unexpected token <"，真正原因全丢了。
+  app.use((err, req, res, next) => {
+    if (res.headersSent) return next(err);
+    const status = err && Number(err.status) >= 400 ? Number(err.status) : 500;
+    console.error('[api]', req.method, req.originalUrl, err && (err.stack || err.message || err));
+    const msg = (err && err.message) || '服务器错误';
+    if (req.path.startsWith('/api/')) return res.status(status).json({ error: msg });
+    res.status(status).type('text/plain; charset=utf-8').send(msg);
   });
 
   return app;

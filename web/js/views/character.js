@@ -48,25 +48,42 @@ export async function CharacterView(root, id) {
 
   function heroHtml() {
     const cover = c.coverMediaId ? api.thumb(c.coverMediaId) : '';
+    const novel = isNovelShelf();
+    // 小说库的「素材」是正文文件，四格换成 文件 / 分卷 / 字数 / 占用
+    const stats = novel
+      ? `<div class="stat"><b>${fmtNum(c.stats.total)}</b><span>文件</span></div>
+         <div class="stat"><b>${fmtNum(c.packCount)}</b><span>分卷</span></div>
+         <div class="stat"><b>${
+           c.wordCount ? (c.wordCount >= 10000 ? `${Math.round(c.wordCount / 10000)} 万` : fmtNum(c.wordCount)) : '—'
+         }</b><span>字数</span></div>
+         <div class="stat"><b>${fmtBytes(c.bytes)}</b><span>占用</span></div>`
+      : `<div class="stat"><b>${fmtNum(c.stats.image)}</b><span>图片</span></div>
+         <div class="stat"><b>${fmtNum(c.stats.video)}</b><span>视频</span></div>
+         <div class="stat"><b>${fmtNum(c.packCount)}</b><span>图包</span></div>
+         <div class="stat"><b>${fmtBytes(c.bytes)}</b><span>占用</span></div>`;
+    const subline = novel
+      ? esc([c.author, c.novelStatus].filter(Boolean).join(' · ') || (isFanficShelf() ? '同人小说' : '原创小说'))
+      : esc(c.shelf ? c.shelf.name : '');
     return `<section class="hero">
       <div class="hero-bg" style="background-image:url('${cover}')"></div>
       <div class="hero-inner">
         <div class="hero-cover">
-          ${cover ? `<img src="${cover}" alt="">` : '<div class="cover-empty">无封面</div>'}
+          ${
+            cover
+              ? `<img src="${cover}" alt="">`
+              : novel
+                ? `<div class="cover-empty novel-cover"><span>${esc(c.name)}</span></div>`
+                : '<div class="cover-empty">无封面</div>'
+          }
         </div>
         <div class="hero-main">
           <div class="hero-head">
             <h1 class="hero-name">${esc(c.name)}</h1>
-            <div class="hero-account">${esc(c.shelf ? c.shelf.name : '')}</div>
+            <div class="hero-account">${subline}</div>
           </div>
           <div class="chip-row" data-tags></div>
           <div class="hero-body">
-            <div class="stat-grid">
-              <div class="stat"><b>${fmtNum(c.stats.image)}</b><span>图片</span></div>
-              <div class="stat"><b>${fmtNum(c.stats.video)}</b><span>视频</span></div>
-              <div class="stat"><b>${fmtNum(c.packCount)}</b><span>图包</span></div>
-              <div class="stat"><b>${fmtBytes(c.bytes)}</b><span>占用</span></div>
-            </div>
+            <div class="stat-grid">${stats}</div>
             <div class="platform-pane" data-platforms></div>
             <div class="hero-intro" data-intro></div>
           </div>
@@ -127,9 +144,18 @@ export async function CharacterView(root, id) {
     return !!(c.shelf && c.shelf.kind === 'work');
   }
 
-  /** 真人库里叫「人物」，虚拟角色库里叫「角色」 */
+  function isNovelShelf() {
+    return !!(c.shelf && c.shelf.kind === 'novel');
+  }
+
+  /** 同人库的「原作」是另一部作品，原创库没有这一层 */
+  function isFanficShelf() {
+    return isNovelShelf() && c.shelf.variant === 'fanfic';
+  }
+
+  /** 真人库里叫「人物」，虚拟角色库里叫「角色」，小说库里叫「小说」 */
   function noun() {
-    return isWorkShelf() ? '角色' : '人物';
+    return isNovelShelf() ? '小说' : isWorkShelf() ? '角色' : '人物';
   }
 
   /** 平台账号：一行一个圆角卡片。有网址点开跳转，没网址复制账号；悬停可编辑/删除 */
@@ -138,13 +164,14 @@ export async function CharacterView(root, id) {
     if (!pane) return;
     const list = Array.isArray(c.platforms) ? c.platforms : [];
     const work = isWorkShelf();
-    const head = work ? '出处' : '平台';
-    const empty = work ? '还没有作品出处' : '还没有平台账号';
+    const fan = isFanficShelf();
+    const head = work ? '出处' : fan ? '原作' : '平台';
+    const empty = work ? '还没有作品出处' : fan ? '还没有填原作品' : '还没有平台账号';
 
     pane.innerHTML = `
       <div class="pf-head">
         <span>${head}</span>
-        <button class="pf-edit" data-add-platform title="${work ? '添加作品出处' : '添加平台账号'}">＋</button>
+        <button class="pf-edit" data-add-platform title="${work ? '添加作品出处' : fan ? '添加原作品' : '添加平台账号'}">＋</button>
       </div>
       <div class="pf-list">
         ${

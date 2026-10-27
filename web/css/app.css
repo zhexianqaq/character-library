@@ -231,6 +231,96 @@ img { display: block; }
   white-space: nowrap;
 }
 
+/* ============ 小说库 ============ */
+.novel-group + .novel-group { margin-top: 30px; }
+.ng-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 12px;
+  padding: 0 2px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.ng-head .ng-ico { color: var(--text-3); flex: 0 0 auto; }
+.ng-head i {
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--text-3);
+}
+.ng-head .ng-link {
+  margin-left: 2px;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--text-3);
+  border-bottom: 1px dashed var(--line-strong);
+  transition: color 0.2s var(--ease);
+}
+.ng-head .ng-link:hover { color: var(--text); }
+
+/* 没有封面就用书名占位：纸感底色 + 居中书名，不借别的卡片的图 */
+.novel-card .cover-title {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 14px;
+  background: linear-gradient(165deg, #fbfaf7 0%, var(--fill-2) 100%);
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.55;
+  text-align: center;
+  letter-spacing: 0.2px;
+}
+.novel-card .cover-title span {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.novel-card .cover img { position: relative; z-index: 1; }
+
+.novel-card .sub-chip {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  z-index: 3;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  backdrop-filter: blur(6px);
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+}
+/* 封面图有 z-index:1，徽标必须压在它上面，否则被图片盖住 */
+.novel-card .badge { z-index: 3; }
+
+/* 小说详情页的封面占位：显示书名，不画那个「图片」小图标 */
+.hero-cover .cover-empty.novel-cover::before { display: none; }
+.hero-cover .cover-empty.novel-cover span {
+  padding: 0 12px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-2);
+  line-height: 1.5;
+  letter-spacing: 0.5px;
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
 /* ============ 角色详情 ============ */
 .hero {
   position: relative;

@@ -43,10 +43,11 @@ export const api = {
   original: (id) => `/m/${id}`,
 
   overview: () => req('/api/overview'),
-  createShelf: (name, kind = 'people') => json('POST')('/api/shelves', { name, kind }),
+  createShelf: (name, kind = 'people', extra = {}) => json('POST')('/api/shelves', { name, kind, ...extra }),
   shelves: () => req('/api/overview').then((d) => d.shelves),
 
   shelfCharacters: (shelfId, params) => req(`/api/shelves/${shelfId}/characters${qs(params)}`),
+  novelShelf: (shelfId, params) => req(`/api/shelves/${shelfId}/novel${qs(params)}`),
   emojiShelf: (shelfId) => req(`/api/shelves/${shelfId}/emoji`),
   resources: (shelfId) => req(`/api/shelves/${shelfId}/resources`),
   resource: (id) => req(`/api/resources/${id}`),

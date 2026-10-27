@@ -41,7 +41,10 @@ export function openModal({
           value: f.value || '',
           placeholder: f.placeholder || '',
           editable: true,
-          allowEmpty: false,
+          // 默认仍是「空值就落到第一项」；要「必须自己选」的字段传 allowEmpty: true，
+          // 否则新建时会被静默填上第一个选项（比如小说库一建就归到「原神」）
+          allowEmpty: f.allowEmpty === true,
+          emptyLabel: f.placeholder || '未选择',
         }) - 1;
         control = `<div class="dd-slot" data-dd-slot="${idx}"></div>`;
       } else if (f.type === 'select') {
@@ -101,7 +104,26 @@ export function openModal({
         </div>
       </div>`;
 
+    let offEsc = null;
+    let mounted = false;
+
+    const close = (val) => {
+      root.remove();
+      document.removeEventListener('keydown', onKey);
+      if (offEsc) {
+        offEsc();
+        offEsc = null;
+      }
+      resolve(val);
+    };
+
+    /* Esc 层必须在挂载之前入栈。
+       Chrome 在 appendChild 时会同步 flush autofocus，弹窗里可编辑下拉的 focus
+       会立刻 open() 并 pushEsc —— 如果弹窗层等到 appendChild 之后才 push，
+       下拉层反而压在弹窗上面，一次 Esc 就把弹窗关掉、面板留着。 */
+    offEsc = pushEsc(() => close(null), () => mounted, 'modal');
     document.body.appendChild(root);
+    mounted = true;
 
     for (const [idx, cfg] of combos.entries()) {
       const slot = root.querySelector(`[data-dd-slot="${idx}"]`);
@@ -133,17 +155,6 @@ export function openModal({
       first.focus();
       if (first.select && first.tagName === 'INPUT') first.select();
     }
-
-    let offEsc = null;
-    const close = (val) => {
-      root.remove();
-      document.removeEventListener('keydown', onKey);
-      if (offEsc) {
-        offEsc();
-        offEsc = null;
-      }
-      resolve(val);
-    };
 
     const submit = () => {
       const values = {};
@@ -185,13 +196,12 @@ export function openModal({
       submit();
     };
 
+    document.addEventListener('keydown', onKey);
     root.querySelector('[data-cancel]').addEventListener('click', () => close(null));
     root.querySelector('[data-ok]').addEventListener('click', submit);
     root.addEventListener('mousedown', (e) => {
       if (e.target === root) close(null);
     });
-    document.addEventListener('keydown', onKey);
-    offEsc = pushEsc(() => close(null), () => root.isConnected);
   });
 }
 

@@ -5,8 +5,8 @@ import { openModal, confirmDialog } from '../components/modal.js';
 import { openContextMenu } from '../components/context-menu.js';
 import { createDropdown } from '../components/dropdown.js';
 
-/** 没有条目层级的库，直接有自己的页面 */
-const FLAT_HOME = { emoji: '/e/', resource: '/rs/' };
+/** 没有条目层级的库（或首页形态完全不同的库）直接有自己的页面 */
+const FLAT_HOME = { emoji: '/e/', resource: '/rs/', novel: '/n/' };
 
 /** 卡片排序：默认按素材数量（卡片右上角那个数）从多到少 */
 const CARD_SORTS = [
@@ -93,7 +93,8 @@ export async function LibraryView(root, shelfId) {
       return;
     }
     const isWork = active ? active.kind === 'work' : false;
-    noun = isWork ? '角色' : '人物';
+    const isNovel = active ? active.kind === 'novel' : false;
+    noun = isNovel ? '小说' : isWork ? '角色' : '人物';
     activeShelf = active || null;
     chars = state.shelfId
       ? await api.shelfCharacters(state.shelfId, { q: state.q, sort: state.sort })
@@ -218,9 +219,10 @@ export async function LibraryView(root, shelfId) {
     root.querySelector('[data-new-shelf]').addEventListener('click', async () => {
       const v = await openModal({
         title: '新建库',
-        description: '人物库 / 角色库按「条目 → 图包 → 素材」组织；表情库没有条目，库里直接是图包。',
+        description:
+          '人物库 / 角色库按「条目 → 图包 → 素材」组织；表情库没有条目；小说库按「归类文件夹 → 书 → 分卷」组织。',
         fields: [
-          { name: 'name', label: '名称', required: true, placeholder: '比如：人物库、角色库' },
+          { name: 'name', label: '名称', required: true, placeholder: '比如：人物库、原创库' },
           {
             name: 'kind',
             label: '类型',
@@ -228,6 +230,8 @@ export async function LibraryView(root, shelfId) {
             options: [
               { value: 'people', label: '人物库 · 真人，填平台账号' },
               { value: 'work', label: '角色库 · 虚拟角色，标出处' },
+              { value: 'novel:original', label: '原创库 · 小说，按「小说类型」分文件夹' },
+              { value: 'novel:fanfic', label: '同人库 · 同人小说，按「原作品名」分文件夹' },
               { value: 'emoji', label: '表情库 · 没有条目，直接放图包（gif / 表情包）' },
               { value: 'resource', label: '资源库 · 游戏 / 动画 / 电影 / 剧集，按标签串起角色' },
             ],
@@ -239,10 +243,12 @@ export async function LibraryView(root, shelfId) {
       });
       if (!v) return;
       try {
-        const created = await api.createShelf(v.name, v.kind);
+        // 「原创库 / 同人库」共用一个 kind=novel，靠 variant 区分
+        const [kind, variant] = String(v.kind).split(':');
+        const created = await api.createShelf(v.name, kind, variant ? { variant } : {});
         toast('库已创建');
-        if (FLAT_HOME[v.kind]) {
-          history.pushState({}, '', `${FLAT_HOME[v.kind]}${created.id}`);
+        if (FLAT_HOME[kind]) {
+          history.pushState({}, '', `${FLAT_HOME[kind]}${created.id}`);
           window.dispatchEvent(new CustomEvent('app:route'));
           return;
         }
