@@ -133,6 +133,15 @@ export function renderMasonry(container, items, onOpen, opts = {}) {
   const indexById = new Map(list.map((x, i) => [x.id, i]));
 
   let from = Math.max(0, Number(opts.appendFrom) || 0);
+  /**
+   * 上一次渲染可能被新的 render 打断（token 被换掉），实际只画了一部分。
+   * 这时调用方按「列表长度」算出来的 appendFrom 会跳过没画出来的那一段 ——
+   * 连着点「加载更多」就会漏卡片（实测 360 项只见到 320 张）。
+   * 以容器上记的实际进度为准，从真正画到的位置补。
+   */
+  const painted = Number(container._rendered) || 0;
+  if (from > 0 && painted < from) from = painted;
+
   if (from > 0) {
     // 列数变了 / 上次不是这套布局：追加会错位，退回全量重画
     const colsOk = container.dataset.mcols === String(cols);
@@ -143,7 +152,11 @@ export function renderMasonry(container, items, onOpen, opts = {}) {
   }
   container.dataset.mcols = String(cols);
 
-  /** 待插入队列：跨列模式全进容器，列模式按列分组 */
+  /**
+   * 待插入队列：只存「哪一项、放哪、什么位置」，DOM 字符串等真正插入时才生成。
+   * 提前把所有卡片的 HTML 算好会漏掉这期间的状态变化 ——
+   * 分片还没画完时点「全选」，后面几批拿到的还是旧 HTML，于是计数 240 只勾上 80。
+   */
   const jobs = [];
   if (opts.spanWide) {
     if (!from) {
@@ -152,7 +165,7 @@ export function renderMasonry(container, items, onOpen, opts = {}) {
     }
     const { placed, height } = layoutSpanned(list, cols, COL_W, GAP);
     container.style.height = `${height}px`;
-    for (const p of placed.slice(from)) jobs.push({ parent: container, html: tileHtml(p.it, opts, p) });
+    for (const p of placed.slice(from)) jobs.push({ parent: container, it: p.it, geo: p });
   } else {
     if (!from) {
       container.classList.remove('is-spanned');
@@ -166,9 +179,10 @@ export function renderMasonry(container, items, onOpen, opts = {}) {
       if (!el) continue;
       // 这一列已经画过 have 张（追加时不必重算前面的）
       const have = el.childElementCount;
-      for (const it of buckets[c].slice(have)) jobs.push({ parent: el, html: tileHtml(it, opts) });
+      for (const it of buckets[c].slice(have)) jobs.push({ parent: el, it, geo: null });
     }
   }
+  container._rendered = from;
 
   if (!jobs.length) {
     bindFresh(container, list, indexById, onOpen, opts);
@@ -190,9 +204,12 @@ export function renderMasonry(container, items, onOpen, opts = {}) {
         flush();
         parent = j.parent;
       }
-      batch.push(j.html);
+      // 现算现插：勾选 / 选取态在分片过程中变了，这一批也要跟上
+      batch.push(tileHtml(j.it, opts, j.geo));
     }
     flush();
+    // 跨列模式下 jobs 与 items 一一对应，这个数就是「已经画到第几项」
+    if (opts.spanWide) container._rendered = from + end;
     bindFresh(container, list, indexById, onOpen, opts);
     if (end < jobs.length) requestAnimationFrame(() => run(end));
   };
