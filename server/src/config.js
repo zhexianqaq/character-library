@@ -10,11 +10,11 @@ export const WEB_DIR = path.join(PROJECT_DIR, 'web');
 
 /* ────────────────────────────────────────────────────────────
    存储分两层：
-   数据  = 媒体原件 + 索引库，放进大容量机械盘（E 盘），丢了不可重建
-   缓存  = 缩略图 / 预览图 / 上传临时区，放 SSD（D 盘），丢了随时能重建
+   数据  = 媒体原件 + 索引库，丢了不可重建
+   缓存  = 缩略图 / 预览图 / 上传临时区，跟项目走（<项目>/.cache），丢了随时能重建
    相对路径（media.rel_path）都是相对 DATA_DIR 的，换盘不影响索引
    ──────────────────────────────────────────────────────────── */
-export const DATA_DIR = process.env.CL_DATA_DIR || 'E:\\CharacterLibrary';
+export const DATA_DIR = process.env.CL_DATA_DIR || 'D:\\CharacterLibrary';
 export const CACHE_DIR = process.env.CL_CACHE_DIR || path.join(PROJECT_DIR, '.cache');
 
 export const CATALOG_DIR = path.join(DATA_DIR, '.catalog');

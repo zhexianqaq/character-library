@@ -212,7 +212,7 @@ node desktop/build.mjs      # cargo build --release + 拷成项目根的「资�
   分类就取你填的出处类型（新类型会自动多出一个分类标签）
 
 新增库：首页库标签右侧的 **＋**，填名字并选类型。新库在磁盘上会建同名目录
-（`E:\CharacterLibrary\<库名>\`），建条目、传文件时自动按五层展开。
+（`D:\CharacterLibrary\<库名>\`），建条目、传文件时自动按五层展开。
 
 ## 当前库里的展示内容
 
@@ -620,12 +620,12 @@ node desktop/build.mjs      # cargo build --release + 拷成项目根的「资�
 
 链接只接受 http/https，写 `x.com/xxx` 会自动补成 `https://x.com/xxx`（前后端各补一次）。
 
-## 存储结构（分两块磁盘）
+## 存储结构
 
-按读写频率拆开：**冷数据进机械盘，热缓存留 SSD**。
+**数据放 `D:\CharacterLibrary`，缓存放在项目目录下的 `.cache`**（可随时重建、不进备份）。
 
 ```
-E:\CharacterLibrary\                  ← 数据盘（机械硬盘，容量大）
+D:\CharacterLibrary\                  ← 数据目录（原件 + 索引库，约 5 GB）
   .catalog\
     library.db                        索引库，和媒体放一起，备份时一起拷
     pending-moves\                    跨角色搬运的意图记录（进程被杀后靠它收尾）
@@ -666,7 +666,7 @@ D:\ams\workbuddy\character-library\
 
 ## 备份
 
-整个库就是一个目录，**备份 = 复制 `E:\CharacterLibrary`**。`.cache` 不用备份——删了会自动重建。
+整个库就是一个目录，**备份 = 复制 `D:\CharacterLibrary`**。`.cache` 不用备份——删了会自动重建。
 
 一键备份（双击 `backup.bat`，或命令行 `npm run backup`）：
 
@@ -724,7 +724,7 @@ D:\CharacterLibrary-Backup\
 数据库不用动：
 
 ```bat
-set CL_DATA_DIR=E:\CharacterLibrary
+set CL_DATA_DIR=D:\CharacterLibrary
 set CL_CACHE_DIR=D:\my-cache
 start.bat
 ```

@@ -18,7 +18,7 @@ if not defined NODE_BIN (
   exit /b 1
 )
 
-echo [BACKUP] Copying E:\CharacterLibrary to D:\CharacterLibrary-Backup ...
+echo [BACKUP] Copying D:\CharacterLibrary to D:\CharacterLibrary-Backup ...
 echo          (server can keep running)
 echo.
 
