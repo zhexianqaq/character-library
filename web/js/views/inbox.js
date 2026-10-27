@@ -14,6 +14,14 @@ import { pushEsc, escDepth } from '../esc.js';
 const PAGE_SIZE = 120;
 
 /**
+ * 上次分发用的库（模块级：切库、重新渲染都还在）。
+ *
+ * 连续往角色库分发时，每次打开都落回「人物库」很烦 —— shelves[0] 永远是人物库。
+ * 只记库不记条目：条目默认还是第一个，免得不小心又分给上一个角色。
+ */
+let lastDistShelf = 0;
+
+/**
  * 全部库（kind=inbox）：一个「收件箱 + 总览」两用的库。
  *
  *   未分发 —— 媒体挂在库的隐藏容器条目下面，文件在 <库名>/未分类/图片|视频
@@ -536,14 +544,19 @@ export async function InboxView(root, shelfId, opts = {}) {
       await loadPacks(Number(def));
     }
 
+    // 上次选过哪个库就用哪个，没有就第一个
+    const defShelf = shelves.find((s) => s.id === lastDistShelf) || shelves[0];
     const shelfDD = createDropdown({
       options: shelves.map((s) => ({ value: String(s.id), label: s.name })),
-      value: String(shelves[0].id),
+      value: String(defShelf.id),
       allowEmpty: false,
-      onChange: (v) => loadChars(Number(v)),
+      onChange: (v) => {
+        lastDistShelf = Number(v);
+        loadChars(Number(v));
+      },
     });
     mask.querySelector('[data-slot-shelf]').appendChild(shelfDD.el);
-    await loadChars(Number(shelves[0].id));
+    await loadChars(Number(defShelf.id));
     paintTagHints();
 
     /**
@@ -593,6 +606,7 @@ export async function InboxView(root, shelfId, opts = {}) {
         const sid = Number(b.dataset.shelf);
         const cid = Number(b.dataset.char);
         shelfDD.setValue(String(sid));
+        lastDistShelf = sid; // setValue 不触发 onChange，这里手动记一下
         await loadChars(sid, cid);
         toast('已定位到该条目，确认图包后点「移动并分发」');
       });
@@ -611,6 +625,8 @@ export async function InboxView(root, shelfId, opts = {}) {
           packId = created.id;
         }
         const r = await api.addMediaToPack(Number(packId), ids);
+        // 记下这次用的库：下一张分发时直接停在这里
+        lastDistShelf = Number(shelfDD.getValue()) || lastDistShelf;
         const bad = r.skipped || [];
         toast(
           bad.length
