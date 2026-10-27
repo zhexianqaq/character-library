@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -37,7 +38,7 @@ export const PREVIEW_WIDTH = 1400;
 
 /**
  * 找可执行文件：环境变量 → 本机已知路径（保持不变，别让 winget 之类的 shim 顶掉）→ PATH。
- * 以前是写死 `C:\Users\35155\...`，换台机器 / 换个用户就整条视频链路哑掉。
+ * 别写死某个用户的绝对路径：换台机器 / 换个用户，整条视频链路就哑了。
  */
 function resolveBinary(envKey, name, knownPath) {
   const fromEnv = process.env[envKey];
@@ -54,8 +55,10 @@ function resolveBinary(envKey, name, knownPath) {
   return name; // 交给系统 PATH，真没有时 execFile 会报 ENOENT（错误信息里有命令名）
 }
 
-export const ffmpegPath = resolveBinary('CL_FFMPEG', 'ffmpeg', 'C:\\Users\\35155\\.local\\bin\\ffmpeg.exe');
-export const ffprobePath = resolveBinary('CL_FFPROBE', 'ffprobe', 'C:\\Users\\35155\\.local\\bin\\ffprobe.exe');
+// 便携安装常把 ffmpeg 放进 ~/.local/bin，用 homedir 拼出来，不写死用户名
+const homeBin = (name) => path.join(os.homedir(), '.local', 'bin', name);
+export const ffmpegPath = resolveBinary('CL_FFMPEG', 'ffmpeg', homeBin('ffmpeg.exe'));
+export const ffprobePath = resolveBinary('CL_FFPROBE', 'ffprobe', homeBin('ffprobe.exe'));
 
 export function ensureDirs() {
   for (const d of [DATA_DIR, CATALOG_DIR, CACHE_DIR, THUMB_DIR, PREVIEW_DIR, INBOX_DIR, POSTER_DIR]) {

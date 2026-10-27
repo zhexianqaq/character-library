@@ -5,6 +5,43 @@
 > 功能索引（每个功能是哪一版加的）、版本历史总表、提交与 tag 约定，见 **[README.md](README.md#功能一览)**。
 > 本文件只记「每个版本具体改了什么、踩到了什么坑」。
 
+## v3.48 — 开源准备：仓库转公开 + README 重写
+
+仓库从 private 转为 public。公开前做了三件事。
+
+### 1. README 重写开头
+
+原来的开头是「自己的本地素材库 + 素材源路径 + 当前库统计」，更像个人笔记。改成能独立看懂的项目主页：
+
+- 一句话定位 + 四条约束（不是扫描器、数据不出本机）
+- 技术栈表格（前端零构建 / Node + SQLite + sharp / Rust 壳 / 相对路径存储）
+- 能力清单（五种库形态、四种进料方式、浏览、标签、搜索、漫画阅读器、批量与键盘、增量同步、备份）
+- 快速开始（`npm install` + `start.bat`，数据目录用环境变量换）
+- 数据模型与规模：四层目录 + 各库形态的量级示例
+
+原有技术章节（层级、上传、API、性能、备份、版本历史）全部保持。
+
+### 2. 清掉本机痕迹
+
+公开仓库里不该出现某个用户的目录：
+
+| 位置 | 原来 | 现在 |
+|---|---|---|
+| `start.bat` / `test.bat` / `backup.bat` | 写死 `C://Users//<用户名>//.workbuddy//...//22.22.2-6//node.exe` | `where node` → `%ProgramFiles%\nodejs` → `%USERPROFILE%\.workbuddy\...\versions\*`（通配，不绑版本号） |
+| `server/src/config.js` | ffmpeg / ffprobe 兜底写死 `C://Users//<用户名>//.local//bin//...` | `path.join(os.homedir(), '.local', 'bin', name)` |
+| `tools/bench-api.mjs` / `bench-thumb.mjs` | 依赖路径与数据目录写死旧项目目录 | 相对 `import.meta.url` / `CL_DATA_DIR` |
+| `tools/survey.py` / `analyze_packs.py` | 扫描目录写死私人素材目录 | `argv[1]` 或 `CL_SCAN_DIR` |
+| `tools/e2e.mjs` | ffmpeg 兜底写死用户路径 | `'ffmpeg'`（走 PATH） |
+| README | 真实库统计、coser 账号、私人目录名 | 中性示例与占位符 |
+
+改完 `git grep -E "35155|X-Vault|ams.workbuddy"` 为空。`ffmpeg` 仍能解析到（`os.homedir()` 拼出来的路径在所有用户下都成立）。
+
+### 3. 补许可声明
+
+未声明开源协议（All rights reserved）：代码公开是为方便查看实现与提 issue，不代表可商用或二次分发。
+
+首次公开时补推了 `v3.46` / `v3.47` 两个 tag（之前只在本地）。
+
 ## v3.47 — 关窗口不再卡：先消失，再收尾
 
 点 X 之后要等一两秒窗口才消失。原因不在 WebView2，在关闭流程：
@@ -894,7 +931,7 @@ v3.34 只有一个上下连续滚动，看单页细节和跨页大图都不合�
 
 **环境与兼容**
 
-- `ffmpeg` / `ffprobe` 不再写死 `C:\Users\35155\...`：`CL_FFMPEG`/`CL_FFPROBE` →
+- `ffmpeg` / `ffprobe` 不再写死 `C:\Users\<user>\...`：`CL_FFMPEG`/`CL_FFPROBE` →
   本机已知路径 → `PATH` → 交给系统
 - 目录 / 文件命名处理 Windows 保留名（`CON` / `NUL` / `COM1`…，带扩展名也算）、
   结尾空格与点、以及截断后可能又落到这些形态的情况；只作用于**新起的名字**，

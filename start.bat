@@ -7,8 +7,12 @@ where node >nul 2>nul
 if not errorlevel 1 set "NODE_BIN=node"
 
 if not defined NODE_BIN (
-  if exist "C:\Users\35155\.workbuddy\binaries\node\versions\22.22.2-6\node.exe" (
-    set "NODE_BIN=C:\Users\35155\.workbuddy\binaries\node\versions\22.22.2-6\node.exe"
+  if exist "%ProgramFiles%\nodejs\node.exe" set "NODE_BIN=%ProgramFiles%\nodejs\node.exe"
+)
+rem portable node: managed environments keep several versions side by side
+if not defined NODE_BIN (
+  for /d %%D in ("%USERPROFILE%\.workbuddy\binaries\node\versions\*") do (
+    if not defined NODE_BIN if exist "%%D\node.exe" set "NODE_BIN=%%D\node.exe"
   )
 )
 

@@ -6,11 +6,11 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 
-const require = createRequire('D:/ams/workbuddy/character-library/server/package.json');
+const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Database = require('better-sqlite3');
 const sharp = require('sharp');
 
-const ROOT = 'D:/ams/workbuddy/character-library/library';
+const ROOT = process.env.CL_DATA_DIR || 'E:\\CharacterLibrary';
 const db = new Database(path.join(ROOT, '.catalog/library.db'), { readonly: true });
 
 const rows = db
@@ -18,7 +18,7 @@ const rows = db
   .all();
 
 const src = (r) => path.join(ROOT, ...r.rel_path.split('/'));
-const OUT = 'D:/ams/workbuddy/character-library/library/.catalog/bench';
+const OUT = path.join(ROOT, '.catalog', 'bench');
 await fs.mkdir(OUT, { recursive: true });
 
 async function one(i) {

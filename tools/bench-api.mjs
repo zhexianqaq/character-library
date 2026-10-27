@@ -2,12 +2,8 @@
  * 缩略图接口吞吐实测（真实并行客户端，不用 python 线程池）。
  * 用法：node tools/bench-api.mjs [packId]
  */
-import { createRequire } from 'node:module';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-
-const require = createRequire('D:/ams/workbuddy/character-library/server/package.json');
-void require;
 
 const BASE = 'http://127.0.0.1:7788';
 

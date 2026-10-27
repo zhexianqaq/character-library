@@ -1,9 +1,9 @@
-"""第二轮只读分析：验证图包切分粒度（按帖子 vs 按日期），以及视频命名规律。"""
-import os, re, json
+"""只读分析图包切分粒度（按帖子 vs 按日期）与视频命名规律。目录取 argv[1] 或 CL_SCAN_DIR。"""
+import os, sys, re, json
 from pathlib import Path
 from collections import Counter, defaultdict
 
-ROOT = Path(r"E:\X-Vault珍藏馆")
+ROOT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(os.environ.get("CL_SCAN_DIR", r"E:\待整理"))
 IMG = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.avif', '.heic'}
 VID = {'.mp4', '.mov', '.mkv', '.avi', '.wmv', '.webm', '.m4v', '.flv'}
 

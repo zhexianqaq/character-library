@@ -2074,7 +2074,7 @@ try {
   );
 
   // 11. 视频封面：只有视频有这颗按钮；抽当前帧；能恢复默认
-  const FFMPEG = process.env.CL_FFMPEG || 'C:\\Users\\35155\\.local\\bin\\ffmpeg.exe';
+  const FFMPEG = process.env.CL_FFMPEG || 'ffmpeg';
   const vChar = await jpost('/api/characters', { shelfId: 1, name: `E2E视频${tag}` });
   const vidFile = path.join(os.tmpdir(), `e2e-cover-${tag}.mp4`);
   await new Promise((res, rej) =>

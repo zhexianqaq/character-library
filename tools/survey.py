@@ -1,9 +1,9 @@
-"""只读扫描 E:\\X-Vault珍藏馆，统计素材实况。不写入、不移动任何源文件。"""
-import os, json, re, time
+"""只读扫描一个目录（argv[1] 或 CL_SCAN_DIR），统计素材实况。不写入、不移动任何源文件。"""
+import os, sys, json, re, time
 from pathlib import Path
 from collections import Counter, defaultdict
 
-ROOT = Path(r"E:\X-Vault珍藏馆")
+ROOT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(os.environ.get("CL_SCAN_DIR", r"E:\待整理"))
 OUT = Path(__file__).with_name("survey.json")
 
 IMG = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.avif', '.heic', '.jfif', '.tif', '.tiff'}

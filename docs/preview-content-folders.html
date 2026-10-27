@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>内容文件夹 · 界面预览</title>
+<style>
+  :root{
+    --bg:#f5f5f5; --card:#fff; --text:#1d1d1f; --text-2:#6e6e73; --text-3:#a1a1a6;
+    --line:#e9e9ee; --fill:#f2f2f5; --fill-2:#e8e8ec;
+    --r-panel:20px; --r-card:16px; --r-ctl:10px; --gap:8px;
+    --sh-1:0 1px 2px rgba(0,0,0,.04), 0 6px 16px rgba(0,0,0,.055);
+    --sh-2:0 2px 6px rgba(0,0,0,.05), 0 20px 44px rgba(0,0,0,.11);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg); color:var(--text);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+  a{color:inherit;text-decoration:none}
+
+  /* ── 外壳 ───────────────────────────────────── */
+  .shell{max-width:1180px;margin:0 auto;padding:14px 20px 60px}
+  .topbar{
+    position:sticky;top:10px;z-index:30;height:44px;border-radius:999px;
+    background:rgba(255,255,255,.86);backdrop-filter:saturate(180%) blur(20px);
+    box-shadow:var(--sh-1);display:flex;align-items:center;gap:6px;padding:0 8px;
+  }
+  .tb-back{
+    width:30px;height:30px;border-radius:999px;display:grid;place-items:center;color:var(--text-2);
+  }
+  .tb-back:hover{background:var(--fill)}
+  .tb-title{font-size:13px;font-weight:600;letter-spacing:.01em}
+  .tb-sub{font-size:12px;color:var(--text-3);font-weight:400}
+  .spacer{flex:1}
+  .tb-btn{
+    height:30px;padding:0 12px;border-radius:999px;font-size:12.5px;color:var(--text-2);
+    display:inline-flex;align-items:center;gap:5px;
+  }
+  .tb-btn:hover{background:var(--fill);color:var(--text)}
+  .tb-btn.dark{background:var(--text);color:#fff}
+  .tb-btn.dark:hover{background:#000}
+
+  .page{margin-top:20px}
+  .head{display:flex;align-items:flex-end;gap:12px;padding:0 4px 14px}
+  .head h1{font-size:26px;letter-spacing:-.02em;margin:0;font-weight:650}
+  .head .meta{font-size:12.5px;color:var(--text-3);padding-bottom:5px}
+  .head .right{margin-left:auto;display:flex;align-items:center;gap:6px}
+
+  .toolbar{display:flex;align-items:center;gap:8px;padding:6px 4px 14px}
+  .segmented{display:inline-flex;background:var(--fill-2);border-radius:var(--r-ctl);padding:2px}
+  .segmented button{
+    height:28px;padding:0 14px;border-radius:8px;font-size:12.5px;color:var(--text-2);
+  }
+  .segmented button.on{background:#fff;color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .count{font-size:12px;color:var(--text-3)}
+  .ctl{
+    height:30px;padding:0 10px;border-radius:var(--r-ctl);border:1px solid var(--line);
+    background:#fff;font-size:12.5px;color:var(--text-2);display:inline-flex;align-items:center;gap:6px;
+  }
+  .ctl:hover{background:var(--fill)}
+  .ctl .arrow{font-size:10px;color:var(--text-3)}
+
+  /* ── 文件夹网格 ─────────────────────────────── */
+  .folders{
+    display:grid;gap:18px 16px;
+    grid-template-columns:repeat(auto-fill,minmax(168px,1fr));
+  }
+  .folder{position:relative;text-align:left}
+  .folder .face{
+    position:relative;aspect-ratio:3/4;border-radius:var(--r-card);overflow:hidden;
+    background:var(--fill);box-shadow:var(--sh-1);transition:transform .18s ease,box-shadow .18s ease;
+  }
+  .folder:hover .face{transform:translateY(-2px);box-shadow:var(--sh-2)}
+  .face .badge{
+    position:absolute;top:8px;left:8px;z-index:2;height:20px;padding:0 8px;border-radius:999px;
+    background:rgba(255,255,255,.94);font-size:11px;line-height:20px;color:#3a3a3c;
+    box-shadow:0 1px 2px rgba(0,0,0,.08);
+  }
+  .face .pcount{
+    position:absolute;right:8px;bottom:8px;z-index:2;height:20px;padding:0 7px;border-radius:999px;
+    background:rgba(0,0,0,.55);color:#fff;font-size:10.5px;line-height:20px;backdrop-filter:blur(6px);
+  }
+  .face .bar{position:absolute;left:0;right:0;bottom:0;height:3px;background:rgba(0,0,0,.08);z-index:2}
+  .face .bar i{display:block;height:100%;background:rgba(255,255,255,.9)}
+
+  /* 模拟照片：不用外链，纯渐变块 */
+  .ph{position:absolute;inset:0}
+  .ph.a{background:linear-gradient(150deg,#dfe6f3,#b9c6de 55%,#8d9cba)}
+  .ph.b{background:linear-gradient(150deg,#f5e3d8,#e4bfa8 60%,#c99477)}
+  .ph.c{background:linear-gradient(150deg,#ddebe4,#a9cfbc 60%,#7fae97)}
+  .ph.d{background:linear-gradient(150deg,#efe2ef,#cbb0cd 60%,#a683aa)}
+  .ph.e{background:linear-gradient(150deg,#e8e8ea,#c9c9cf 60%,#a5a5ad)}
+  .ph.f{background:linear-gradient(150deg,#f2e9dc,#dcc9ac 60%,#bda482)}
+  .grid9{position:absolute;inset:0;display:grid;grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr 1fr;gap:1px;background:#fff}
+  .grid9 i{display:block}
+
+  /* 小说袋：书本样式，跟两种图片型一眼分开 */
+  .bookface{
+    position:absolute;inset:0;display:flex;flex-direction:column;justify-content:space-between;
+    padding:38px 14px 12px 20px;background:#fff;
+  }
+  .bookface::before{content:"";position:absolute;left:8px;top:10px;bottom:10px;width:3px;border-radius:3px;background:#d9d9de}
+  .bookface .name{font-size:13px;font-weight:600;line-height:1.35;letter-spacing:-.01em}
+  .bookface .fmts{display:flex;gap:4px}
+  .bookface .fmt{font-size:9.5px;letter-spacing:.04em;color:var(--text-3);border:1px solid var(--line);border-radius:4px;padding:1px 4px}
+
+  /* 漫画：封面 + 页码 */
+  .comicface{position:absolute;inset:0}
+
+  .folder .cap{margin-top:9px;padding:0 2px}
+  .folder .cap b{display:block;font-size:13px;font-weight:550;letter-spacing:-.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .folder .cap span{display:block;font-size:11.5px;color:var(--text-3);margin-top:2px}
+
+  /* ── 新建菜单 ───────────────────────────────── */
+  .menu{
+    position:absolute;z-index:60;min-width:230px;background:#fff;border-radius:14px;padding:6px;
+    box-shadow:var(--sh-2);display:none;
+  }
+  .menu.on{display:block}
+  .menu button{display:flex;width:100%;gap:10px;padding:9px 10px;border-radius:10px;text-align:left;align-items:center}
+  .menu button:hover{background:var(--fill)}
+  .menu .ic{width:26px;height:26px;border-radius:8px;background:var(--fill);display:grid;place-items:center;font-size:13px;flex:0 0 auto}
+  .menu .t{font-size:12.5px;font-weight:550}
+  .menu .d{font-size:11px;color:var(--text-3);margin-top:1px}
+
+  /* ── 图包瀑布流 ─────────────────────────────── */
+  .masonry{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+  .masonry .tile{
+    position:relative;border-radius:12px;overflow:hidden;background:var(--fill);aspect-ratio:3/4;
+    box-shadow:0 1px 2px rgba(0,0,0,.05);
+  }
+  .masonry .tile.wide{grid-column:span 2;aspect-ratio:16/9}
+  .masonry .tile.tall{aspect-ratio:2/3}
+  .masonry .tile .vtag{
+    position:absolute;top:7px;right:7px;width:18px;height:18px;border-radius:999px;
+    background:rgba(255,255,255,.9);display:grid;place-items:center;font-size:9px;color:#333;
+  }
+
+  /* ── 小说袋列表 ─────────────────────────────── */
+  .novel-list{display:flex;flex-direction:column;gap:8px}
+  .novel-row{
+    display:flex;align-items:center;gap:14px;background:#fff;border-radius:var(--r-card);
+    padding:12px 14px;box-shadow:var(--sh-1);
+  }
+  .novel-row .cover{
+    width:44px;height:60px;border-radius:6px;background:var(--fill-2);position:relative;flex:0 0 auto;overflow:hidden;
+  }
+  .novel-row .cover::before{content:"";position:absolute;left:5px;top:6px;bottom:6px;width:2px;background:rgba(0,0,0,.12);border-radius:2px}
+  .novel-row .cover span{position:absolute;inset:0;display:grid;place-items:center;font-size:9px;color:var(--text-3);letter-spacing:.06em}
+  .novel-row .info{min-width:0;flex:1}
+  .novel-row .info b{display:block;font-size:13.5px;font-weight:550;letter-spacing:-.01em}
+  .novel-row .info span{display:block;font-size:11.5px;color:var(--text-3);margin-top:3px}
+  .novel-row .tagline{display:flex;gap:4px;margin-top:5px}
+  .novel-row .tagline i{font-style:normal;font-size:9.5px;color:var(--text-3);border:1px solid var(--line);border-radius:4px;padding:1px 4px;letter-spacing:.04em}
+  .dropzone{
+    margin-top:10px;border:1px dashed #d6d6db;border-radius:var(--r-card);padding:22px;text-align:center;
+    font-size:12.5px;color:var(--text-3);background:rgba(255,255,255,.55);
+  }
+
+  /* ── 小说阅读 ───────────────────────────────── */
+  .reader-wrap{max-width:760px;margin:0 auto}
+  .paper{
+    background:#fff;border-radius:var(--r-panel);box-shadow:var(--sh-1);padding:52px 60px 64px;
+    font-family:"Noto Serif SC","Songti SC",SimSun,serif;font-size:17.5px;line-height:2;color:#242426;
+  }
+  .paper h2{font-size:19px;font-weight:600;letter-spacing:.02em;margin:0 0 26px;font-family:inherit}
+  .paper p{margin:0 0 .9em;text-indent:2em}
+  .paper .muted{color:var(--text-3);text-indent:0;font-size:12.5px;font-family:-apple-system,"Noto Sans SC",sans-serif}
+  .reader-bar{display:flex;align-items:center;gap:8px;margin-top:14px;padding:0 2px}
+  .reader-bar .pg{font-size:12px;color:var(--text-3);margin:0 auto}
+
+  /* ── 漫画详情 ───────────────────────────────── */
+  .comic-hero{display:flex;gap:22px;align-items:flex-start;padding:2px 4px 20px}
+  .comic-hero .cover{width:198px;aspect-ratio:3/4;border-radius:var(--r-card);overflow:hidden;box-shadow:var(--sh-2);position:relative;flex:0 0 auto}
+  .comic-hero .cover .badge{position:absolute;top:8px;left:8px;z-index:2;height:20px;padding:0 8px;border-radius:999px;background:rgba(255,255,255,.94);font-size:11px;line-height:20px;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .comic-hero .info{padding-top:4px;min-width:0}
+  .comic-hero .info h2{font-size:27px;letter-spacing:-.02em;margin:0 0 6px;font-weight:650}
+  .comic-hero .info .sub{font-size:12.5px;color:var(--text-3)}
+  .comic-hero .acts{display:flex;gap:8px;margin-top:18px}
+  .btn-dark{height:34px;padding:0 16px;border-radius:999px;background:var(--text);color:#fff;font-size:12.5px;display:inline-flex;align-items:center;gap:6px}
+  .btn-dark:hover{background:#000}
+  .btn-ghost{height:34px;padding:0 16px;border-radius:999px;background:#fff;border:1px solid var(--line);font-size:12.5px;color:var(--text-2)}
+  .btn-ghost:hover{background:var(--fill)}
+  .progress-line{margin-top:18px;width:260px}
+  .progress-line .t{display:flex;justify-content:space-between;font-size:11px;color:var(--text-3);margin-bottom:6px}
+  .progress-line .track{height:4px;border-radius:999px;background:var(--fill-2);overflow:hidden}
+  .progress-line .track i{display:block;height:100%;background:#3a3a3c}
+
+  .chapter-head{display:flex;align-items:baseline;gap:8px;padding:16px 4px 10px}
+  .chapter-head b{font-size:13px;font-weight:600}
+  .chapter-head span{font-size:11.5px;color:var(--text-3)}
+  .pagegrid{display:grid;grid-template-columns:repeat(8,1fr);gap:8px}
+  .pagegrid button{position:relative;aspect-ratio:3/4;border-radius:8px;overflow:hidden;background:var(--fill);box-shadow:0 1px 2px rgba(0,0,0,.05)}
+  .pagegrid button .n{
+    position:absolute;left:0;right:0;bottom:0;height:16px;background:rgba(0,0,0,.45);
+    color:#fff;font-size:9.5px;line-height:16px;text-align:center;letter-spacing:.03em;
+  }
+  .pagegrid button.read{outline:2px solid #1d1d1f;outline-offset:-2px}
+
+  /* ── 漫画阅读器 ─────────────────────────────── */
+  body.reader-mode{background:#f0f0f1}
+  body.reader-mode .topbar{display:none}
+  .comic-reader{background:#f0f0f1;min-height:100vh;padding:0 0 80px}
+  .cr-bar{
+    position:sticky;top:10px;z-index:40;margin:14px auto 0;width:fit-content;height:40px;
+    display:flex;align-items:center;gap:10px;padding:0 8px 0 6px;border-radius:999px;
+    background:rgba(255,255,255,.9);backdrop-filter:saturate(180%) blur(20px);box-shadow:var(--sh-1);
+  }
+  .cr-bar .pg{font-size:12px;color:var(--text-2);font-variant-numeric:tabular-nums;min-width:74px;text-align:center}
+  .cr-bar .nm{font-size:12.5px;font-weight:550;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cr-rail{position:fixed;right:14px;top:50%;transform:translateY(-50%);width:3px;height:200px;border-radius:3px;background:rgba(0,0,0,.07);z-index:35}
+  .cr-rail i{position:absolute;top:0;left:0;width:100%;border-radius:3px;background:#3a3a3c;height:12%}
+  .cr-pages{max-width:720px;margin:16px auto 0;display:flex;flex-direction:column;gap:8px}
+  .cr-page{position:relative;border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08);aspect-ratio:3/4;background:#fff}
+  .cr-page .lbl{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:12px;color:rgba(255,255,255,.9);letter-spacing:.08em}
+  .cr-page.wide{aspect-ratio:16/10}
+  .cr-page .no{position:absolute;right:8px;bottom:8px;font-size:10.5px;color:rgba(255,255,255,.85);background:rgba(0,0,0,.35);padding:1px 6px;border-radius:999px}
+
+  /* 预览角标 */
+  .demo-chip{
+    position:fixed;left:14px;bottom:14px;z-index:80;height:26px;padding:0 10px;border-radius:999px;
+    background:rgba(255,255,255,.9);box-shadow:var(--sh-1);font-size:11px;color:var(--text-3);
+    display:flex;align-items:center;gap:6px;backdrop-filter:blur(12px);
+  }
+  .demo-chip i{width:5px;height:5px;border-radius:999px;background:#34c759;font-style:normal}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="topbar">
+    <button class="tb-back" id="back" aria-label="返回">‹</button>
+    <span class="tb-title" id="tbTitle">伊什塔尔</span>
+    <span class="tb-sub" id="tbSub">角色库</span>
+    <span class="spacer"></span>
+    <span id="tbActions"></span>
+  </div>
+
+  <div id="view"></div>
+</div>
+
+<div class="demo-chip"><i></i>界面预览 · 模拟数据</div>
+
+<script>
+/* ─────────────────────────────────────────────
+   模拟数据
+   ───────────────────────────────────────────── */
+const CHAR = { name: '伊什塔尔', shelf: '角色库', work: 'Fate/Grand Order', alias: 'Ishtar / イシュタル' };
+
+const FOLDERS = [
+  { id: 'p1', type: 'pack',  title: '2024 年 11 月', meta: '24 项 · 6 个视频', grad: 'a' },
+  { id: 'c1', type: 'comic', title: 'FGO 漫画选集',  meta: '12 话 · 340 页', pages: 340, read: 12, grad: 'd' },
+  { id: 'n1', type: 'novel', title: 'Fate 同人合集', meta: '3 本 · 32.4 万字', formats: ['TXT', 'EPUB'] },
+  { id: 'p2', type: 'pack',  title: '2025 年 3 月',  meta: '18 项', grad: 'b' },
+  { id: 'c2', type: 'comic', title: '差分表情集',    meta: '1 话 · 48 页', pages: 48, read: 0, grad: 'c' },
+  { id: 'p3', type: 'pack',  title: '2025 年 7 月',  meta: '31 项 · 2 个视频', grad: 'e' },
+  { id: 'n2', type: 'novel', title: '设定资料集',    meta: '1 本 · 8.2 万字', formats: ['TXT'] },
+  { id: 'p4', type: 'pack',  title: '未分类',        meta: '9 项', grad: 'f' },
+];
+
+const PACK_TILES = [
+  ['a', 1], ['b', 0], ['c', 0], ['d', 1], ['e', 0], ['f', 0], ['a', 0], ['b', 1],
+  ['c', 0], ['d', 0], ['e', 0], ['f', 0], ['a', 0], ['b', 0], ['c', 0], ['d', 0],
+];
+
+const BOOKS = [
+  { name: '命运之夜 · 冬日篇', author: '黑桐', fmt: 'TXT', words: '18.6 万字', chapters: 24, size: '1.2 MB' },
+  { name: '第七圣杯战争纪要', author: '橙子', fmt: 'EPUB', words: '9.8 万字', chapters: 12, size: '4.8 MB' },
+  { name: '女神异闻录', author: '佚名', fmt: 'TXT', words: '4.0 万字', chapters: 6, size: '320 KB' },
+];
+
+const SAMPLE_TEXT = [
+  '夜色从山脊上压下来的时候，乌鲁克的灯才刚亮起来。',
+  '她坐在神殿最高的台阶上，脚边堆着没拆完的供品，金色的头发被风吹得有些乱。远处传来牧羊人的笛声，断断续续，像是随时会熄灭。',
+  '「又是这样。」她低声说。没有人回答，风把这句话吹散了。',
+  '台阶下面走过一队祭司，捧着刚出炉的面包和一小罐蜂蜜。他们抬头看了一眼，又飞快地低下头去 —— 谁都知道今天不该多话。',
+];
+
+/* ─────────────────────────────────────────────
+   工具
+   ───────────────────────────────────────────── */
+const $ = (sel, root = document) => root.querySelector(sel);
+const el = (html) => { const d = document.createElement('div'); d.innerHTML = html.trim(); return d.firstElementChild; };
+const view = $('#view');
+
+let stack = [];
+function setTop(title, sub, actions = '') {
+  $('#tbTitle').textContent = title;
+  $('#tbSub').textContent = sub;
+  $('#tbActions').innerHTML = actions;
+  $('#back').style.visibility = stack.length ? 'visible' : 'hidden';
+}
+
+function go(name, params = {}, push = true) {
+  if (push) stack.push({ name, params });
+  render(name, params);
+}
+function back() {
+  stack.pop();
+  const prev = stack[stack.length - 1] || { name: 'entry', params: {} };
+  render(prev.name, prev.params);
+}
+
+/* ─────────────────────────────────────────────
+   1. 条目页：三种文件夹
+   ───────────────────────────────────────────── */
+function faceHtml(f) {
+  if (f.type === 'novel') {
+    return `<div class="face">
+      <div class="bookface">
+        <div class="name">${f.title}</div>
+        <div class="fmts">${f.formats.map((x) => `<span class="fmt">${x}</span>`).join('')}</div>
+      </div>
+      <span class="badge">小说袋</span>
+    </div>`;
+  }
+  const inner = f.type === 'comic'
+    ? `<div class="comicface"><div class="ph ${f.grad}"></div></div>`
+    : `<div class="grid9">${Array.from({ length: 9 }, (_, i) =>
+        `<i class="ph ${'abcdef'[(i + (f.grad.charCodeAt(0) - 97)) % 6]}"></i>`).join('')}</div>`;
+  const pages = f.type === 'comic' ? `<span class="pcount">${f.pages} 页</span>` : '';
+  const bar = f.type === 'comic'
+    ? `<div class="bar"><i style="width:${Math.round((f.read / f.pages) * 100)}%"></i></div>`
+    : '';
+  return `<div class="face">${inner}${pages}${bar}<span class="badge">${f.type === 'comic' ? '漫画' : '图包'}</span></div>`;
+}
+
+function renderEntry() {
+  stack = [];
+  setTop(CHAR.name, CHAR.shelf,
+    `<button class="tb-btn" id="btnNew">＋ 新建</button>`);
+
+  view.innerHTML = `
+    <div class="page">
+      <div class="head">
+        <h1>${CHAR.name}</h1>
+        <div class="meta">${CHAR.work} · ${CHAR.alias}</div>
+        <div class="right">
+          <span class="count">14 个文件夹 · 3,204 个媒体</span>
+        </div>
+      </div>
+      <div class="toolbar">
+        <div class="segmented">
+          <button class="on">文件夹</button>
+          <button>全部媒体</button>
+        </div>
+        <span class="spacer"></span>
+        <button class="ctl">名称 <span class="arrow">↑</span></button>
+        <button class="ctl">选取</button>
+      </div>
+      <div class="folders" id="folders"></div>
+    </div>`;
+
+  const box = $('#folders');
+  FOLDERS.forEach((f) => {
+    const card = el(`<button class="folder" data-id="${f.id}">
+      ${faceHtml(f)}
+      <div class="cap"><b>${f.title}</b><span>${f.meta}</span></div>
+    </button>`);
+    card.addEventListener('click', () => openFolder(f));
+    box.appendChild(card);
+  });
+
+  $('#btnNew').addEventListener('click', (e) => openNewMenu(e.currentTarget));
+}
+
+function openFolder(f) {
+  if (f.type === 'pack') go('pack', { f });
+  else if (f.type === 'comic') go('comic', { f });
+  else go('novelbag', { f });
+}
+
+function openNewMenu(anchor) {
+  const r = anchor.getBoundingClientRect();
+  const menu = el(`<div class="menu on">
+    <button data-k="pack"><span class="ic">▦</span><span><span class="t">图包</span><div class="d">图片 / 视频，按月份归档</div></span></button>
+    <button data-k="novel"><span class="ic">▤</span><span><span class="t">小说袋</span><div class="d">TXT / EPUB 正文</div></span></button>
+    <button data-k="comic"><span class="ic">▥</span><span><span class="t">漫画</span><div class="d">按页码顺序阅读</div></span></button>
+  </div>`);
+  menu.style.left = Math.max(12, r.right - 232) + 'px';
+  menu.style.top = r.bottom + 8 + 'px';
+  menu.style.position = 'fixed';
+  document.body.appendChild(menu);
+  const close = (e) => { if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('mousedown', close); } };
+  setTimeout(() => document.addEventListener('mousedown', close), 0);
+  menu.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+    menu.remove();
+    if (b.dataset.k === 'pack') go('pack', { f: FOLDERS[0] });
+    if (b.dataset.k === 'novel') go('novelbag', { f: FOLDERS[2] });
+    if (b.dataset.k === 'comic') go('comic', { f: FOLDERS[1] });
+  }));
+}
+
+/* ─────────────────────────────────────────────
+   2. 图包（保持现状）
+   ───────────────────────────────────────────── */
+function renderPack({ f }) {
+  setTop('图包', `${CHAR.name} · ${f.title}`,
+    `<button class="tb-btn">编辑</button>`);
+  view.innerHTML = `
+    <div class="page">
+      <div class="head" style="align-items:flex-start">
+        <div>
+          <div class="meta" style="margin:0 0 5px">${CHAR.name}</div>
+          <h1 style="font-size:23px">${f.title}</h1>
+        </div>
+        <div class="right" style="padding-top:6px"><span class="count">24 项 · 6 个视频</span></div>
+      </div>
+      <div class="toolbar">
+        <button class="ctl">名称 <span class="arrow">↑</span></button>
+        <span class="spacer"></span>
+        <button class="ctl">选取</button>
+        <button class="ctl">＋ 添加素材</button>
+      </div>
+      <div class="masonry" id="masonry"></div>
+    </div>`;
+  const m = $('#masonry');
+  PACK_TILES.forEach(([g, v], i) => {
+    m.appendChild(el(`<div class="tile ${i % 7 === 3 ? 'wide' : i % 5 === 2 ? 'tall' : ''}">
+      <div class="ph ${g}"></div>${v ? '<span class="vtag">▶</span>' : ''}
+    </div>`));
+  });
+}
+
+/* ─────────────────────────────────────────────
+   3. 小说袋
+   ───────────────────────────────────────────── */
+function renderNovelBag({ f }) {
+  setTop('小说袋', `${CHAR.name} · ${f.title}`,
+    `<button class="tb-btn" id="bagEdit">编辑</button>`);
+  view.innerHTML = `
+    <div class="page" style="max-width:820px">
+      <div class="head" style="align-items:flex-start">
+        <div>
+          <div class="meta" style="margin:0 0 5px">${CHAR.name}</div>
+          <h1 style="font-size:23px">${f.title}</h1>
+        </div>
+        <div class="right" style="padding-top:6px"><span class="count">3 本 · 32.4 万字</span></div>
+      </div>
+      <div class="toolbar">
+        <span class="count">小说袋里可以放多本，也可以只放一本</span>
+        <span class="spacer"></span>
+        <button class="ctl">＋ 添加小说</button>
+      </div>
+      <div class="novel-list" id="books"></div>
+      <div class="dropzone">把 TXT / EPUB 拖到这里</div>
+    </div>`;
+  const box = $('#books');
+  BOOKS.forEach((b) => {
+    const row = el(`<div class="novel-row">
+      <div class="cover"><span>${b.fmt}</span></div>
+      <div class="info">
+        <b>${b.name}</b>
+        <span>${b.author} · ${b.words} · ${b.chapters} 章 · ${b.size}</span>
+        <div class="tagline"><i>${b.fmt}</i><i>已读 3 / ${b.chapters}</i></div>
+      </div>
+      <button class="btn-ghost" data-read>阅读</button>
+    </div>`);
+    row.querySelector('[data-read]').addEventListener('click', () => go('novelread', { book: b, bag: f }));
+    box.appendChild(row);
+  });
+}
+
+/* ─────────────────────────────────────────────
+   4. 小说阅读
+   ───────────────────────────────────────────── */
+function renderNovelRead({ book, bag }) {
+  setTop('阅读', `${bag.title} · ${book.fmt}`,
+    `<button class="tb-btn">目录</button><button class="tb-btn">Aa</button>`);
+  view.innerHTML = `
+    <div class="page">
+      <div class="reader-wrap">
+        <div class="paper">
+          <h2>第三章 · 神塔的黄昏</h2>
+          ${SAMPLE_TEXT.map((t) => `<p>${t}</p>`).join('')}
+          <p class="muted">TXT 直接渲染；EPUB 需先解析（当前项目还没有阅读器，见说明）</p>
+        </div>
+        <div class="reader-bar">
+          <button class="ctl">上一章</button>
+          <span class="pg">3 / ${book.chapters} 章</span>
+          <button class="ctl">下一章</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+/* ─────────────────────────────────────────────
+   5. 漫画详情
+   ───────────────────────────────────────────── */
+function renderComic({ f }) {
+  setTop('漫画', `${CHAR.name} · ${f.title}`,
+    `<button class="tb-btn">编辑</button>`);
+  const pct = Math.round((f.read / f.pages) * 100);
+  view.innerHTML = `
+    <div class="page">
+      <div class="comic-hero">
+        <div class="cover"><div class="ph d"></div><span class="badge">漫画</span></div>
+        <div class="info">
+          <h2>${f.title}</h2>
+          <div class="sub">12 话 · ${f.pages} 页 · 1420 × 2000</div>
+          <div class="acts">
+            <button class="btn-dark" id="read">继续阅读 · 第 ${f.read + 1} 页</button>
+            <button class="btn-ghost" id="fromStart">从头开始</button>
+          </div>
+          <div class="progress-line">
+            <div class="t"><span>已读 ${f.read} / ${f.pages} 页</span><span>${pct}%</span></div>
+            <div class="track"><i style="width:${pct}%"></i></div>
+          </div>
+        </div>
+      </div>
+      <div class="chapter-head"><b>第一话 · 巴比伦的午后</b><span>第 1–12 页</span></div>
+      <div class="pagegrid" id="pages"></div>
+    </div>`;
+  const box = $('#pages');
+  for (let i = 1; i <= 16; i += 1) {
+    const b = el(`<button class="${i <= 12 ? 'read' : ''}" data-p="${i}">
+      <div class="ph ${'abcdef'[i % 6]}"></div>
+      <span class="n">${String(i).padStart(2, '0')}</span>
+    </button>`);
+    b.addEventListener('click', () => go('comicread', { f, start: i }));
+    box.appendChild(b);
+  }
+  $('#read').addEventListener('click', () => go('comicread', { f, start: f.read + 1 }));
+  $('#fromStart').addEventListener('click', () => go('comicread', { f, start: 1 }));
+}
+
+/* ─────────────────────────────────────────────
+   6. 漫画阅读器（上下连续滚动）
+   ───────────────────────────────────────────── */
+function renderComicRead({ f, start }) {
+  setTop('阅读', f.title, `<button class="tb-btn">目录</button>`);
+  stack[stack.length - 1] = { name: 'comicread', params: { f, start } };
+  // 只画 24 页做示意；真实实现按视口窗口化
+  const total = 24;
+  const pages = Array.from({ length: total }, (_, i) => {
+    const n = i + 1;
+    const g = 'abcdef'[n % 6];
+    return `<div class="cr-page ${n % 9 === 0 ? 'wide' : ''}" data-n="${n}">
+      <div class="ph ${g}"></div><span class="lbl">第 ${n} 页</span><span class="no">${n}</span>
+    </div>`;
+  }).join('');
+
+  view.innerHTML = `
+    <div class="comic-reader">
+      <div class="cr-bar">
+        <button class="tb-back" id="crBack" aria-label="返回">‹</button>
+        <span class="nm">${f.title}</span>
+        <span class="pg" id="pg">${start} / ${f.pages}</span>
+        <button class="tb-btn" id="toTop">顶部</button>
+      </div>
+      <div class="cr-rail"><i id="rail"></i></div>
+      <div class="cr-pages" id="crPages">${pages}</div>
+    </div>`;
+
+  const scroller = view.querySelector('.comic-reader');
+  window.scrollTo(0, 0);
+  const target = view.querySelector(`[data-n="${Math.min(total, start)}"]`);
+  if (target) window.scrollTo(0, target.getBoundingClientRect().top + window.scrollY - 70);
+
+  const pg = $('#pg');
+  const rail = $('#rail');
+  const list = [...view.querySelectorAll('.cr-page')];
+  const onScroll = () => {
+    const mid = window.innerHeight * 0.38;
+    let cur = list[0];
+    for (const p of list) if (p.getBoundingClientRect().top <= mid) cur = p;
+    if (!cur) return;
+    pg.textContent = `${cur.dataset.n} / ${f.pages}`;
+    const pct = Math.min(100, ((cur.dataset.n - 1) / (f.pages - 1)) * 100);
+    rail.style.height = Math.max(6, pct) + '%';
+  };
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+  window.__detachScroll = () => window.removeEventListener('scroll', onScroll);
+  $('#crBack').addEventListener('click', back);
+  $('#toTop').addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+}
+
+/* ─────────────────────────────────────────────
+   路由
+   ───────────────────────────────────────────── */
+function render(name, params) {
+  if (window.__detachScroll) { window.__detachScroll(); window.__detachScroll = null; }
+  document.body.classList.toggle('reader-mode', name === 'comicread');
+  window.scrollTo(0, 0);
+  if (name === 'entry') renderEntry();
+  else if (name === 'pack') renderPack(params);
+  else if (name === 'novelbag') renderNovelBag(params);
+  else if (name === 'novelread') renderNovelRead(params);
+  else if (name === 'comic') renderComic(params);
+  else if (name === 'comicread') renderComicRead(params);
+  $('#back').style.visibility = stack.length ? 'visible' : 'hidden';
+}
+
+$('#back').addEventListener('click', back);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && stack.length) back();
+});
+render('entry', {});
+
+/* 方便直接打开某一屏：#pack / #novelbag / #novelread / #comic / #comicread */
+(() => {
+  const h = (location.hash || '').replace('#', '');
+  const entry = { name: 'entry', params: {} };
+  if (h === 'pack') { stack = [entry]; render('pack', { f: FOLDERS[0] }); }
+  else if (h === 'novelbag') { stack = [entry]; render('novelbag', { f: FOLDERS[2] }); }
+  else if (h === 'novelread') { stack = [entry]; render('novelread', { book: BOOKS[0], bag: FOLDERS[2] }); }
+  else if (h === 'comic') { stack = [entry]; render('comic', { f: FOLDERS[1] }); }
+  else if (h === 'comicread') { stack = [entry]; render('comicread', { f: FOLDERS[1], start: 4 }); }
+})();
+</script>
+</body>
+</html>
