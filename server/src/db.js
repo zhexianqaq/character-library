@@ -328,6 +328,32 @@ export function refreshPack(packId) {
   d.prepare('UPDATE packs SET cover_media_id = ? WHERE id = ?').run(cover, packId);
 }
 
+/**
+ * 条目统计的合并刷新（上传队列专用）。
+ *
+ * 队列是「一个文件一个请求」，同一角色连传 50 张就会把 3 条聚合 + 封面查询
+ * 跑 50 遍。这里做 leading + trailing：
+ *   第一次立刻算 —— 上传一返回，前端重新拉列表看到的就是新数字；
+ *   `wait` 毫秒内的后续请求合并成窗口结束时的一次。
+ * 只用于「连续写同一个角色」的场景；其他接口要即时结果就继续用 refreshCharacter。
+ */
+const charRefreshTimers = new Map();
+
+export function refreshCharacterSoon(characterId, wait = 400) {
+  const id = Number(characterId) || 0;
+  if (!id) return;
+  const pending = charRefreshTimers.get(id);
+  if (pending) clearTimeout(pending);
+  else refreshCharacter(id);
+  charRefreshTimers.set(
+    id,
+    setTimeout(() => {
+      charRefreshTimers.delete(id);
+      refreshCharacter(id);
+    }, wait)
+  );
+}
+
 export function refreshCharacterPacks(characterId) {
   const d = getDb();
   for (const p of d.prepare('SELECT id FROM packs WHERE character_id = ?').all(characterId)) {

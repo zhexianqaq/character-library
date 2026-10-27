@@ -22,20 +22,19 @@ function titleOf(name) {
 /**
  * 媒体详情页：左边看图 / 放视频，右边信息面板。
  * 序列取「同图包」，没有图包就取「同条目」，← → 在这条序列里走。
+ *
+ * 加载分两步：
+ *   1. 只等 `api.media(id)` —— 一个请求就能画出画面，不用等整个图包的媒体列表；
+ *   2. 列表在后台拉，拉回来只更新「x / y」和左右箭头状态，不重画信息栏。
+ * 翻页时列表已在内存里，就只取这一张的详情（1 个请求），不再重进整个页面。
  */
 export async function MediaView(root, id) {
   let item = await api.media(id);
 
   let siblings = [item];
-  try {
-    const d = item.pack ? await api.packMedia(item.pack.id) : await api.characterMedia(item.character.id);
-    if (d.items && d.items.length) siblings = d.items;
-  } catch {
-    /* 序列拿不到就自己一个 */
-  }
-  if (!siblings.some((x) => x.id === item.id)) siblings = [item, ...siblings];
-  // ← → 的序列跟着图包页的排序走：那边按大小 / 类型排过，这里不能还按文件名翻
-  siblings = sortMedia(siblings, mediaSortState.key, mediaSortState.desc);
+  let siblingsReady = false;
+  /** 列表里同图包 / 同条目的公共上下文：翻页时复用，省一次 media 请求的等待 */
+  const context = { pack: item.pack, character: item.character, shelf: item.shelf };
 
   const indexOf = (mid) => siblings.findIndex((x) => x.id === mid);
 
@@ -167,8 +166,6 @@ export async function MediaView(root, id) {
     const intro =
       item.intro ||
       `与「${isFlat() ? groupName() : item.character.name}」相关的${isVideo ? '视频素材' : '图片素材'}。`;
-    const prev = indexOf(item.id) > 0;
-    const next = indexOf(item.id) < siblings.length - 1;
 
     info.innerHTML = `
       <div class="mp-kicker">${isVideo ? 'VIDEO DETAILS' : animated ? 'GIF DETAILS' : 'IMAGE DETAILS'}</div>
@@ -205,7 +202,7 @@ export async function MediaView(root, id) {
         <button class="tb-btn" data-reveal>打开位置</button>
         <button class="tb-btn danger" data-del>删除</button>
       </div>
-      <div class="mp-navhint">${indexOf(item.id) + 1} / ${siblings.length} · ← → 切换${isVideo ? '' : ' · 点图片全屏'}</div>`;
+      <div class="mp-navhint" data-navhint></div>`;
 
     paintTags();
 
@@ -221,8 +218,25 @@ export async function MediaView(root, id) {
     const ejectBtn = info.querySelector('[data-eject]');
     if (ejectBtn) ejectBtn.addEventListener('click', ejectItem);
 
+    syncNav();
+  }
+
+  /**
+   * 只更新「第几张 / 共几张」和左右箭头 —— 列表在后台补回来时调它，
+   * 不重建信息栏（否则正在编辑的简介会失焦）。
+   */
+  function syncNav() {
+    const at = indexOf(item.id);
+    const prev = at > 0;
+    const next = at >= 0 && at < siblings.length - 1;
     root.querySelector('[data-prev]').classList.toggle('is-off', !prev);
     root.querySelector('[data-next]').classList.toggle('is-off', !next);
+    const hint = info.querySelector('[data-navhint]');
+    if (hint) {
+      hint.textContent = `${at + 1} / ${siblings.length} · ← → 切换${
+        item.kind === 'video' ? '' : ' · 点图片全屏'
+      }`;
+    }
   }
 
   function paintTags() {
@@ -367,6 +381,8 @@ export async function MediaView(root, id) {
   async function removeItem() {
     const ok = await confirmDialog('删除这个媒体？', '磁盘上的原文件也会一起删除，不可恢复。');
     if (!ok) return;
+    const at = indexOf(item.id);
+    const next = siblings[at + 1] || siblings[at - 1] || null;
     try {
       await api.deleteMedia(item.id);
     } catch (err) {
@@ -374,9 +390,8 @@ export async function MediaView(root, id) {
       return;
     }
     toast('已删除');
-    if (siblings.length > 1) {
-      const at = indexOf(item.id);
-      const next = siblings[at + 1] || siblings[at - 1];
+    siblings = siblings.filter((x) => x.id !== item.id);
+    if (next && siblings.length) {
       go(next.id);
     } else {
       history.pushState({}, '', `/c/${item.character.id}`);
@@ -384,9 +399,76 @@ export async function MediaView(root, id) {
     }
   }
 
+  /** 列表在内存里就只换这一张，不再重进页面 */
   function go(mid) {
+    if (!siblings.some((x) => x.id === mid)) {
+      history.replaceState({ from: entryFrom }, '', `/i/${mid}`);
+      window.dispatchEvent(new CustomEvent('app:route'));
+      return;
+    }
+    loadItem(mid);
+  }
+
+  /**
+   * 翻页到列表里的某一张。
+   *
+   * 先用列表项 + 继承来的上下文立刻画（列表项已经有 kind / 宽高 / 文件名 / 封面），
+   * 再只请求这一张的详情补上简介和标签来源 —— 列表接口没有这些字段，
+   * 以前靠「重进整个页面」两个请求换来的，现在一个就够。
+   */
+  async function loadItem(mid) {
+    const sib = siblings.find((x) => x.id === mid);
+    if (!sib) return;
     history.replaceState({ from: entryFrom }, '', `/i/${mid}`);
-    window.dispatchEvent(new CustomEvent('app:route'));
+    item = { ...sib, ...context, intro: sib.intro || '' };
+    renderStage();
+    renderInfo();
+    document.title = `${titleOf(item.fileName)} · 资料库`;
+    prefetchNeighbors();
+    try {
+      const full = await api.media(mid);
+      if (item.id !== mid) return; // 这期间又翻了，别拿旧结果盖回去
+      item = full;
+      renderInfo();
+      prefetchNeighbors();
+    } catch {
+      /* 详情拿不到就停在列表项上，画面和信息都还在 */
+    }
+  }
+
+  /** 预取相邻的一张图：连续按 → 时下一张已经在浏览器缓存里 */
+  function prefetchNeighbors() {
+    const at = indexOf(item.id);
+    for (const d of [1, -1]) {
+      const sib = siblings[at + d];
+      if (!sib || sib.kind === 'video') continue;
+      const img = new Image();
+      img.src = api.preview(sib.id);
+    }
+  }
+
+  /**
+   * 后台补翻页序列：首屏只等 api.media(id)，图包的媒体列表在这里拉。
+   * 回来后只更新「x / y」和箭头状态，不重画信息栏。
+   */
+  async function loadSiblings() {
+    if (siblingsReady) return;
+    try {
+      const d = item.pack ? await api.packMedia(item.pack.id) : await api.characterMedia(item.character.id);
+      if (!root.isConnected) return; // 页面已经被切走
+      const list = Array.isArray(d.items) ? d.items : [];
+      if (list.length) {
+        siblings = list.some((x) => x.id === item.id) ? list : [item, ...list];
+        // ← → 的序列跟着图包页的排序走：那边按大小 / 类型排过，这里不能还按文件名翻
+        siblings = sortMedia(siblings, mediaSortState.key, mediaSortState.desc);
+      }
+      siblingsReady = true;
+      syncNav();
+      prefetchNeighbors();
+    } catch {
+      /* 序列拿不到就自己一个，左右键自然置灰 */
+      siblingsReady = true;
+    }
   }
 
   function step(delta) {
@@ -496,6 +578,8 @@ export async function MediaView(root, id) {
 
   renderStage();
   renderInfo();
+  loadSiblings();
+  prefetchNeighbors();
   document.title = `${titleOf(item.fileName)} · 资料库`;
 
   return () => {

@@ -1,3 +1,17 @@
+/**
+ * 总览缓存（库列表 + 每个库的条目数 / 媒体数 / 占用）。
+ *
+ * 首页渲染要一次，进「全部库」时库总览又要一次 —— 同一屏里打两遍同一个统计接口
+ * 没有意义（那个接口每库 5 个子查询）。1.5 秒 TTL 只用来吸收这种「同一轮渲染」，
+ * 任何写请求成功后立刻失效，导入 / 删除 / 移动不会读到旧数字。
+ */
+const OVERVIEW_TTL = 1500;
+let overviewCache = null;
+
+export function invalidateOverview() {
+  overviewCache = null;
+}
+
 async function req(url, opts = {}) {
   const res = await fetch(url, opts);
   if (!res.ok) {
@@ -12,6 +26,8 @@ async function req(url, opts = {}) {
     err.status = res.status;
     throw err;
   }
+  // 写操作一律让总览作废：宁可多查一次，也不要显示旧数字
+  if (String(opts.method || 'GET').toUpperCase() !== 'GET') invalidateOverview();
   const ct = res.headers.get('content-type') || '';
   return ct.includes('application/json') ? res.json() : res.text();
 }
@@ -72,9 +88,17 @@ export const api = {
   preview: (id) => (id ? `/pv/${id}` : ''),
   original: (id) => `/m/${id}`,
 
-  overview: () => req('/api/overview'),
+  overview: ({ fresh = false } = {}) => {
+    if (!fresh && overviewCache && Date.now() - overviewCache.at < OVERVIEW_TTL) {
+      return Promise.resolve(overviewCache.data);
+    }
+    return req('/api/overview').then((data) => {
+      overviewCache = { at: Date.now(), data };
+      return data;
+    });
+  },
   createShelf: (name, kind = 'people', extra = {}) => json('POST')('/api/shelves', { name, kind, ...extra }),
-  shelves: () => req('/api/overview').then((d) => d.shelves),
+  shelves: () => api.overview().then((d) => d.shelves),
 
   shelfCharacters: (shelfId, params) => req(`/api/shelves/${shelfId}/characters${qs(params)}`),
   novelShelf: (shelfId, params) => req(`/api/shelves/${shelfId}/novel${qs(params)}`),
@@ -132,6 +156,8 @@ export function uploadMedia(charId, files, { packId = null, category = null, onP
     };
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
+        // 上传不走 req()，这里手动让总览失效（图包数 / 媒体数 / 占用都变了）
+        invalidateOverview();
         try {
           resolve(JSON.parse(xhr.responseText));
         } catch {

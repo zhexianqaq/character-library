@@ -63,10 +63,15 @@ function guardStop() {
   window.addEventListener('scroll', stopLive, { passive: true, capture: true });
 }
 
+/** 分片单位：一帧最多往 DOM 里插这么多张。太小会一帧一闪，太大首屏就要等 */
+const CHUNK = 80;
+
 function bindHoverPlay(container, opts) {
   if (opts.selectable) return;
   guardStop();
-  container.querySelectorAll('.tile[data-anim="1"]').forEach((el) => {
+  // 只绑还没绑过的：分片渲染会一批批进 DOM，全量重绑会让同一个瓦片挂上多个监听
+  container.querySelectorAll('.tile[data-anim="1"]:not([data-hover])').forEach((el) => {
+    el.dataset.hover = '1';
     const img = el.querySelector('img');
     if (!img) return;
     el.dataset.thumb = img.getAttribute('src') || '';
@@ -86,47 +91,112 @@ function bindHoverPlay(container, opts) {
   });
 }
 
+/** 给「还没绑过」的瓦片挂事件：分片插入的每一批都会走这里，已绑过的跳过 */
+function bindFresh(container, items, indexById, onOpen, opts) {
+  const fresh = container.querySelectorAll('.tile:not([data-bound])');
+  if (!fresh.length) return;
+  for (const el of fresh) {
+    el.dataset.bound = '1';
+    const id = Number(el.dataset.id);
+    const index = indexById.has(id) ? indexById.get(id) : 0;
+    el.addEventListener('click', (ev) => {
+      // 把事件传出去：选取模式里要看 Shift / Ctrl
+      if (onOpen) onOpen(index, ev);
+    });
+    if (opts.onContext) {
+      el.addEventListener('contextmenu', (e) => {
+        opts.onContext(e, items[index] || items[0], index);
+      });
+    }
+    const img = el.querySelector('img');
+    if (img) fadeIn(img);
+  }
+  bindHoverPlay(container, opts);
+}
+
 /**
  * 渲染瀑布流。列数按容器宽度决定；图片用各自宽高比占位，不裁剪。
  * onOpen(indexInItems) 回调由调用方决定灯箱范围。
  * opts.selectable / opts.isPicked 用来支持多选。
  * opts.spanWide = true 时启用跨列布局：宽/高 > WIDE_AR(1.7) 的素材占两列（人物库 / 角色库用）。
+ * opts.appendFrom = N 时只往已有网格后面补第 N 项之后的（「加载更多」用）——
+ *   已经画好的卡片不再重建，跨列布局也只算一次位置（前面的位置不会因为追加而变）。
+ *
+ * 无论哪种模式，DOM 都是**分帧插入**的：几千张的包先出前 80 张，
+ * 剩下的每帧补一批。一次 innerHTML 塞几千个瓦片会卡住主线程（连筛选条都点不动）。
  */
 export function renderMasonry(container, items, onOpen, opts = {}) {
   stopLive();
+  const list = Array.isArray(items) ? items : [];
   const cols = columnCount(container.clientWidth, COL_W, GAP);
+  const token = (container._mtoken = (container._mtoken || 0) + 1);
+  const indexById = new Map(list.map((x, i) => [x.id, i]));
+
+  let from = Math.max(0, Number(opts.appendFrom) || 0);
+  if (from > 0) {
+    // 列数变了 / 上次不是这套布局：追加会错位，退回全量重画
+    const colsOk = container.dataset.mcols === String(cols);
+    const modeOk = opts.spanWide
+      ? container.classList.contains('is-spanned')
+      : container.querySelectorAll(':scope > .col').length === cols;
+    if (!colsOk || !modeOk) from = 0;
+  }
+  container.dataset.mcols = String(cols);
+
+  /** 待插入队列：跨列模式全进容器，列模式按列分组 */
+  const jobs = [];
   if (opts.spanWide) {
-    const { placed, height } = layoutSpanned(items, cols, COL_W, GAP);
-    container.classList.add('is-spanned');
+    if (!from) {
+      container.innerHTML = '';
+      container.classList.add('is-spanned');
+    }
+    const { placed, height } = layoutSpanned(list, cols, COL_W, GAP);
     container.style.height = `${height}px`;
-    container.innerHTML = placed.map((p) => tileHtml(p.it, opts, p)).join('');
+    for (const p of placed.slice(from)) jobs.push({ parent: container, html: tileHtml(p.it, opts, p) });
   } else {
-    container.classList.remove('is-spanned');
-    container.style.removeProperty('height');
-    const buckets = splitColumns(items, cols);
-    container.innerHTML = buckets
-      .map((col) => `<div class="col">${col.map((it) => tileHtml(it, opts)).join('')}</div>`)
-      .join('');
+    if (!from) {
+      container.classList.remove('is-spanned');
+      container.style.removeProperty('height');
+      container.innerHTML = Array.from({ length: cols }, () => '<div class="col"></div>').join('');
+    }
+    const buckets = splitColumns(list, cols);
+    const colEls = [...container.children];
+    for (let c = 0; c < buckets.length; c += 1) {
+      const el = colEls[c];
+      if (!el) continue;
+      // 这一列已经画过 have 张（追加时不必重算前面的）
+      const have = el.childElementCount;
+      for (const it of buckets[c].slice(have)) jobs.push({ parent: el, html: tileHtml(it, opts) });
+    }
   }
 
-  container.querySelectorAll('img').forEach(fadeIn);
-  bindHoverPlay(container, opts);
+  if (!jobs.length) {
+    bindFresh(container, list, indexById, onOpen, opts);
+    return;
+  }
 
-  container.querySelectorAll('.tile').forEach((el) => {
-    el.addEventListener('click', (ev) => {
-      const id = Number(el.dataset.id);
-      const index = items.findIndex((x) => x.id === id);
-      // 把事件传出去：选取模式里要看 Shift / Ctrl
-      if (onOpen) onOpen(index >= 0 ? index : 0, ev);
-    });
-    if (opts.onContext) {
-      el.addEventListener('contextmenu', (e) => {
-        const id = Number(el.dataset.id);
-        const index = items.findIndex((x) => x.id === id);
-        opts.onContext(e, items[index >= 0 ? index : 0], index >= 0 ? index : 0);
-      });
+  const run = (startAt) => {
+    if (container._mtoken !== token) return; // 被新的 render 取代了
+    const end = Math.min(jobs.length, startAt + CHUNK);
+    let parent = null;
+    let batch = [];
+    const flush = () => {
+      if (batch.length && parent) parent.insertAdjacentHTML('beforeend', batch.join(''));
+      batch = [];
+    };
+    for (let i = startAt; i < end; i += 1) {
+      const j = jobs[i];
+      if (j.parent !== parent) {
+        flush();
+        parent = j.parent;
+      }
+      batch.push(j.html);
     }
-  });
+    flush();
+    bindFresh(container, list, indexById, onOpen, opts);
+    if (end < jobs.length) requestAnimationFrame(() => run(end));
+  };
+  run(0);
 }
 
 /** 窗口宽度变化导致列数改变时重排 */

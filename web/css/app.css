@@ -2390,6 +2390,8 @@ img { display: block; }
 /* ── 全部库 ─────────────────────────────────────────────── */
 /* 已分发可能上千条，用「加载更多」而不是无限滚动：位置确定，好接管 */
 .inbox-more { display: flex; justify-content: center; padding: 18px 0 6px; }
+/* display:flex 会压掉 [hidden] 的 UA 样式：加载完了要真的不占位 */
+.inbox-more[hidden] { display: none; }
 .inbox-move .field { margin-bottom: 10px; }
 .inbox-move .field > span { display: block; margin-bottom: 6px; }
 

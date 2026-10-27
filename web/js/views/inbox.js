@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fmtBytes, toast, fadeIn, debounce, deleteSummary } from '../util.js';
+import { esc, fmtNum, fmtBytes, toast, debounce, deleteSummary } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { createDropdown } from '../components/dropdown.js';
@@ -103,8 +103,6 @@ export async function InboxView(root, shelfId, opts = {}) {
   if (!embedded) bindTopbar(root);
   document.title = `${shelfInfo.name} · 全部库`;
 
-  paintStats();
-
   const bodyEl = root.querySelector('[data-body]');
 
   // ---------- 头部与角标 ----------
@@ -133,17 +131,22 @@ export async function InboxView(root, shelfId, opts = {}) {
   /**
    * 库总览：一行加起来的总数 + 每个库一张小卡（媒体数、条目数、占用、占比条）。
    * 点卡片直接切到那个库 —— 首页标签条也能切，但这里能顺手看出谁的占用最大。
+   *
+   * 首页 embed 进来时 LibraryView 已经取过 overview，直接复用（opts.overview），
+   * 不要再打一次那个每库 5 个子查询的接口。
    */
   async function paintStats() {
     const grid = root.querySelector('[data-ls-grid]');
     const totalEl = root.querySelector('[data-totals]');
     if (!grid || !totalEl) return;
-    let ov;
-    try {
-      ov = await api.overview();
-    } catch {
-      totalEl.textContent = '统计加载失败';
-      return;
+    let ov = opts.overview;
+    if (!ov) {
+      try {
+        ov = await api.overview();
+      } catch {
+        totalEl.textContent = '统计加载失败';
+        return;
+      }
     }
     if (!root.isConnected || !grid.isConnected) return;
 
@@ -207,53 +210,89 @@ export async function InboxView(root, shelfId, opts = {}) {
       : '<div class="empty"><b>还没有分发出去的素材</b>分发后会在这里留一个入口，文件仍在原来的角色目录里</div>';
   }
 
-  function renderGrid() {
-    if (!items.length) {
-      bodyEl.innerHTML = emptyHtml();
+  /** 当前网格里已经画了多少张 —— 「加载更多」只补这之后的，不重画前面的 */
+  let renderedCount = 0;
+
+  function onTileOpen(i, ev) {
+    if (selecting) {
+      pickByClick(items[i].id, ev);
       return;
     }
-    bodyEl.innerHTML = `<div class="masonry" data-masonry></div>${
-      items.length < total ? '<div class="inbox-more"><button class="tb-btn" data-more>加载更多</button></div>' : ''
-    }`;
-    const holder = bodyEl.querySelector('[data-masonry]');
-    requestAnimationFrame(() => {
-      renderMasonry(
-        holder,
-        items,
-        (i, ev) => {
-          if (selecting) {
-            pickByClick(items[i].id, ev);
-            return;
-          }
-          // Ctrl / Shift + 点击：不用先点「选取」，直接进多选并选中这一张
-          if (ev && (ev.ctrlKey || ev.metaKey || ev.shiftKey)) {
-            enterSelect(items[i].id, ev);
-            return;
-          }
-          gotoMedia(items[i].id);
-        },
-        {
-          selectable: selecting,
-          isPicked: (it) => picked.has(it.id),
-          spanWide: true,
-          onContext: (e, item) => {
-            e.preventDefault();
-            e.stopPropagation();
-            openMediaMenu(e, item);
-          },
-        }
-      );
-    });
-    const more = bodyEl.querySelector('[data-more]');
-    if (more) {
-      more.addEventListener('click', async () => {
-        more.disabled = true;
-        more.textContent = '加载中…';
-        page += 1;
-        await load({ append: true });
-      });
+    // Ctrl / Shift + 点击：不用先点「选取」，直接进多选并选中这一张
+    if (ev && (ev.ctrlKey || ev.metaKey || ev.shiftKey)) {
+      enterSelect(items[i].id, ev);
+      return;
     }
-    fadeIn(holder);
+    gotoMedia(items[i].id);
+  }
+
+  function tileOpts() {
+    return {
+      selectable: selecting,
+      isPicked: (it) => picked.has(it.id),
+      spanWide: true,
+      onContext: (e, item) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openMediaMenu(e, item);
+      },
+    };
+  }
+
+  /** 「加载更多」按钮：位置固定在外层，不跟瀑布流一起重画 */
+  function syncMore() {
+    const box = bodyEl.querySelector('.inbox-more');
+    if (!box) return;
+    box.hidden = items.length >= total;
+    const btn = box.querySelector('[data-more]');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '加载更多';
+    }
+  }
+
+  function buildGridShell() {
+    bodyEl.innerHTML =
+      '<div class="masonry" data-masonry></div>' +
+      '<div class="inbox-more"><button class="tb-btn" data-more>加载更多</button></div>';
+    bodyEl.querySelector('[data-more]').addEventListener('click', onMore);
+  }
+
+  async function onMore(e) {
+    const btn = e.currentTarget;
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = '加载中…';
+    page += 1;
+    try {
+      await load({ append: true });
+    } catch (err) {
+      page -= 1;
+      toast(err.message || '加载失败');
+      syncMore();
+    }
+  }
+
+  function renderGrid({ append = false } = {}) {
+    if (!items.length) {
+      bodyEl.innerHTML = emptyHtml();
+      renderedCount = 0;
+      return;
+    }
+    const holder = bodyEl.querySelector('[data-masonry]');
+    // 只有「追加到同一个网格」才增量；筛选 / 选取态切换 / 删除后重建都走全量
+    const canAppend = append && holder && renderedCount > 0 && renderedCount <= items.length;
+    if (!canAppend) {
+      buildGridShell();
+      renderedCount = 0;
+    }
+    const target = bodyEl.querySelector('[data-masonry]');
+    const from = renderedCount;
+    renderedCount = items.length;
+    requestAnimationFrame(() => {
+      renderMasonry(target, items, onTileOpen, { ...tileOpts(), appendFrom: from });
+    });
+    syncMore();
   }
 
   async function load({ append = false } = {}) {
@@ -265,7 +304,7 @@ export async function InboxView(root, shelfId, opts = {}) {
     items = append ? items.concat(r.items) : r.items;
     paintMeta();
     paintTabs();
-    renderGrid();
+    renderGrid({ append });
   }
 
   function gotoMedia(id) {
@@ -752,6 +791,9 @@ export async function InboxView(root, shelfId, opts = {}) {
 
   paintMeta();
   paintTabs();
+  // 放在最后调：opts.overview 有值时这里是同步执行，会用到上面定义的 UNIT，
+  // 提前调（const 还没初始化）会踩 TDZ
+  paintStats();
   renderGrid();
 
   return () => document.removeEventListener('keydown', onKey);

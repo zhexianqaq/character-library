@@ -10,6 +10,7 @@ import {
   mainLibrary,
   defaultShelfId,
   refreshCharacter,
+  refreshCharacterSoon,
   refreshPack,
   refreshCharacterPacks,
   ensureSelfTags,
@@ -2185,6 +2186,12 @@ export function createApp() {
     const category = String((req.body && req.body.category) || '').trim().slice(0, 20) || null;
     const added = [];
     const skipped = [];
+    /**
+     * 本次真正写入了媒体的图包。只刷新这几个包的封面就够了 ——
+     * 以前每次都 refreshCharacterPacks(charId)，把该角色所有包挨个查一遍，
+     * 连传 50 个文件等于同一个循环跑 50 遍（其他包的封面根本不会变）。
+     */
+    const touchedPacks = new Set();
 
     for (const f of files) {
       const originalName = decodeName(f.originalname);
@@ -2265,11 +2272,13 @@ export function createApp() {
         );
       const newId = Number(info.lastInsertRowid);
       added.push(newId);
+      if (pack) touchedPacks.add(pack.id);
       getDerivative(newId, 'thumb').catch(() => {});
     }
 
-    refreshCharacterPacks(charId);
-    refreshCharacter(charId);
+    for (const pid of touchedPacks) refreshPack(pid);
+    // 连续上传时同一角色的统计合并成「立刻一次 + 窗口结束补一次」
+    refreshCharacterSoon(charId);
     res.json({ added: added.length, skipped, ids: added });
   });
 

@@ -186,7 +186,8 @@ export async function LibraryView(root, shelfId) {
     root.querySelector('[data-new-shelf]').addEventListener('click', openNewShelf);
     root.querySelector('[data-edit-shelf]').addEventListener('click', () => editShelf(active));
 
-    await FLAT_VIEW[active.kind](root.querySelector('[data-embed]'), active.id, { embedded: true });
+    // 总览已经拿过了，顺手传给嵌入视图：全部库的「库总览」不用再请求一遍
+    await FLAT_VIEW[active.kind](root.querySelector('[data-embed]'), active.id, { embedded: true, overview: ov });
   }
 
   async function render({ push = false } = {}) {
@@ -205,8 +206,7 @@ export async function LibraryView(root, shelfId) {
     if (active && FLAT_VIEW[active.kind]) {
       await renderEmbedded(active, shelves, ov);
       return;
-    }
-    const isWork = active ? active.kind === 'work' : false;
+    }    const isWork = active ? active.kind === 'work' : false;
     const isNovel = active ? active.kind === 'novel' : false;
     noun = isNovel ? '小说' : isWork ? '角色' : '人物';
     activeShelf = active || null;
