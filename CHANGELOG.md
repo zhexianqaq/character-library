@@ -5,6 +5,30 @@
 > 功能索引（每个功能是哪一版加的）、版本历史总表、提交与 tag 约定，见 **[README.md](README.md#功能一览)**。
 > 本文件只记「每个版本具体改了什么、踩到了什么坑」。
 
+## v3.47 — 关窗口不再卡：先消失，再收尾
+
+点 X 之后要等一两秒窗口才消失。原因不在 WebView2，在关闭流程：
+
+```rust
+// 老代码
+ask_shutdown(port);                       // 读响应最长 1500ms
+std::thread::sleep(Duration::from_millis(900));   // 固定睡 900ms
+c.kill(); c.wait();
+```
+
+这段时间主线程被占着，窗口留在屏幕上不重绘 —— 看起来就是「卡住」。实测最坏 2.8 秒。
+
+改成：
+
+1. **先 `window.set_visible(false)`**，界面瞬间消失，后面的收尾用户看不见；
+2. `ask_shutdown` 只读到 HTTP 状态行就返回（read 超时 1500 → 600ms，写 300ms），
+   拿到 200 就说明服务答应了（它先 `res.json` 再 checkpoint 再 `exit(0)`）；
+3. 用 `wait_exit()` **每 20ms 轮询 `try_wait`**，进程退就立刻往下走，不再固定 sleep；
+   答应了给 2.5 秒上限（大 WAL 的 checkpoint 兜底），连不上就只等 300ms 直接杀；
+4. 日志记真实耗时：`server stopped: graceful in 225ms`。
+
+实测：**关闭 257ms**（老版本 1.2~2.8 秒），端口释放、WAL 正常 checkpoint。
+
 ## v3.46 — 操作日志 + 增量同步
 
 目标：**记录前端每一次改动，长久保存；同步按钮只处理这些，不再全库扫描。**

@@ -167,19 +167,49 @@ fn port_open(port: u16) -> bool {
 
 /// 关窗口前先请服务「自己退出」：它会 checkpoint 一次 WAL 再 exit(0)。
 /// 直接 TerminateProcess 偶尔会把 SQLite 停在 checkpoint 中间，最近写入的记录就没了。
-fn ask_shutdown(port: u16) {
+///
+/// 返回 true = 服务答应了退出（收到 200）。它先 res.json 再 checkpoint，所以
+/// 「读到响应」不等于「进程已经退了」，后面还要轮询 try_wait。
+fn ask_shutdown(port: u16) -> bool {
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();
-    let mut stream = match TcpStream::connect_timeout(&addr, Duration::from_millis(400)) {
+    let mut stream = match TcpStream::connect_timeout(&addr, Duration::from_millis(300)) {
         Ok(s) => s,
-        Err(_) => return,
+        Err(_) => return false,
     };
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(1500)));
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(600)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
     let req = format!(
         "POST /api/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     );
-    let _ = stream.write_all(req.as_bytes());
+    if stream.write_all(req.as_bytes()).is_err() {
+        return false;
+    }
     let mut buf = [0u8; 128];
-    let _ = stream.read(&mut buf);
+    match stream.read(&mut buf) {
+        Ok(n) if n > 0 => {
+            let head = String::from_utf8_lossy(&buf[..n]);
+            head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200")
+        }
+        _ => false,
+    }
+}
+
+/// 轮询等子进程自己退出。后端收到 shutdown 后 120ms 就开始 checkpoint，
+/// 通常两百毫秒内就没了 —— 比固定 sleep(900) 快，还不会白等。
+/// 超时未退返回 false，调用方再动手 kill。
+fn wait_exit(child: &mut Child, max: Duration) -> bool {
+    let deadline = Instant::now() + max;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) => {}
+            Err(_) => return false,
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// 光看 TCP 连得上不够：刚杀掉的进程会留下一堆 TIME_WAIT，connect 照样能成功，
@@ -400,14 +430,24 @@ fn main() {
             ..
         } = event
         {
+            // 先让窗口消失。收尾（等 checkpoint、杀进程、销毁 WebView2）还在主线程上，
+            // 但用户已经看不到它了 —— 以前是窗口僵在那里同步 sleep(900)，点完像卡死。
+            let _ = window.set_visible(false);
             // 服务是我们起的才由我们收尸；复用别人起的就别乱杀
             if let Some(mut c) = child.take() {
-                ask_shutdown(port);
-                std::thread::sleep(Duration::from_millis(900));
-                let _ = c.try_wait();
-                let _ = c.kill();
-                let _ = c.wait();
-                log("server stopped");
+                let started = Instant::now();
+                let graceful = ask_shutdown(port);
+                // 答应了就多给点时间 checkpoint；没答应（连不上 / 不是我们的服务）就别等
+                let limit = if graceful { 2500 } else { 300 };
+                if !wait_exit(&mut c, Duration::from_millis(limit)) {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+                log(&format!(
+                    "server stopped: {} in {}ms",
+                    if graceful { "graceful" } else { "forced" },
+                    started.elapsed().as_millis()
+                ));
             }
             log("---- shell exit ----");
             *control_flow = ControlFlow::Exit;
