@@ -244,6 +244,13 @@ async function extractZipEntry(fh, entry, destRoot) {
 
 async function extractZip(fh, size, destRoot) {
   const entries = await readCentralDirectory(fh, size);
+  // general purpose bit 0 = 加密。纯 JS 解不了 ZipCrypto/AES，直接说清楚而不是给一堆乱码。
+  const locked = entries.filter((e) => e.flags & 0x1 && !e.isDir);
+  if (locked.length) {
+    const err = new Error('加密的 zip 没法在站内解压，请用 7-Zip / WinRAR 解开后拖文件夹进来（rar / 7z 可以直接输密码）');
+    err.code = 'ZIP_ENCRYPTED';
+    throw err;
+  }
   const files = [];
   const skipped = [];
   let totalBytes = 0;
@@ -321,23 +328,45 @@ const bsdtar = () =>
   ]);
 
 /** 跑一个外部命令，收集输出；超时 30 分钟（解 20GB 的包也够了） */
+/** UnRAR / 7-Zip 在中文 Windows 上按 GBK 输出，直接 UTF-8 解会变成乱码，认不出「密码不正确」 */
+function decodeOutput(buf) {
+  if (!buf.length) return '';
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    try {
+      return new TextDecoder('gb18030').decode(buf);
+    } catch {
+      return buf.toString('latin1');
+    }
+  }
+}
+
 function run(cmd, args, { timeout = 30 * 60 * 1000 } = {}) {
   return new Promise((resolve, reject) => {
-    // stdin 必须显式 ignore：UnRAR 这类控制台程序在没有终端时会去读 stdin 等输入，
-    // 而 spawn 默认给的是永不关闭的管道 —— 表现为「解压永远不结束」，进程挂在后台
-    // （实测 3 个 UnRAR.exe 卡死，接口一直没有响应）
+    // stdin 必须显式 ignore：UnRAR 遇到加密包会去读 stdin 等密码，
+    // 而 spawn 默认给的是永不关闭的管道 —— 表现成「解压永远不结束」。
+    // 密码要靠 -p<密码> 传，绝不走交互。
     const child = spawn(cmd, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let out = '';
-    let err = '';
+    const outBufs = [];
+    const errBufs = [];
+    let outLen = 0;
+    let errLen = 0;
     const timer = setTimeout(() => {
       child.kill();
       reject(new Error(`${path.basename(cmd)} 超时未结束`));
     }, timeout);
     child.stdout.on('data', (c) => {
-      if (out.length < 20000) out += c.toString();
+      if (outLen < 60000) {
+        outBufs.push(c);
+        outLen += c.length;
+      }
     });
     child.stderr.on('data', (c) => {
-      if (err.length < 20000) err += c.toString();
+      if (errLen < 60000) {
+        errBufs.push(c);
+        errLen += c.length;
+      }
     });
     child.on('error', (e) => {
       clearTimeout(timer);
@@ -345,7 +374,11 @@ function run(cmd, args, { timeout = 30 * 60 * 1000 } = {}) {
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve({ code, out, err });
+      resolve({
+        code,
+        out: decodeOutput(Buffer.concat(outBufs)),
+        err: decodeOutput(Buffer.concat(errBufs)),
+      });
     });
   });
 }
@@ -368,16 +401,28 @@ async function walkFiles(dir) {
   );
 }
 
-async function extractWithTool(format, archiveAbs, destRoot) {
+async function extractWithTool(format, archiveAbs, destRoot, password = '') {
+  // -p- 表示「用空密码、别再问我」：没有它，UnRAR 遇到加密包会等 stdin 输入密码，
+  // 表现成「解压永远不结束」—— 用户那个 77MB 的包就是卡在这里。
+  const pwd = password ? `-p${password}` : '-p-';
   const attempts = [];
   if (format === 'rar') {
     const un = unrar();
-    if (un) attempts.push({ cmd: un, args: ['x', '-y', '-o+', '-idq', archiveAbs, destRoot + path.sep], name: 'UnRAR' });
+    if (un)
+      attempts.push({
+        cmd: un,
+        args: ['x', '-y', '-o+', '-idq', pwd, archiveAbs, destRoot + path.sep],
+        name: 'UnRAR',
+      });
   }
   const sz = sevenZip();
-  if (sz) attempts.push({ cmd: sz, args: ['x', '-y', '-bd', `-o${destRoot}`, archiveAbs], name: '7-Zip' });
-  const bt = bsdtar();
-  if (bt) attempts.push({ cmd: bt, args: ['-xf', archiveAbs, '-C', destRoot], name: 'bsdtar' });
+  if (sz) attempts.push({ cmd: sz, args: ['x', '-y', '-bd', pwd, `-o${destRoot}`, archiveAbs], name: '7-Zip' });
+  // bsdtar 不能解密：喂它加密包它会「成功」吐出一堆 0 内容文件（实测 658 字节、
+  // 文件头 00 00 00），所以只在纯 tar 上用它，rar / 7z 一律走能带密码的工具
+  if (format === 'tar') {
+    const bt = bsdtar();
+    if (bt) attempts.push({ cmd: bt, args: ['-xf', archiveAbs, '-C', destRoot], name: 'bsdtar' });
+  }
 
   if (!attempts.length) {
     throw new Error(
@@ -386,10 +431,18 @@ async function extractWithTool(format, archiveAbs, destRoot) {
   }
 
   const errors = [];
+  let pwdProblem = false;
   for (const a of attempts) {
     try {
       const r = await run(a.cmd, a.args);
       const files = await walkFiles(destRoot);
+      const text = `${r.err} ${r.out}`;
+      // 密码问题不必再换工具试：换谁都是同一个结果，只会多等一轮
+      if (!files.length && /password|密码|encrypted|incorrect|不正确/i.test(text)) {
+        pwdProblem = true;
+        errors.push(`${a.name}: ${text.trim().slice(0, 200)}`);
+        break;
+      }
       // 有的工具退出码非 0 但文件其实解出来了（比如个别条目报错），以有没有文件为准
       if (files.length || r.code === 0) return { files, tool: a.name, log: (r.err || r.out).slice(0, 500) };
       errors.push(`${a.name}: ${(r.err || r.out || `退出码 ${r.code}`).trim().slice(0, 200)}`);
@@ -397,16 +450,28 @@ async function extractWithTool(format, archiveAbs, destRoot) {
       errors.push(`${a.name}: ${err.message}`);
     }
   }
-  throw new Error(`解压失败 —— ${errors.join('；') || '没有可用的解压工具'}`);
+
+  const all = errors.join(' ');
+  if (pwdProblem || /password|密码|encrypted|incorrect|不正确/i.test(all)) {
+    const err = new Error(
+      password ? '密码不对，解压失败' : '这个压缩包有密码，需要输入密码才能解压'
+    );
+    err.code = password ? 'BAD_PASSWORD' : 'NEED_PASSWORD';
+    throw err;
+  }
+  const err = new Error(`解压失败 —— ${all || '没有可用的解压工具'}`);
+  err.code = 'ARCHIVE_FAILED';
+  throw err;
 }
 
 /* ────────────────────────────── 对外入口 ────────────────────────────── */
 
 /**
  * 把压缩包解到 destDir（调用方负责建和清）。
+ * 加密包要传 password；没传且确实是加密包时抛 code='NEED_PASSWORD'。
  * 返回 { format, files:[{abs,name,size}], skipped:[{name,reason}], tool }
  */
-export async function extractArchive(archiveAbs, destDir) {
+export async function extractArchive(archiveAbs, destDir, { password = '' } = {}) {
   await fsp.mkdir(destDir, { recursive: true });
   const st = await fsp.stat(archiveAbs);
   if (!st.size) throw new Error('压缩包是空的');
@@ -422,7 +487,7 @@ export async function extractArchive(archiveAbs, destDir) {
     await fh.close().catch(() => {});
   }
 
-  const res = await extractWithTool(format, archiveAbs, destDir);
+  const res = await extractWithTool(format, archiveAbs, destDir, password);
   const files = res.files.map((abs) => ({
     abs,
     name: path.basename(abs),

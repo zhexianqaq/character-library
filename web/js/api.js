@@ -175,13 +175,17 @@ function sendForm(url, form, onProgress) {
         }
       } else {
         let msg = `上传失败 ${xhr.status}`;
+        let code = '';
         try {
           const j = JSON.parse(xhr.responseText);
           if (j.error) msg = j.error;
+          if (j.code) code = j.code;
         } catch {
           /* ignore */
         }
-        reject(new Error(msg));
+        const err = new Error(msg);
+        if (code) err.code = code;
+        reject(err);
       }
     };
     xhr.onerror = () => reject(new Error('网络错误，上传中断'));
@@ -200,11 +204,13 @@ export function uploadMedia(charId, files, { packId = null, category = null, onP
 /**
  * 压缩包上传：服务端解压后按图片 / 视频入库。
  * 带 packId 就进那个图包；不带就按压缩包名新建一个（同名包复用）。
+ * 加密包要带 password，没有就回 code='NEED_PASSWORD'，前端弹窗要一次再重传。
  */
-export function uploadArchive(charId, file, { packId = null, category = null, onProgress } = {}) {
+export function uploadArchive(charId, file, { packId = null, category = null, password = '', onProgress } = {}) {
   const form = new FormData();
   form.append('archive', file, file.name);
   if (packId) form.append('packId', String(packId));
   if (category) form.append('category', category);
+  if (password) form.append('password', password);
   return sendForm(`/api/characters/${charId}/archive`, form, onProgress);
 }

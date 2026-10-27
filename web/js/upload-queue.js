@@ -1,4 +1,6 @@
 import { uploadMedia, uploadArchive } from './api.js';
+import { openModal } from './components/modal.js';
+import { esc } from './util.js';
 
 /**
  * 上传队列（全局单例）。
@@ -110,6 +112,84 @@ function pump() {
   }
 }
 
+/** 记住用过的解压密码：去重、最近的排前面、最多留 12 个 */
+const PW_KEY = 'cl-archive-passwords';
+const PW_MAX = 12;
+
+function savedPasswords() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PW_KEY) || '[]');
+    const list = Array.isArray(raw) ? raw.filter((x) => typeof x === 'string' && x) : [];
+    // 读的时候也去重：老数据 / 手动改过的可能带重复
+    return [...new Set(list)];
+  } catch {
+    return [];
+  }
+}
+
+function rememberPassword(pw) {
+  const value = String(pw || '').trim();
+  if (!value) return;
+  // 去重：同一个密码只留一条，并且提到最前面
+  const list = [value, ...savedPasswords().filter((x) => x !== value)].slice(0, PW_MAX);
+  try {
+    localStorage.setItem(PW_KEY, JSON.stringify(list));
+  } catch {
+    /* 隐身模式 / 配额满，不影响解压 */
+  }
+}
+
+/** 加密压缩包：弹一次密码框（左侧是用过的密码，点一下就填），拿到就带着密码把整个文件重传一遍 */
+async function askPassword(description) {
+  const v = await openModal({
+    title: '压缩包有密码',
+    description,
+    fields: [
+      {
+        name: 'password',
+        label: '解压密码',
+        type: 'password',
+        required: true,
+        placeholder: '输入密码后重新解压',
+      },
+    ],
+    submitText: '解压',
+    className: 'pw-modal',
+    onMount: (body) => {
+      const field = body.querySelector('.field');
+      if (!field) return;
+      const items = savedPasswords();
+
+      const list = document.createElement('div');
+      list.className = 'pw-list';
+      list.innerHTML =
+        '<b>用过的密码</b>' +
+        (items.length
+          ? items
+              .map(
+                (p, i) =>
+                  `<button type="button" class="pw-item" data-i="${i}" title="${esc(p)}">${esc(p)}</button>`
+              )
+              .join('')
+          : '<span class="pw-empty">还没有记录</span>');
+
+      const wrap = document.createElement('div');
+      wrap.className = 'pw-wrap';
+      wrap.append(list, field);
+      body.append(wrap);
+
+      const input = wrap.querySelector('input[name="password"]');
+      list.addEventListener('click', (e) => {
+        const btn = e.target.closest('.pw-item');
+        if (!btn || !input) return;
+        input.value = items[Number(btn.dataset.i)] || '';
+        input.focus();
+      });
+    },
+  });
+  return (v && v.password) || '';
+}
+
 function start(t) {
   t.state = 'uploading';
   t.loaded = 0;
@@ -132,7 +212,7 @@ function start(t) {
   };
   const job =
     t.kind === 'archive'
-      ? uploadArchive(t.charId, t.file, opts)
+      ? uploadArchive(t.charId, t.file, { ...opts, password: t.password || '' })
       : uploadMedia(t.charId, [t.file], opts);
 
   job
@@ -148,6 +228,8 @@ function start(t) {
           t.total = t.size;
           t.ids = (res && res.ids) || [];
           t.note = `解压入库 ${added} 个${skipped.length ? ` · 跳过 ${skipped.length}` : ''}`;
+          // 解开了才记密码，错的密码不进列表
+          if (t.password) rememberPassword(t.password);
         } else {
           t.state = 'skipped';
           t.reason = (skipped[0] && skipped[0].reason) || '压缩包里没有可导入的图片或视频';
@@ -166,7 +248,23 @@ function start(t) {
         t.reason = (skipped[0] && skipped[0].reason) || '未导入';
       }
     })
-    .catch((err) => {
+    .catch(async (err) => {
+      const code = err && err.code;
+      // 加密包：要一次密码再整包重传；密码错就再问一次
+      if (t.kind === 'archive' && (code === 'NEED_PASSWORD' || code === 'BAD_PASSWORD')) {
+        const pwd = await askPassword(
+          code === 'NEED_PASSWORD' ? '这个压缩包需要密码才能解压' : '密码不对，再试一次'
+        );
+        if (pwd) {
+          t.password = pwd;
+          t.state = 'waiting';
+          t.error = '';
+          return; // 交给 finally 里的 pump 重新开始
+        }
+        t.state = 'error';
+        t.error = '需要密码才能解压';
+        return;
+      }
       t.state = 'error';
       t.error = err && err.message ? err.message : '上传失败';
     })
@@ -203,6 +301,7 @@ export const queue = {
         packId,
         packTitle,
         category,
+        password: '',
         state: 'waiting',
         loaded: 0,
         error: '',

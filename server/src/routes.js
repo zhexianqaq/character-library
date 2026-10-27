@@ -2814,11 +2814,17 @@ export function createApp() {
 
       let packed;
       try {
-        packed = await extractArchive(archivePath, workDir);
+        packed = await extractArchive(archivePath, workDir, {
+          password: String((req.body && req.body.password) || '').slice(0, 128),
+        });
       } catch (err) {
         const kept = await keepArchive();
         await cleanup();
-        return res.status(400).json({ error: err.message || '解压失败', keptArchive: kept });
+        return res.status(400).json({
+          error: err.message || '解压失败',
+          code: err.code || 'ARCHIVE_FAILED',
+          keptArchive: kept,
+        });
       }
 
       // 只要图片 / 视频：压缩包里通常还有 readme、种子、网址快捷方式
