@@ -115,11 +115,23 @@ async function setOwnerCover(item, owner, onCover) {
  * @param {object} ctx.pack   { id, title } | null
  * @param {object} ctx.owner  { id, name, noun } | null  noun 决定菜单文案（人物 / 角色 / 资源）
  * @param {(kind:'pack'|'owner')=>void} ctx.onCover 设好之后刷新展示区
+ * @param {boolean} ctx.allowMove  全部库这类没有图包归属的地方传 false
+ * @param {Array} ctx.extra  额外菜单项，紧跟在「打开」后面（全部库用它加「分发到…」）
  */
 export function mediaMenu(
   event,
   item,
-  { characterId, onOpen, onChange, pack = null, owner = null, onCover = null, shelfKind = '', allowMove = true } = {}
+  {
+    characterId,
+    onOpen,
+    onChange,
+    pack = null,
+    owner = null,
+    onCover = null,
+    shelfKind = '',
+    allowMove = true,
+    extra = [],
+  } = {}
 ) {
   const packRef = pack || (item.packId ? { id: item.packId, title: item.packTitle || '这个图包' } : null);
   const ownerRef = owner && owner.id ? owner : null;
@@ -127,6 +139,7 @@ export function mediaMenu(
 
   openContextMenu(event, [
     { label: '打开', onClick: () => onOpen && onOpen() },
+    ...(Array.isArray(extra) ? extra : []),
     { label: '重命名', onClick: () => renameMedia(item, onChange) },
     { label: '编辑标签', onClick: () => editMediaTags(item, onChange) },
     packRef ? { label: '设为图包封面', hint: packRef.title, onClick: () => setPackCover(item, packRef, onCover) } : null,

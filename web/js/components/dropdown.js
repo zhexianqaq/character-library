@@ -6,13 +6,17 @@ import { pushEsc } from '../esc.js';
  * 用原生 <datalist> 会多出一个浏览器画的三角，面板位置也不跟输入框对齐；
  * 这里自己画一个：面板宽度锁死跟输入框一致，选项 hover 黑底白字，面板不出滚动条。
  *
- * editable = true 时可以直接在输入框里打字过滤（平台 / 出处这种「选择或输入」的场景）。
+ * - `editable`：可以直接打字，输入的内容就是值（平台 / 出处这种「选择或输入」）
+ * - `searchable`：可以打字筛选，但**值仍然只能从选项里选**（几千个条目的场景）
+ *   面板一次最多画 `maxVisible` 项，剩下的提示「继续输入缩小范围」，避免一次插上千个按钮
  */
 export function createDropdown({
   options = [],
   value = '',
   placeholder = '',
   editable = false,
+  searchable = false,
+  maxVisible = 60,
   allowEmpty = true,
   emptyLabel = '全部',
   name = '',
@@ -25,11 +29,12 @@ export function createDropdown({
   let view = items.slice();
   let active = -1;
   let offEsc = null;
+  const typeable = editable || searchable;
 
   const el = document.createElement('div');
   el.className = `dd${className ? ` ${className}` : ''}`;
   el.innerHTML = `
-    <input class="dd-input" type="text" autocomplete="off" spellcheck="false" ${editable ? '' : 'readonly'} />
+    <input class="dd-input" type="text" autocomplete="off" spellcheck="false" ${typeable ? '' : 'readonly'} />
     <span class="dd-arrow" aria-hidden="true"></span>
     <div class="dd-panel" hidden></div>`;
   const input = el.querySelector('.dd-input');
@@ -52,15 +57,17 @@ export function createDropdown({
     const head = allowEmpty
       ? `<button type="button" class="dd-opt${current === '' ? ' is-on' : ''}" data-v="">${esc(emptyLabel)}</button>`
       : '';
-    const body = view.length
-      ? view
+    // searchable 时只画前 maxVisible 项：几千个条目一次插进 DOM 会明显卡顿
+    const shown = searchable ? view.slice(0, maxVisible) : view;
+    const body = shown.length
+      ? shown
           .map(
             (o, i) =>
               `<button type="button" class="dd-opt${String(o.value) === String(current) ? ' is-on' : ''}${
                 i === active ? ' is-active' : ''
               }" data-v="${esc(o.value)}">${esc(o.label)}</button>`
           )
-          .join('')
+          .join('') + (searchable && view.length > shown.length ? `<div class="dd-more">还有 ${view.length - shown.length} 项，继续输入缩小范围</div>` : '')
       : '<div class="dd-empty">没有匹配项</div>';
     panel.innerHTML = head + body;
   }
@@ -90,6 +97,14 @@ export function createDropdown({
       offEsc();
       offEsc = null;
     }
+    // searchable 只是筛选框：关掉时把输入框恢复成「当前选中项」，
+    // 否则里面留着半截搜索词，看着像选中了别的东西
+    if (searchable) {
+      input.value = labelOf(current);
+      input.dataset.ddValue = current;
+      view = items.slice();
+      active = -1;
+    }
   }
 
   function pick(v) {
@@ -112,9 +127,11 @@ export function createDropdown({
         open();
         return;
       }
-      if (!view.length) return;
+      // 键盘在「实际画出来的那几项」里循环，searchable 截断后不能按全部 view 算
+      const n = searchable ? Math.min(view.length, maxVisible) : view.length;
+      if (!n) return;
       const step = e.key === 'ArrowDown' ? 1 : -1;
-      active = (active + step + view.length) % view.length;
+      active = (active + step + n) % n;
       render();
     }
     if (e.key === 'Enter' && !panel.hidden) {
@@ -125,7 +142,7 @@ export function createDropdown({
   }
 
   input.addEventListener('mousedown', (e) => {
-    if (editable) {
+    if (typeable) {
       open();
       return;
     }
@@ -138,20 +155,21 @@ export function createDropdown({
     e.preventDefault();
     if (panel.hidden) open();
     else close();
-    if (editable) input.focus();
+    if (typeable) input.focus();
   });
 
   input.addEventListener('input', () => {
-    if (!editable) return;
+    if (!typeable) return;
+    // 先开面板再过滤：open() 会把 view 重置成全部，顺序反了过滤结果会被冲掉
+    if (panel.hidden) open();
     const q = input.value.trim().toLowerCase();
     view = q ? items.filter((o) => o.label.toLowerCase().includes(q)) : items.slice();
     active = -1;
-    if (panel.hidden) open();
-    else render();
+    render();
   });
 
   input.addEventListener('focus', () => {
-    if (editable) open();
+    if (typeable) open();
   });
 
   panel.addEventListener('mousedown', (e) => {

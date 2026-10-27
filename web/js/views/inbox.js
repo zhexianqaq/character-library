@@ -312,6 +312,20 @@ export async function InboxView(root, shelfId, opts = {}) {
       onChange: reloadLoaded,
       shelfKind: 'inbox',
       allowMove: false,
+      extra: [
+        {
+          label: '分发到…',
+          hint: '移进角色图包',
+          onClick: () => {
+            // 单张分发：借用多选那条路，先把选区缩成这一张
+            picked.clear();
+            picked.add(item.id);
+            anchorId = item.id;
+            openDistribute();
+          },
+        },
+        { separator: true },
+      ],
     });
   }
 
@@ -432,6 +446,7 @@ export async function InboxView(root, shelfId, opts = {}) {
       <div class="modal tag-modal inbox-move" role="dialog" aria-modal="true">
         <h3>分发 ${ids.length} 个素材</h3>
         <p class="tag-note">${section === 'distributed' ? '选中的素材会从原条目移动到目标角色的图包目录' : `文件会从「${esc(shelfInfo.name)}/未分类」移动到目标角色的图包目录`}，不留副本；目标已有同一份文件时跳过。</p>
+        <div class="dist-hint" data-slot-tags hidden></div>
         <label class="field"><span>库</span><div data-slot-shelf></div></label>
         <label class="field"><span>条目</span><div data-slot-char></div></label>
         <label class="field"><span>图包</span><div data-slot-pack></div></label>
@@ -480,7 +495,7 @@ export async function InboxView(root, shelfId, opts = {}) {
       }
     }
 
-    async function loadChars(shelf) {
+    async function loadChars(shelf, preferId = 0) {
       const slot = mask.querySelector('[data-slot-char]');
       let list = [];
       try {
@@ -502,19 +517,23 @@ export async function InboxView(root, shelfId, opts = {}) {
         await loadPacks(0);
         return;
       }
+      // 目标条目优先（按标签匹配点过来的），否则落回第一个
+      const def = preferId && opts.some((o) => Number(o.value) === Number(preferId)) ? String(preferId) : opts[0].value;
       if (!charDD) {
         charDD = createDropdown({
           options: opts,
-          value: opts[0].value,
+          value: def,
           allowEmpty: false,
+          // 上千个条目滚不动，直接打字筛
+          searchable: true,
           onChange: (v) => loadPacks(Number(v)),
         });
         slot.appendChild(charDD.el);
       } else {
         charDD.setOptions(opts);
-        charDD.setValue(opts[0].value);
+        charDD.setValue(def);
       }
-      await loadPacks(Number(opts[0].value));
+      await loadPacks(Number(def));
     }
 
     const shelfDD = createDropdown({
@@ -525,6 +544,59 @@ export async function InboxView(root, shelfId, opts = {}) {
     });
     mask.querySelector('[data-slot-shelf]').appendChild(shelfDD.el);
     await loadChars(Number(shelves[0].id));
+    paintTagHints();
+
+    /**
+     * 「按标签分发」：选中素材身上如果有标签，并且某个条目正好叫这个名字，
+     * 就在顶部列成一行 —— 点一下直接把库和条目拨过去，不用在几千个条目里翻。
+     * 只做定位，不自动执行，图包还是让用户确认。
+     */
+    async function paintTagHints() {
+      const slot = mask.querySelector('[data-slot-tags]');
+      if (!slot) return;
+      const pickedSet = new Set(ids);
+      const tags = new Set();
+      for (const it of items) {
+        if (!pickedSet.has(it.id)) continue;
+        for (const t of it.ownTags || []) if (t) tags.add(t);
+      }
+      if (!tags.size) return;
+
+      // 标签名 → 同名条目。条目按库拉一遍（每个库一次请求），比逐个标签查快
+      const byName = new Map();
+      for (const s of shelves) {
+        try {
+          const list = (await api.shelfCharacters(s.id, { sort: 'name' })).items || [];
+          for (const c of list) if (!byName.has(c.name)) byName.set(c.name, { id: c.id, shelfId: s.id, shelfName: s.name });
+        } catch {
+          /* 某个库拿不到就跳过，不影响手动选 */
+        }
+      }
+      const hits = [...tags].map((t) => ({ tag: t, hit: byName.get(t) })).filter((x) => x.hit);
+      if (!hits.length || !mask.isConnected) return;
+
+      slot.hidden = false;
+      slot.innerHTML =
+        '<span>按标签匹配</span>' +
+        hits
+          .map(
+            (x) =>
+              `<button type="button" class="dist-tag" data-shelf="${x.hit.shelfId}" data-char="${x.hit.id}" title="定位到「${esc(
+                x.hit.shelfName
+              )} / ${esc(x.tag)}」">${esc(x.tag)} <i>→ ${esc(x.hit.shelfName)}</i></button>`
+          )
+          .join('');
+
+      slot.addEventListener('click', async (e) => {
+        const b = e.target.closest('[data-shelf]');
+        if (!b) return;
+        const sid = Number(b.dataset.shelf);
+        const cid = Number(b.dataset.char);
+        shelfDD.setValue(String(sid));
+        await loadChars(sid, cid);
+        toast('已定位到该条目，确认图包后点「移动并分发」');
+      });
+    }
 
     const okBtn = mask.querySelector('[data-ok]');
     okBtn.addEventListener('click', async () => {
