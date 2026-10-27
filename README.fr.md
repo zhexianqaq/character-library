@@ -96,9 +96,11 @@ Pour le bureau, créez un raccourci.
 
 ## Où vivent les données
 
+Par défaut **le programme est sur D: et les médias sur E:** (le programme et son cache suivent le dépôt, les originaux et l'index sont sur E:).
+
 | Élément | Par défaut | Contenu |
 |---|---|---|
-| Programme | dossier du dépôt | code, `web/`, `server/`, l'exe, `.cache` (vignettes, supprimables) |
+| Programme | `D:\character-library` (dossier du dépôt, un autre disque convient aussi) | code, `web/`, `server/`, l'exe, `.cache` (vignettes, supprimables) |
 | Données | `E:\CharacterLibrary` (`CL_DATA_DIR`) | médias d'origine + index `.catalog\library.db` |
 | Sauvegardes | `E:\CharacterLibrary-Backup` (`CL_BACKUP_DIR`) | un dossier horodaté par exécution, 5 conservés |
 

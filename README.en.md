@@ -70,8 +70,7 @@ cd server && npm install && cd ..
 start.bat          # start the server → browser opens http://127.0.0.1:7788
 ```
 
-The data folder defaults to `E:\CharacterLibrary` (a spinning disk is preferred on Windows — the originals are
-large). To put it elsewhere, use environment variables:
+**The program itself defaults to `D:\character-library` (the repository folder) and the media plus index to `E:\CharacterLibrary`** — program on D:, resources on E:. The data folder can be moved with environment variables:
 
 ```bat
 set CL_DATA_DIR=D:\MyLibrary
@@ -788,11 +787,11 @@ the server).
 
 ## The three folders
 
-Program, data and backup are **kept apart** — never stuff them into one folder:
+**By default the program lives on drive D: and the media on drive E:** — the program and its thumbnail cache travel with the repository, the original media and the index sit on E:, and the backup sits next to the data. Keep the three **apart**, never stuff them into one folder:
 
 | Location | Default | What it is | If you delete it |
 |---|---|---|---|
-| Program | the repository folder | code, `web/`, `server/`, `资料库.exe`, `.cache` (thumbnail cache, rebuildable at any time) | Pull the code from GitHub again |
+| Program | `D:\character-library` (the repository folder — any drive works) | code, `web/`, `server/`, `资料库.exe`, `.cache` (thumbnail cache, rebuildable at any time) | Pull the code from GitHub again |
 | Data | `E:\CharacterLibrary` (change with `CL_DATA_DIR`) | original media + index `.catalog\library.db` | Media gone, only a backup can restore it |
 | Backup | `E:\CharacterLibrary-Backup` (change with `CL_BACKUP_DIR`) | `backup.bat` creates a `<timestamp>\` subfolder per run, keeps the last 5 | Old ones can go, at least one must stay |
 

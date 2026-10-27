@@ -57,7 +57,8 @@ cd server && npm install && cd ..
 start.bat          # 起服务 → 浏览器打开 http://127.0.0.1:7788
 ```
 
-数据目录默认 `E:\CharacterLibrary`（Windows 机械盘优先，因为媒体原件大）。想换地方用环境变量：
+**程序本体默认在 `D:\character-library`（仓库目录），媒体和索引库默认在 `E:\CharacterLibrary`** —— D 盘放软件、E 盘放资源。
+想换地方用环境变量：
 
 ```bat
 set CL_DATA_DIR=D:\MyLibrary
@@ -694,11 +695,11 @@ node desktop/build.mjs      # cargo build --release + 拷成项目根的「资�
 
 ## 三个目录
 
-程序、数据、备份**分开放**，别塞进同一个文件夹：
+**默认 D 盘放程序、E 盘放资源**：程序本体和缩略图缓存跟着仓库走，媒体原件和索引库在 E 盘，备份挨着数据盘。三者**分开放**，别塞进同一个文件夹：
 
 | 位置 | 默认路径 | 是什么 | 删了会怎样 |
 |---|---|---|---|
-| 程序 | 仓库所在目录 | 代码、`web/`、`server/`、`资料库.exe`、`.cache`（缩略图缓存，可随时重建） | 代码能从 GitHub 拉回来 |
+| 程序 | `D:\character-library`（仓库所在目录，放别的盘也行） | 代码、`web/`、`server/`、`资料库.exe`、`.cache`（缩略图缓存，可随时重建） | 代码能从 GitHub 拉回来 |
 | 数据 | `E:\CharacterLibrary`（`CL_DATA_DIR` 可改） | 媒体原件 + 索引库 `.catalog\library.db` | 素材没了，只能靠备份恢复 |
 | 备份 | `E:\CharacterLibrary-Backup`（`CL_BACKUP_DIR` 可改） | `backup.bat` 每次生成一个 `<时间戳>\` 子目录，留最近 5 份 | 旧份可以删，至少要留一份 |
 

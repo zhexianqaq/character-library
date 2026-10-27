@@ -85,9 +85,11 @@ exe 必須留在專案根目錄（它會往上找 `server/src/index.js`）；想
 
 ## 資料放哪
 
+預設**程式在 D 磁碟、素材在 E 磁碟**（程式與快取跟著儲存庫，原件和索引在 E:）。
+
 | 位置 | 預設路徑 | 內容 |
 |---|---|---|
-| 程式 | 儲存庫資料夾 | 程式碼、`web/`、`server/`、exe、`.cache`（縮圖，刪掉會自動重建） |
+| 程式 | `D:\character-library`（儲存庫資料夾，放別的磁碟也可以） | 程式碼、`web/`、`server/`、exe、`.cache`（縮圖，刪掉會自動重建） |
 | 資料 | `E:\CharacterLibrary`（`CL_DATA_DIR`） | 原始媒體 + 索引 `.catalog\library.db` |
 | 備份 | `E:\CharacterLibrary-Backup`（`CL_BACKUP_DIR`） | 每次執行產生一個時間戳資料夾，保留 5 份 |
 

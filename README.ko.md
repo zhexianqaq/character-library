@@ -93,9 +93,11 @@ exe는 프로젝트 루트에 두세요(`server/src/index.js`를 위로 올라�
 
 ## 데이터 위치
 
+기본값은 **프로그램은 D 드라이브, 미디어는 E 드라이브**입니다(프로그램과 캐시는 저장소에, 원본과 인덱스는 E:에).
+
 | 위치 | 기본 경로 | 내용 |
 |---|---|---|
-| 프로그램 | 저장소 폴더 | 코드, `web/`, `server/`, exe, `.cache`(썸네일 — 지워도 다시 만들어집니다) |
+| 프로그램 | `D:\character-library`(저장소 폴더, 다른 드라이브도 가능) | 코드, `web/`, `server/`, exe, `.cache`(썸네일 — 지워도 다시 만들어집니다) |
 | 데이터 | `E:\CharacterLibrary`(`CL_DATA_DIR`) | 원본 미디어 + 인덱스 `.catalog\library.db` |
 | 백업 | `E:\CharacterLibrary-Backup`(`CL_BACKUP_DIR`) | 실행할 때마다 타임스탬프 폴더, 최근 5개 보관 |
 
