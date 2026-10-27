@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getDb, nowIso, refreshCharacter, refreshCharacterPacks } from './db.js';
 import { importFileFromPath, uniqueDirName, kindOfExt, removeLibraryFile } from './store.js';
+import { splitTitleTags } from './pack-tags.js';
 import { getDerivative } from './thumbs.js';
 
 const POST_RE = /^(.+?)-(\d{8})-(\d{6,})(?:_(\d{1,3}))?$/;
@@ -101,7 +102,7 @@ export async function importCharacterDir({ shelfId, sourceDir, name, account, on
             `INSERT INTO packs(character_id, title, month, sort_order, created_at, tags)
              VALUES(?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?,?)`
           )
-          .run(charId, title, month, charId, ts, JSON.stringify([title])).lastInsertRowid
+          .run(charId, title, month, charId, ts, JSON.stringify(splitTitleTags(title))).lastInsertRowid
       );
       pack = { id, title };
     }

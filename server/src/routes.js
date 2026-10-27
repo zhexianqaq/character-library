@@ -32,6 +32,7 @@ import {
 } from './store.js';
 import { beginMove, logRecovery } from './file-journal.js';
 import { monthOfFileName, monthTitle } from './importer.js';
+import { splitTitleTags } from './pack-tags.js';
 
 const MIME = {
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
@@ -77,11 +78,12 @@ function tagsOf(db, charId) {
  * 改名时把旧名字那条换掉，用户自己加的标签一律保留。
  */
 function packTagsKeepingName(tags, oldTitle, newTitle) {
-  const drop = String(oldTitle || '').trim();
-  const keep = (Array.isArray(tags) ? tags : []).filter((t) => String(t || '') !== drop);
-  const next = String(newTitle || '').trim();
-  if (next) keep.push(next);
-  return cleanTags(keep);
+  const before = splitTitleTags(oldTitle);
+  const after = splitTitleTags(newTitle);
+  // 「名字拆出来的标签」才归自动逻辑管：用户手动加的同名标签也一起换（本来就是同一个意思）
+  const drop = new Set([String(oldTitle || '').trim(), ...before.filter((t) => !after.includes(t))]);
+  const keep = (Array.isArray(tags) ? tags : []).filter((t) => !drop.has(String(t || '')));
+  return cleanTags([...keep, ...after]);
 }
 
 function cleanTags(list) {
@@ -303,7 +305,7 @@ function ensurePackFor(db, charId, month, category = null) {
         `INSERT INTO packs(character_id, title, month, category, tags, sort_order, created_at)
          VALUES(?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM packs WHERE character_id=?),?)`
       )
-      .run(charId, title, month, category, JSON.stringify(cleanTags([title])), charId, nowIso()).lastInsertRowid
+      .run(charId, title, month, category, JSON.stringify(cleanTags(splitTitleTags(title))), charId, nowIso()).lastInsertRowid
   );
   return { id, title };
 }
@@ -1781,7 +1783,7 @@ export function createApp() {
           category,
           charId,
           nowIso(),
-          JSON.stringify(cleanTags([title]))
+          JSON.stringify(cleanTags(splitTitleTags(title)))
         ).lastInsertRowid
     );
     res.json({ id, title, month, category, autoMonth: !hasTitle && !hasMonth });

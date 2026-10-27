@@ -795,7 +795,7 @@ export async function CharacterView(root, id) {
 
   /** 右键「编辑标签」：和图包页那套标签选择器共用 */
   async function editPackTags(p) {
-    const next = await openTagPicker({ title: '编辑图包标签', selected: p.tags || [] });
+    const next = await openTagPicker({ title: '编辑图包标签', selected: p.tags || [], splitTitle: true });
     if (!next) return;
     try {
       await api.updatePack(p.id, { tags: next });

@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import { DB_FILE, DATA_DIR, ensureDirs, slugify } from './config.js';
+import { splitTitleTags } from './pack-tags.js';
 
 /**
  * 层级：资料库 → 角色库 → 角色 → 图包 → 媒体
@@ -156,6 +157,7 @@ function migrate(d) {
   addColumnIfMissing('packs', 'kind', `kind TEXT NOT NULL DEFAULT 'pack'`);
   ensureNovelBags(d);
   ensureSelfTags(d);
+  normalizePackTitleTags(d);
 }
 
 /**
@@ -243,6 +245,37 @@ export function pruneOrphanTags(d = getDb()) {
     const pat = `%"${r.name}"%`;
     if (inPacks.get(pat) || inMedia.get(pat)) continue;
     del.run(r.id);
+    n += 1;
+  }
+  return n;
+}
+
+/**
+ * 存量图包的「同名标签」按新规则重拆一遍。
+ *
+ * v3.31.2 起建包会写一条和图包同名的标签，但 `卡芙卡-泳装` 当时是整串一条，
+ * 角色页靠「标签 = 条目名」永远匹配不上。这里只处理「标签里正好有整串图包名」的包，
+ * 拆成「卡芙卡」「泳装」两条；用户自己加的其他标签一个都不动。
+ * 纯日期名（2026-10）和含数字段的名字不会被拆，见 splitTitleTags。
+ */
+function normalizePackTitleTags(d) {
+  const rows = d.prepare('SELECT id, title, tags FROM packs').all();
+  const upd = d.prepare('UPDATE packs SET tags = ? WHERE id = ?');
+  let n = 0;
+  for (const r of rows) {
+    const title = String(r.title || '').trim();
+    if (!title) continue;
+    const parts = splitTitleTags(title);
+    if (parts.length < 2) continue;
+    let tags;
+    try {
+      tags = JSON.parse(r.tags || '[]');
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(tags) || !tags.includes(title)) continue;
+    const next = [...new Set([...tags.filter((t) => t !== title), ...parts])].slice(0, 30);
+    upd.run(JSON.stringify(next), r.id);
     n += 1;
   }
   return n;

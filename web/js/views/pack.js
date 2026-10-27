@@ -548,7 +548,7 @@ export async function PackView(root, id) {
 
   async function editTags() {
     const { openTagPicker } = await import('../components/tag-picker.js');
-    const next = await openTagPicker({ title: '编辑图包标签', selected: pack.tags || [] });
+    const next = await openTagPicker({ title: '编辑图包标签', selected: pack.tags || [], splitTitle: true });
     if (!next) return;
     await api.updatePack(pack.id, { tags: next });
     pack.tags = next;

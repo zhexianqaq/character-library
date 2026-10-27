@@ -229,7 +229,24 @@ export function keepScroll(fn) {
   }, 160);
 }
 
-export function fadeIn(img) {  if (!img) return;
+/**
+ * 「角色-服装」式的名字拆成多个标签（和服务端 pack-tags.js 同一套规则）。
+ * 纯日期（2026-10）与含纯数字段的名字（花兮-20240101）原样保留，避免拆错。
+ */
+const DASH_DATE = /^\d{4}[-./]\d{1,2}([-./]\d{1,2})?$/;
+
+export function splitDashTags(title) {
+  const t = String(title || '').trim();
+  if (!t) return [];
+  if (DASH_DATE.test(t)) return [t];
+  const parts = [...new Set(t.split(/[-－—]/).map((x) => x.trim()).filter(Boolean))];
+  if (parts.length < 2 || parts.length > 4) return [t];
+  if (parts.some((x) => x.length < 2 || /^\d+$/.test(x))) return [t];
+  return parts;
+}
+
+export function fadeIn(img) {
+  if (!img) return;
   const mark = () => img.classList.add('loaded');
   if (img.complete && img.naturalWidth) mark();
   else {

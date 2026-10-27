@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, toast } from '../util.js';
+import { esc, toast, splitDashTags } from '../util.js';
 import { pushEsc } from '../esc.js';
 
 /** 归一化：全角转半角、小写、去掉空格和分隔符 */
@@ -37,7 +37,7 @@ const SIMILAR = 0.5;
  * 输入时会做查重与相似校验，避免加出「水淼 / 水淼cos」这种重复项。
  * 返回 Promise<string[]|null>（null = 取消）
  */
-export async function openTagPicker({ title = '编辑标签', selected = [], note = '' } = {}) {
+export async function openTagPicker({ title = '编辑标签', selected = [], note = '', splitTitle = false } = {}) {
   let pool = [];
   try {
     pool = (await api.tags()).items || [];
@@ -133,6 +133,27 @@ export async function openTagPicker({ title = '编辑标签', selected = [], not
         return;
       }
       const name = raw.slice(0, 40);
+
+      // 0) 图包这类「角色-服装」的名字：一次粘进来先拆开，逐个查重
+      if (splitTitle) {
+        const parts = splitDashTags(name);
+        if (parts.length > 1) {
+          input.value = '';
+          for (const p of parts) {
+            const hit = all().find((n) => norm(n) === norm(p));
+            if (hit) chosen.add(hit);
+            else {
+              extra.push(p);
+              chosen.add(p);
+            }
+          }
+          filter = '';
+          renderPool();
+          setHint(`已按「-」拆成 ${parts.length} 个标签`);
+          input.focus();
+          return;
+        }
+      }
 
       // 1) 完全相同（归一化后）：直接选中，不再新增
       const same = all().find((n) => norm(n) === norm(name));
