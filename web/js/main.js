@@ -8,6 +8,8 @@ import { InboxView } from './views/inbox.js';
 import { NovelView } from './views/novel.js';
 import { ResourcesView } from './views/resources.js';
 import { ResourceView } from './views/resource.js';
+import { ReaderView } from './views/reader.js';
+import { ComicView } from './views/comic.js';
 import { initUploadHud } from './components/upload-hud.js';
 
 const app = document.getElementById('app');
@@ -23,6 +25,8 @@ const routes = [
   [/^\/r\/(\d+)$/, (m) => ResourceView(app, Number(m[1]))],
   [/^\/p\/(\d+)$/, (m) => PackView(app, Number(m[1]))],
   [/^\/i\/(\d+)$/, (m) => MediaView(app, Number(m[1]))],
+  [/^\/read\/(\d+)$/, (m) => ReaderView(app, Number(m[1]))],
+  [/^\/cm\/(\d+)$/, (m) => ComicView(app, Number(m[1]))],
   [/^\/uploads$/, () => UploadsView(app)],
 ];
 

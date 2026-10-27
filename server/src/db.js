@@ -130,6 +130,9 @@ function migrate(d) {
      两列都为空 = 用自动首帧；清了缓存盘也不影响，因为它不在缓存盘上。 */
   addColumnIfMissing('media', 'poster_rel', `poster_rel TEXT`);
   addColumnIfMissing('media', 'poster_ms', `poster_ms INTEGER`);
+  /* 漫画页序：只在 packs.kind='comic' 里有意义，和图包排序（sort_order）完全分开 ——
+     改图包的排序不该打乱漫画的阅读顺序。转成漫画时按文件名自然序写入 1..N。 */
+  addColumnIfMissing('media', 'page_no', `page_no INTEGER`);
   // 库类型：people 真人 / work 虚拟角色 / emoji 表情包 / resource 资源库 / novel 小说库
   addColumnIfMissing('shelves', 'kind', `kind TEXT NOT NULL DEFAULT 'people'`);
   // 小说库细分：original 原创 / fanfic 同人（其他库留空）

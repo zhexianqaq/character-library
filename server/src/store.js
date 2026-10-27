@@ -7,11 +7,17 @@ import { DATA_DIR, INBOX_DIR, cleanSegment, slugify } from './config.js';
 
 const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.avif', '.heic', '.jfif', '.tif', '.tiff']);
 const VIDEO_EXT = new Set(['.mp4', '.mov', '.mkv', '.avi', '.wmv', '.webm', '.m4v', '.flv', '.ts', '.mpg', '.mpeg', '.3gp']);
+/**
+ * 正文文件：小说库专用。
+ * 只入库、能读 / 能交给系统程序打开，不生成缩略图，不参与图片瀑布流。
+ */
+const FILE_EXT = new Set(['.txt', '.epub', '.pdf', '.mobi', '.azw3', '.md', '.doc', '.docx']);
 
 export function kindOfExt(ext) {
   const e = String(ext || '').toLowerCase();
   if (IMAGE_EXT.has(e)) return 'image';
   if (VIDEO_EXT.has(e)) return 'video';
+  if (FILE_EXT.has(e)) return 'file';
   return null;
 }
 

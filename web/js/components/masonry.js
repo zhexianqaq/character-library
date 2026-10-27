@@ -17,6 +17,7 @@ function tileHtml(it, opts = {}, geo = null) {
     <img src="${api.thumb(it.id)}" alt="${esc(it.fileName)}" loading="lazy" decoding="async">
     ${isVideo ? VIDEO_BADGE : ''}
     ${!isVideo && it.anim ? '<span class="gif">GIF</span>' : ''}
+    ${!isVideo && opts.showPage && it.pageNo ? `<span class="pno">${it.pageNo}</span>` : ''}
     ${isVideo && it.durationMs ? `<span class="dur">${fmtDur(it.durationMs)}</span>` : ''}
     ${opts.selectable ? '<span class="tick" aria-hidden="true"></span>' : ''}
   </button>`;

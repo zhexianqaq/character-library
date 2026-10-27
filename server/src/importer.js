@@ -61,7 +61,10 @@ export async function importCharacterDir({ shelfId, sourceDir, name, account, on
   const finalName = name || parsed.name;
   const finalAccount = account !== undefined ? account : parsed.account;
 
-  const files = (await walkFiles(sourceDir)).filter((f) => kindOfExt(path.extname(f)));
+  // 外部导入只收图片 / 视频：正文文件（txt / epub）不进这个流程
+  const files = (await walkFiles(sourceDir)).filter((f) =>
+    ['image', 'video'].includes(kindOfExt(path.extname(f)))
+  );
   if (!files.length) throw new Error('该目录下没有可导入的图片或视频');
 
   // 五层目录：角色库 / 角色 / 图包 / 图片|视频 / 文件
@@ -131,7 +134,7 @@ export async function importCharacterDir({ shelfId, sourceDir, name, account, on
     const fileName = path.basename(file);
     const ext = path.extname(fileName).toLowerCase();
     const kind = kindOfExt(ext);
-    if (!kind) continue;
+    if (!kind || kind === 'file') continue;
 
     const month = monthOfFileName(fileName);
     const pack = ensurePack(month);

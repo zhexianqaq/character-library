@@ -11,6 +11,7 @@ import { addMediaMenuItems } from '../components/media-picker.js';
 import { bindDropUpload } from '../components/dropzone.js';
 import { queue } from '../upload-queue.js';
 import { applyPickClick } from '../selection.js';
+import { togglePackKind } from '../components/pack-kind.js';
 import { escDepth } from '../esc.js';
 
 /** 有拍摄月份就显示月份；没有就用创建日期 */
@@ -20,6 +21,12 @@ function packDateLabel(pack) {
   if (Number.isNaN(d.getTime())) return '';
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** 打开漫画阅读器，从第 page 页开始 */
+function gotoComic(packId, page = 1) {
+  history.pushState({ from: location.pathname }, '', `/cm/${packId}${page > 1 ? `?p=${page}` : ''}`);
+  window.dispatchEvent(new CustomEvent('app:route'));
 }
 
 /** 打开媒体详情页 */
@@ -33,6 +40,16 @@ export async function PackView(root, id) {
   let items = media.items;
   // 表情库的图包挂在容器条目下，面包屑要回到库页而不是条目页
   const shelfKind = (pack.shelf && pack.shelf.kind) || 'people';
+  // 漫画包：页序由 media.page_no 决定，和「图包排序」是两回事
+  const isComic = pack.kind === 'comic';
+  const lastPage = (() => {
+    if (!isComic) return 0;
+    try {
+      return Number(JSON.parse(localStorage.getItem(`cl-comic:${id}`) || 'null')) || 0;
+    } catch {
+      return 0;
+    }
+  })();
   const emoji = shelfKind === 'emoji';
   const resource = shelfKind === 'resource';
   const ownerNoun = shelfKind === 'work' ? '角色' : resource ? '资源' : '人物';
@@ -49,13 +66,16 @@ export async function PackView(root, id) {
            <div class="title-row">
              <h1 class="page-title" data-title>${esc(pack.title)}</h1>
              <span class="pack-date" data-date>${esc(packDateLabel(pack))}</span>
+             ${isComic ? '<span class="kind-chip">漫画</span>' : ''}
              <span class="pack-tags" data-pack-tags></span>
            </div>
          </div>
          <span class="spacer"></span>
          <span class="count" data-count></span>
+         ${isComic && lastPage > 1 ? `<span class="comic-resume">读到第 ${lastPage} 页</span>` : ''}
          <span data-media-sort></span>
          <button class="tb-btn" data-select-toggle>选取</button>
+         ${isComic ? '<button class="tb-btn primary" data-read>阅读</button>' : ''}
          <button class="tb-btn" data-add-media>＋ 添加素材</button>
        </div>
        <div class="masonry" data-masonry></div>
@@ -83,7 +103,24 @@ export async function PackView(root, id) {
   }
 
   function syncCount() {
+    if (isComic) {
+      const pages = items.filter((m) => m.kind === 'image').length;
+      const videos = items.filter((m) => m.kind === 'video').length;
+      countEl.textContent = `${fmtNum(pages)} 页${videos ? ` · ${videos} 个视频未参与` : ''}`;
+      return;
+    }
     countEl.textContent = `${fmtNum(items.length)} 项${pack.counts && pack.counts.video ? ` · ${pack.counts.video} 个视频` : ''}`;
+  }
+
+  /** 漫画：图片按 page_no 升序在前，视频（没有页序）排到最后 */
+  function comicOrder(list) {
+    return [...list].sort((a, b) => {
+      const pa = a.pageNo == null ? Number.MAX_SAFE_INTEGER : a.pageNo;
+      const pb = b.pageNo == null ? Number.MAX_SAFE_INTEGER : b.pageNo;
+      if (pa !== pb) return pa - pb;
+      if (a.kind !== b.kind) return a.kind === 'image' ? -1 : 1;
+      return (a.sortOrder || 0) - (b.sortOrder || 0);
+    });
   }
 
   /** 当前展示顺序（排序后的副本）：点击、Shift 连选、全选都按这个顺序算 */
@@ -91,11 +128,13 @@ export async function PackView(root, id) {
 
   function paintMedia() {
     syncCount();
-    shown = sortMedia(items, mediaSortState.key, mediaSortState.desc);
+    // 漫画的页序是固定的（page_no），不能被「图包排序」改掉
+    shown = isComic ? comicOrder(items) : sortMedia(items, mediaSortState.key, mediaSortState.desc);
     holder.innerHTML = '';
     if (!shown.length) {
-      holder.innerHTML =
-        '<div class="empty" style="flex:1"><b>这个图包是空的</b>点右上角「添加素材」，从已有素材里挑，或者把文件拖进来</div>';
+      holder.innerHTML = isComic
+        ? '<div class="empty" style="flex:1"><b>这本漫画还没有页</b>点右上角「添加素材」放图片进来，页序按文件名里的数字排（1 → 2 → 10）</div>'
+        : '<div class="empty" style="flex:1"><b>这个图包是空的</b>点右上角「添加素材」，从已有素材里挑，或者把文件拖进来</div>';
       return;
     }
     requestAnimationFrame(() => {
@@ -104,8 +143,15 @@ export async function PackView(root, id) {
           pickByClick(shown[i].id, ev);
           return;
         }
-        gotoMedia(shown[i].id);
+        const it = shown[i];
+        // 漫画里点图 = 从这一页开始读
+        if (isComic && it.kind === 'image') {
+          gotoComic(pack.id, it.pageNo || i + 1);
+          return;
+        }
+        gotoMedia(it.id);
       }, {
+        showPage: isComic,
         selectable: selecting,
         isPicked: (it) => picked.has(it.id),
         // 人物库 / 角色库的图包跟条目页保持同一套排版；表情库不动
@@ -352,6 +398,13 @@ export async function PackView(root, id) {
     }
   }
 
+  async function convertKind() {
+    const changed = await togglePackKind(pack);
+    if (!changed) return;
+    // 类型变了，整页要按新类型重画（工具栏、排序控件、点击行为都不同）
+    window.dispatchEvent(new CustomEvent('app:route'));
+  }
+
   function addMediaItems() {
     return addMediaMenuItems({
       charId: pack.character.id,
@@ -397,15 +450,22 @@ export async function PackView(root, id) {
   addBtn.addEventListener('click', () => openAddMenu(addBtn));
 
   // 图包内媒体排序：名称 / 时间 / 大小 / 类型 + 升降序（只影响显示顺序，不动磁盘文件）
-  const mediaSortCtl = createMediaSort({
-    key: mediaSortState.key,
-    desc: mediaSortState.desc,
-    onChange: (key, desc) => {
-      setMediaSort(key, desc);
-      paintMedia();
-    },
-  });
-  root.querySelector('[data-media-sort]').replaceWith(mediaSortCtl.el);
+  // 漫画没有这个控件：页序 = page_no，被「按大小排序」改掉就不是漫画了
+  if (isComic) {
+    root.querySelector('[data-media-sort]').remove();
+    const readBtn = root.querySelector('[data-read]');
+    if (readBtn) readBtn.addEventListener('click', () => gotoComic(pack.id, lastPage > 1 ? lastPage : 1));
+  } else {
+    const mediaSortCtl = createMediaSort({
+      key: mediaSortState.key,
+      desc: mediaSortState.desc,
+      onChange: (key, desc) => {
+        setMediaSort(key, desc);
+        paintMedia();
+      },
+    });
+    root.querySelector('[data-media-sort]').replaceWith(mediaSortCtl.el);
+  }
 
   root.querySelector('[data-select-toggle]').addEventListener('click', () => {
     if (selecting) exitSelect();
@@ -430,9 +490,17 @@ export async function PackView(root, id) {
   root.querySelector('.page').addEventListener('contextmenu', (e) => {
     if (e.target.closest('.tile')) return;
     openContextMenu(e, [
+      ...(isComic
+        ? [{ label: '阅读', hint: `${items.filter((m) => m.kind === 'image').length} 页`, onClick: () => gotoComic(pack.id, lastPage > 1 ? lastPage : 1) }]
+        : []),
       { label: '添加素材', hint: '4 种来源', children: addMediaItems() },
       { label: '编辑图包', onClick: () => root.querySelector('[data-rename]').click() },
       { label: '编辑标签', onClick: editTags },
+      { separator: true },
+      // 图包 ⇄ 漫画：只改类型和页序，文件、封面、标签都不动
+      isComic
+        ? { label: '转回普通图包', onClick: () => convertKind('pack') }
+        : { label: '转为漫画包', hint: '按文件名排页序', onClick: () => convertKind('comic') },
       { label: '打开本地文件夹', onClick: () => api.reveal('pack', pack.id).catch(() => toast('目录已丢失')) },
     ]);
   });

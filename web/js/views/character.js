@@ -13,6 +13,7 @@ import { packOptions, matchPack } from '../components/pack-choice.js';
 import { bindDropUpload } from '../components/dropzone.js';
 import { queue } from '../upload-queue.js';
 import { applyPickClick } from '../selection.js';
+import { togglePackKind } from '../components/pack-kind.js';
 import { escDepth } from '../esc.js';
 import { ORIGIN_TYPES, novelFieldSet } from '../novel-fields.js';
 
@@ -166,6 +167,7 @@ export async function CharacterView(root, id) {
          </div>
          <div class="filter-note" data-res-note hidden></div>
          ${isWorkShelf() ? '<div class="cat-row" data-cats></div>' : ''}
+         ${isNovelShelf() ? '<div data-texts></div>' : ''}
          <div data-body></div>
          <div class="sel-bar" data-selbar hidden></div>
        </main>`
@@ -1213,6 +1215,18 @@ export async function CharacterView(root, id) {
     loadLinked();
   }
 
+  /** 进漫画阅读器 */
+  function openComic(packId) {
+    history.pushState({ from: location.pathname }, '', `/cm/${packId}`);
+    window.dispatchEvent(new CustomEvent('app:route'));
+  }
+
+  /** 图包 ⇄ 漫画（转换在公共组件里，处理「包里有视频」的二次确认） */
+  async function convertPack(p) {
+    const changed = await togglePackKind(p);
+    if (changed) await loadPacks();
+  }
+
   /** 只重画图包网格：换排序、勾选态变化都走这里，不重新拉数据 */
   function renderPacks() {
     const holder = root.querySelector('[data-body] [data-packs]');
@@ -1227,11 +1241,15 @@ export async function CharacterView(root, id) {
             ? `「${esc(resFilter)}」下还没有图包`
             : isWorkShelf()
               ? `「${cat}」还没有图包`
-              : '还没有图包'
+              : isNovelShelf()
+                ? '还没有分卷或插图'
+                : '还没有图包'
         }</b>${
           resFilter
             ? `给图包加上「${esc(resFilter)}」标签，它就会出现在这里`
-            : '上传图片或视频后，会按文件名里的日期自动月份归包；也可以点「＋ 图包」手动建一个'
+            : isNovelShelf()
+              ? '正文在上面「正文」区；想给书配插图或分卷，点「＋ 图包」或者直接上传图片'
+              : '上传图片或视频后，会按文件名里的日期自动月份归包；也可以点「＋ 图包」手动建一个'
         }
       </div>`;
       return;
@@ -1239,14 +1257,18 @@ export async function CharacterView(root, id) {
     holder.innerHTML = items
       .map((p) => {
         const img = p.coverMediaId ? api.thumb(p.coverMediaId) : '';
-        const meta = [p.imageCount ? `${p.imageCount} 图` : '', p.videoCount ? `${p.videoCount} 视频` : '']
-          .filter(Boolean)
-          .join(' · ');
+        const comic = p.kind === 'comic';
+        const meta = comic
+          ? `${p.imageCount || 0} 页${p.videoCount ? ` · ${p.videoCount} 视频` : ''}`
+          : [p.imageCount ? `${p.imageCount} 图` : '', p.videoCount ? `${p.videoCount} 视频` : '']
+              .filter(Boolean)
+              .join(' · ');
         const on = selecting && picked.has(p.id);
-        return `<div class="pack-card${on ? ' is-sel' : ''}" data-pack="${p.id}">
+        return `<div class="pack-card${on ? ' is-sel' : ''}" data-pack="${p.id}" data-kind="${comic ? 'comic' : 'pack'}">
           ${selecting ? '<span class="tick" aria-hidden="true"></span>' : ''}
           <a class="pack-hit" href="/p/${p.id}" data-link aria-label="${esc(p.title)}"></a>
           <div class="cover single">
+            ${comic ? '<span class="kind-chip">漫画</span>' : ''}
             ${img ? `<img src="${img}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : '<div class="cover-empty">空</div>'}
           </div>
           <div class="info">
@@ -1257,6 +1279,37 @@ export async function CharacterView(root, id) {
       })
       .join('');
     holder.querySelectorAll('img').forEach(fadeIn);
+
+    /* 图包右键：转漫画 / 转回图包。委托在网格容器上，只挂一次 ——
+       每次重画都 addEventListener 会让同一个菜单弹好几遍。 */
+    if (!holder.dataset.ctx) {
+      holder.dataset.ctx = '1';
+      holder.addEventListener('contextmenu', (e) => {
+        const card = e.target.closest('.pack-card');
+        if (!card || selecting) return;
+        const p = packsShown.find((x) => x.id === Number(card.dataset.pack));
+        if (!p) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const comic = p.kind === 'comic';
+        openContextMenu(e, [
+          { label: '打开', onClick: () => card.querySelector('.pack-hit')?.click() },
+          ...(comic
+            ? [
+                {
+                  label: '阅读',
+                  hint: `${p.imageCount || 0} 页`,
+                  onClick: () => openComic(p.id),
+                },
+              ]
+            : []),
+          { separator: true },
+          comic
+            ? { label: '转回普通图包', onClick: () => convertPack(p) }
+            : { label: '转为漫画包', hint: '按文件名排页序', onClick: () => convertPack(p) },
+        ]);
+      });
+    }
 
     // 选择模式下点卡片 = 勾选，必须用捕获阶段拦住 .pack-hit 的 data-link 跳转
     if (selecting) {
@@ -1492,7 +1545,10 @@ export async function CharacterView(root, id) {
     const input = document.createElement('input');
     input.type = 'file';
     input.multiple = true;
-    input.accept = 'image/*,video/*';
+    // 小说库额外收正文文件（txt / epub / pdf …），其他库只收图片视频
+    input.accept = isNovelShelf()
+      ? 'image/*,video/*,.txt,.epub,.pdf,.md,.doc,.docx'
+      : 'image/*,video/*';
     input.style.display = 'none';
     root.appendChild(input);
     input.addEventListener('change', () => {
@@ -1511,6 +1567,129 @@ export async function CharacterView(root, id) {
     input.click();
   }
 
+  // ---------- 小说正文（kind='file'） ----------
+  let texts = [];
+
+  async function loadTexts() {
+    const slot = root.querySelector('[data-texts]');
+    if (!slot) return;
+    try {
+      texts = (await api.charTexts(c.id)).items || [];
+    } catch {
+      texts = [];
+    }
+    paintTexts();
+  }
+
+  /**
+   * 正文文件列表。
+   *
+   * 诚实标注能力边界：TXT 站内能读；EPUB 这一期只入库 + 下载（零构建项目里
+   * 为了一个阅读器塞解压 + OPF 解析不划算）；PDF 浏览器自己就能开。
+   */
+  function paintTexts() {
+    const slot = root.querySelector('[data-texts]');
+    if (!slot) return;
+    const rows = texts
+      .map((t) => {
+        const ext = String(t.ext || '').toLowerCase();
+        const canRead = ext === 'txt';
+        const canOpen = ext === 'txt' || ext === 'pdf' || ext === 'md';
+        const note = canRead ? '' : ext === 'pdf' || ext === 'md' ? ' · 浏览器打开' : ' · 站内暂不支持阅读，可下载';
+        return `<div class="tf-row" data-text="${t.id}">
+          <span class="tf-ext">${esc((ext || '文件').toUpperCase())}</span>
+          <div class="tf-main">
+            <div class="tf-name" title="${esc(t.fileName)}">${esc(t.fileName)}</div>
+            <div class="tf-sub">${fmtBytes(t.bytes)}${note}</div>
+          </div>
+          ${canRead ? '<button class="tb-btn" data-tf="read">阅读</button>' : ''}
+          ${canOpen && !canRead ? '<button class="tb-btn" data-tf="open">打开</button>' : ''}
+          <button class="tb-btn" data-tf="dl">下载</button>
+          <button class="tb-btn" data-tf="del">删除</button>
+        </div>`;
+      })
+      .join('');
+
+    slot.innerHTML = `<section class="text-block">
+      <div class="tf-head">
+        <b>正文</b>
+        <i>${texts.length ? `${texts.length} 个文件` : '还没有'}</i>
+        <span class="tf-hint">${
+          texts.length ? 'TXT 站内阅读 · EPUB 需下载后用系统程序打开' : '支持 TXT / EPUB / PDF，TXT 可以直接在站内读'
+        }</span>
+        <span class="spacer"></span>
+        <button class="tb-btn" data-add-text>＋ 添加正文</button>
+      </div>
+      ${rows ? `<div class="tf-list">${rows}</div>` : ''}
+    </section>`;
+
+    slot.querySelector('[data-add-text]').addEventListener('click', pickTextFiles);
+    slot.querySelectorAll('[data-text]').forEach((row) => {
+      const t = texts.find((x) => x.id === Number(row.dataset.text));
+      if (!t) return;
+      row.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-tf]');
+        if (!btn) return;
+        const act = btn.dataset.tf;
+        if (act === 'read') {
+          history.pushState({ from: location.pathname + location.search }, '', `/read/${t.id}`);
+          window.dispatchEvent(new CustomEvent('app:route'));
+          return;
+        }
+        if (act === 'open') {
+          window.open(api.raw(t.id), '_blank', 'noopener');
+          return;
+        }
+        if (act === 'dl') {
+          const a = document.createElement('a');
+          a.href = api.raw(t.id, true);
+          a.download = t.fileName;
+          a.click();
+          return;
+        }
+        if (act === 'del') removeText(t);
+      });
+    });
+  }
+
+  async function removeText(t) {
+    const ok = await confirmDialog(`删除「${t.fileName}」？`, '磁盘上的文件也会一起删掉，不可恢复。');
+    if (!ok) return;
+    try {
+      await api.deleteMedia(t.id);
+      toast('已删除');
+      await loadTexts();
+      c = await api.character(id);
+      paint();
+    } catch (err) {
+      toast(err.message || '删除失败');
+    }
+  }
+
+  /** 选正文文件：txt / epub / pdf / md / doc(x) */
+  function pickTextFiles() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.accept = '.txt,.epub,.pdf,.md,.doc,.docx';
+    input.style.display = 'none';
+    root.appendChild(input);
+    input.addEventListener('change', () => {
+      const files = Array.from(input.files || []);
+      input.remove();
+      if (!files.length) return;
+      const n = queue.enqueue(files, {
+        charId: c.id,
+        charName: c.name,
+        packId: null,
+        packTitle: '',
+        category: packCategory(),
+      });
+      toast(n ? `已加入上传队列 ${n} 个文件` : '这些文件已经在队列里了');
+    });
+    input.click();
+  }
+
   /** 队列里所有文件都结束后刷新页面数据（不打断当前浏览就靠这个） */
   function watchUploads() {
     queue.onIdle = async () => {
@@ -1519,6 +1698,7 @@ export async function CharacterView(root, id) {
         c = await api.character(id);
         paint();
         await loadPacks();
+        if (isNovelShelf()) await loadTexts();
         if (mode === 'media') await loadMedia(true);
       } catch {
         /* 页面可能已经被切走了 */
@@ -1697,6 +1877,8 @@ export async function CharacterView(root, id) {
   root.querySelector('[data-upload]').addEventListener('click', () => pickFiles());
   bindContextMenus();
   watchUploads();
+  // 小说库：正文文件独立一块（不属于任何图包）
+  if (isNovelShelf()) await loadTexts();
   bindDropUpload(root.querySelector('.page'), () => ({
     charId: c.id,
     charName: c.name,

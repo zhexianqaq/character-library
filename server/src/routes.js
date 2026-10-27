@@ -38,6 +38,13 @@ const MIME = {
   '.gif': 'image/gif', '.bmp': 'image/bmp', '.avif': 'image/avif', '.heic': 'image/heic',
   '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
   '.mkv': 'video/x-matroska', '.avi': 'video/x-msvideo',
+  /* 正文文件：故意不写 charset —— 老网文大量是 GBK，写死 utf-8 会让
+     浏览器直接打开时全是乱码。站内阅读器是拿字节流自己判编码的，不受影响。 */
+  '.txt': 'text/plain', '.md': 'text/markdown',
+  '.epub': 'application/epub+zip', '.pdf': 'application/pdf',
+  '.mobi': 'application/x-mobipocket-ebook', '.azw3': 'application/vnd.amazon.ebook',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 };
 
 
@@ -268,12 +275,19 @@ function mapMedia(r) {
     // 视频自定义封面抽的是第几毫秒；null = 用自动首帧
     posterMs: r.poster_ms ?? null,
     sortOrder: r.sort_order,
+    // 漫画页序（只有漫画包有值）；和图包排序 sort_order 完全独立
+    pageNo: r.page_no ?? null,
     // 入库时间：图包内「按时间排序」的兜底键（文件名里有日期时优先用文件名）
     createdAt: r.created_at,
     tags: own,
     // 自己手动打的标签；tags 会被调用方替换成「含继承」的完整集合
     ownTags: own,
   };
+}
+
+/** 文件名自然序：1、2、10 按数字大小排 —— 漫画页序就靠它，别用字符串序 */
+function naturalCompare(a, b) {
+  return String(a).localeCompare(String(b), 'zh-Hans-CN', { numeric: true, sensitivity: 'base' });
 }
 
 /** 上传后按文件名月份自动归包；没有日期的进「未分类」 */
@@ -1464,7 +1478,38 @@ export function createApp() {
     // shelf 由 mapChar 带出（含 kind），这里不要再覆盖，否则前端拿不到库类型
     res.json({
       ...mapChar(row, tagsOf(db, row.id)),
-      stats: { image: byKind.image || 0, video: byKind.video || 0, total: byKind.image + byKind.video || 0 },
+      stats: {
+        image: byKind.image || 0,
+        video: byKind.video || 0,
+        // 小说库的「文件」= 正文（txt / epub / pdf …）
+        file: byKind.file || 0,
+        total: (byKind.image || 0) + (byKind.video || 0) + (byKind.file || 0),
+      },
+    });
+  });
+
+  /** 小说的正文文件列表（kind='file'）：详情页「正文」那一块用 */
+  app.get('/api/characters/:id/texts', (req, res) => {
+    const db = getDb();
+    const id = Number(req.params.id);
+    if (!db.prepare('SELECT 1 FROM characters WHERE id = ?').get(id)) {
+      return res.status(404).json({ error: '条目不存在' });
+    }
+    const rows = db
+      .prepare(
+        `SELECT id, file_name, ext, bytes, created_at FROM media
+          WHERE character_id = ? AND kind = 'file' ORDER BY file_name`
+      )
+      .all(id);
+    res.json({
+      items: rows.map((r) => ({
+        id: r.id,
+        fileName: r.file_name,
+        ext: String(r.ext || '').replace(/^\./, '').toLowerCase(),
+        bytes: r.bytes,
+        createdAt: r.created_at,
+      })),
+      total: rows.length,
     });
   });
 
@@ -1663,6 +1708,8 @@ export function createApp() {
         month: r.month,
         category: r.category,
         tags: safeJson(r.tags),
+        // pack 普通图包 / comic 漫画 / novel 小说袋
+        kind: r.kind || 'pack',
         mediaCount: r.media_count,
         imageCount: r.image_count,
         videoCount: r.video_count,
@@ -1755,6 +1802,8 @@ export function createApp() {
     res.json({
       id: row.id,
       title: row.title,
+      // pack 普通图包 / comic 漫画
+      kind: row.kind || 'pack',
       month: row.month,
       category: row.category,
       tags: safeJson(row.tags),
@@ -1814,6 +1863,54 @@ export function createApp() {
       createdAt: fresh.created_at,
       coverMediaId: fresh.cover_media_id || null,
     });
+  });
+
+  /**
+   * 图包 ⇄ 漫画 转换。
+   *
+   * 只改 packs.kind 和 media.page_no —— 文件一个都不搬、封面和标签全保留，
+   * 所以随时能转回去。页序按文件名自然序（1、2、10），点「重新编号」也能再来一遍。
+   */
+  app.post('/api/packs/:id/convert', (req, res) => {
+    const db = getDb();
+    const id = Number(req.params.id);
+    const pack = db.prepare('SELECT * FROM packs WHERE id = ?').get(id);
+    if (!pack) return res.status(404).json({ error: '图包不存在' });
+    if (pack.kind === 'novel') return res.status(400).json({ error: '小说袋不能转成漫画' });
+
+    const to = String((req.body && req.body.to) || '').trim();
+    if (to !== 'comic' && to !== 'pack') return res.status(400).json({ error: '只能转成 comic 或 pack' });
+
+    if (to === 'pack') {
+      // 转回普通图包：页序清空，媒体顺序回到 sort_order（否则会被 page_no 继续支配）
+      db.transaction(() => {
+        db.prepare('UPDATE media SET page_no = NULL WHERE pack_id = ?').run(id);
+        db.prepare("UPDATE packs SET kind = 'pack' WHERE id = ?").run(id);
+      })();
+      return res.json({ ok: true, kind: 'pack', pages: 0, videos: 0 });
+    }
+
+    const rows = db.prepare('SELECT id, kind, file_name FROM media WHERE pack_id = ?').all(id);
+    const images = rows.filter((r) => r.kind === 'image');
+    const videos = rows.filter((r) => r.kind === 'video');
+    if (!images.length) return res.status(400).json({ error: '这个图包里没有图片，转不了漫画' });
+    const onlyImages = !!(req.body && req.body.onlyImages);
+    if (videos.length && !onlyImages) {
+      return res.status(409).json({
+        error: `包内有 ${videos.length} 个视频，无法参与漫画阅读`,
+        videos: videos.length,
+        images: images.length,
+      });
+    }
+
+    images.sort((a, b) => naturalCompare(a.file_name, b.file_name));
+    const setPage = db.prepare('UPDATE media SET page_no = ? WHERE id = ?');
+    db.transaction(() => {
+      images.forEach((r, i) => setPage.run(i + 1, r.id));
+      db.prepare("UPDATE packs SET kind = 'comic' WHERE id = ?").run(id);
+    })();
+
+    res.json({ ok: true, kind: 'comic', pages: images.length, videos: videos.length });
   });
 
   // 默认「解散」：只删图包，里面的媒体变成未归包；
@@ -1964,7 +2061,8 @@ export function createApp() {
     const packId = Number(req.params.id);
     const pack = db.prepare('SELECT character_id, tags FROM packs WHERE id = ?').get(packId);
     const rows = db
-      .prepare('SELECT * FROM media WHERE pack_id = ? ORDER BY sort_order, file_name')
+      // 漫画按页序读，普通图包保持原顺序（page_no 全是 NULL 时排序键退化成 sort_order）
+      .prepare('SELECT * FROM media WHERE pack_id = ? ORDER BY (page_no IS NULL), page_no, sort_order, file_name')
       .all(packId);
     const base = pack ? mediaTagSet(db, pack.character_id) : [];
     // 图包标签下发给包内每张图：标一次全包生效，读时合并所以改了立刻全包同步
@@ -1995,7 +2093,8 @@ export function createApp() {
     // 已经在目标图包里的排到后面：一打开就是可选的，不用先滚过一堆「已在包内」
     const pid = Number(req.query.packId) || null;
 
-    const where = [];
+    // 正文文件不是「素材」，别出现在挑图列表里
+    const where = ["m.kind <> 'file'"];
     const params = { limit, offset, pid };
     if (scope === 'character') {
       if (!charId) return res.status(400).json({ error: '缺少角色' });
@@ -2315,7 +2414,8 @@ export function createApp() {
     const db = getDb();
     const charId = Number(req.params.id);
     const kind = String(req.query.kind || '').trim();
-    const where = ['character_id = @charId'];
+    // 正文文件（txt / epub）在详情页有独立的「正文」列表，不进图片瀑布流
+    const where = ["character_id = @charId", "kind <> 'file'"];
     const params = { charId };
     if (kind === 'image' || kind === 'video') {
       where.push('kind = @kind');
@@ -2349,6 +2449,8 @@ export function createApp() {
 
     const forcedPackId = req.body && req.body.packId ? Number(req.body.packId) : null;
     const category = String((req.body && req.body.category) || '').trim().slice(0, 20) || null;
+    const shelfRow = db.prepare('SELECT kind FROM shelves WHERE id = ?').get(char.shelf_id);
+    const shelfKindOfChar = (shelfRow && shelfRow.kind) || '';
     const added = [];
     const skipped = [];
     /**
@@ -2365,6 +2467,12 @@ export function createApp() {
       if (!kind) {
         await drop();
         skipped.push({ name: originalName, reason: '不支持的文件类型' });
+        continue;
+      }
+      // 正文文件只有小说库收：别的库里放 txt / pdf 只会变成一堆打不开的条目
+      if (kind === 'file' && shelfKindOfChar !== 'novel') {
+        await drop();
+        skipped.push({ name: originalName, reason: '正文文件只能放进小说库' });
         continue;
       }
 
@@ -2384,22 +2492,28 @@ export function createApp() {
       }
 
       // 先定图包，才知道文件该进哪个目录
+      const isDoc = kind === 'file';
       const month = monthOfFileName(originalName);
       // 表情库没有「按日期归包」：不指定图包就直接落到未分类
-      const pack = forcedPackId
-        ? db.prepare('SELECT id, title, category FROM packs WHERE id = ?').get(forcedPackId)
-        : char.is_container
-          ? null
-          : ensurePackFor(db, charId, month, category);
-      if (forcedPackId && !pack) {
+      const pack = isDoc
+        ? null
+        : forcedPackId
+          ? db.prepare('SELECT id, title, category, kind FROM packs WHERE id = ?').get(forcedPackId)
+          : char.is_container
+            ? null
+            : ensurePackFor(db, charId, month, category);
+      if (!isDoc && forcedPackId && !pack) {
         await drop();
         skipped.push({ name: originalName, reason: '图包不存在' });
         continue;
       }
 
-      const relDir = pack
-        ? await resolvePackDir(db, char.dir_slug, pack, kind, pack.category || category)
-        : `${char.dir_slug}/未分类/${kind === 'image' ? '图片' : '视频'}`;
+      // 正文文件不属于任何图包：<库>/<书>/未分类/文件
+      const relDir = isDoc
+        ? `${char.dir_slug}/未分类/文件`
+        : pack
+          ? await resolvePackDir(db, char.dir_slug, pack, kind, pack.category || category)
+          : `${char.dir_slug}/未分类/${kind === 'image' ? '图片' : '视频'}`;
 
       let saved;
       try {
@@ -2414,11 +2528,16 @@ export function createApp() {
         continue;
       }
 
+      // 漫画包：新图接在最后一页后面，别打乱已有页序
+      const pageNo =
+        pack && pack.kind === 'comic'
+          ? db.prepare('SELECT COALESCE(MAX(page_no),0)+1 AS n FROM media WHERE pack_id = ?').get(pack.id).n
+          : null;
       const info = db
         .prepare(
-          `INSERT INTO media(character_id, pack_id, kind, rel_path, file_name, ext, bytes, sha256, width, height, anim, sort_order, created_at)
+          `INSERT INTO media(character_id, pack_id, kind, rel_path, file_name, ext, bytes, sha256, width, height, anim, sort_order, page_no, created_at)
            VALUES(?,?,?,?,?,?,?,?,?,?,?,
-             (SELECT COALESCE(MAX(sort_order),-1)+1 FROM media WHERE pack_id IS ?),?)`
+             (SELECT COALESCE(MAX(sort_order),-1)+1 FROM media WHERE pack_id IS ?),?,?)`
         )
         .run(
           charId,
@@ -2433,12 +2552,14 @@ export function createApp() {
           saved.height,
           saved.anim ? 1 : 0,
           pack ? pack.id : null,
+          pageNo,
           nowIso()
         );
       const newId = Number(info.lastInsertRowid);
       added.push(newId);
       if (pack) touchedPacks.add(pack.id);
-      getDerivative(newId, 'thumb').catch(() => {});
+      // 正文文件没有缩略图，别往生成池里塞无解的活
+      if (kind !== 'file') getDerivative(newId, 'thumb').catch(() => {});
     }
 
     for (const pid of touchedPacks) refreshPack(pid);
@@ -2589,6 +2710,30 @@ export function createApp() {
     } catch {
       if (!res.headersSent) res.status(500).end();
     }
+  });
+
+  /**
+   * 正文文件原样下发（txt / epub / pdf …）。
+   * inline 给浏览器直接打开（txt 阅读器 fetch 成字节流自己判编码），
+   * ?download=1 则当附件下载。sendFile 自带 Range，PDF 翻页不会整个重下。
+   */
+  app.get('/api/media/:id/raw', (req, res) => {
+    const db = getDb();
+    const row = db.prepare('SELECT * FROM media WHERE id = ?').get(Number(req.params.id));
+    if (!row) return res.status(404).end();
+    const abs = absPathOf(row.rel_path);
+    if (!fs.existsSync(abs)) return res.status(410).json({ error: '文件已丢失', path: row.rel_path });
+    const inline = String(req.query.download || '') !== '1';
+    res.set('Content-Type', MIME[row.ext] || 'application/octet-stream');
+    // 正文文件随时可能被替换成同名新版本，别让浏览器吃旧缓存
+    res.set('Cache-Control', 'no-cache');
+    res.set(
+      'Content-Disposition',
+      `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(row.file_name)}`
+    );
+    res.sendFile(abs, { dotfiles: 'allow' }, (err) => {
+      if (err && !res.headersSent) res.status(404).end();
+    });
   });
 
   app.get('/m/:id', (req, res) => {

@@ -137,9 +137,28 @@ export async function NovelView(root, shelfId, opts = {}) {
     </a>`;
   }
 
+  /** 袋子对应哪一组书：「未分类」袋子装的是没填类型 / 原作的书（novel_group 为空） */
+  const groupOfBag = (b) => (b.title === '未分类' ? '' : b.title);
+
+  /** 当前分类视图（出版 / 网络）下，这个袋子里有几本书 */
+  function bagCount(b, view = state.view) {
+    const g = groupOfBag(b);
+    return items.filter((x) => (x.novelGroup || '') === g && (!view || x.novelSubtype === view)).length;
+  }
+
+  /**
+   * 只列出当前视图下有书的袋子。
+   * 以前不管视图、不管有没有书都画出来 —— 「出版」视图里冒出一个全是网络书的袋子，
+   * 点进去空空如也，纯属误导。
+   */
+  function visibleBags() {
+    return bags.filter((b) => bagCount(b) > 0);
+  }
+
   function paintMeta() {
     const words = items.reduce((a, x) => a + (x.wordCount || 0), 0);
-    const parts = [`${fmtNum(bags.length)} 个袋子`, `${fmtNum(items.length)} 本`];
+    const shown = visibleBags();
+    const parts = [`${fmtNum(shown.length)} 个袋子`, `${fmtNum(items.length)} 本`];
     if (words) parts.push(wordsLabel(words));
     if (state.bag) parts.unshift(state.bag);
     root.querySelector('[data-meta]').textContent = parts.join(' · ');
@@ -159,18 +178,18 @@ export async function NovelView(root, shelfId, opts = {}) {
   }
 
   /** 袋子卡片：外观沿用书卡片，只是元素是 button（袋子不是条目） */
-  function bagCard(b) {
+  function bagCard(b, n = b.bookCount) {
     const img = b.coverMediaId ? api.thumb(b.coverMediaId) : '';
     return `<button class="char-card novel-card bag-card" data-bag="${esc(b.title)}" type="button">
       <div class="cover">
         <div class="cover-title"><span>${esc(b.title)}</span></div>
         ${img ? `<img src="${img}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : ''}
         <span class="sub-chip">小说袋</span>
-        ${b.bookCount ? `<span class="badge">${fmtNum(b.bookCount)}</span>` : ''}
+        ${n ? `<span class="badge">${fmtNum(n)}</span>` : ''}
       </div>
       <div class="info">
         <div class="name">${esc(b.title)}</div>
-        <div class="sub">${b.bookCount ? `${b.bookCount} 本` : '还没有书'}</div>
+        <div class="sub">${n ? `${n} 本` : '还没有书'}</div>
       </div>
     </button>`;
   }
@@ -183,19 +202,26 @@ export async function NovelView(root, shelfId, opts = {}) {
     // ① 袋子列表
     if (!state.bag) {
       const q = state.q.trim().toLowerCase();
-      const list = q ? bags.filter((b) => b.title.toLowerCase().includes(q)) : bags;
+      const shown = visibleBags();
+      const list = q ? shown.filter((b) => b.title.toLowerCase().includes(q)) : shown;
       if (count) count.textContent = `${list.length} 个袋子`;
       if (!list.length) {
-        body.innerHTML = `<div class="empty"><b>${bags.length ? '没有匹配的袋子' : '还没有袋子'}</b>${
+        // 分清楚「一个袋子都没有」和「这个视图下没有书」：后者藏起来才是对的
+        const viewLabel = (data.views.find((v) => v.value === state.view) || {}).label || '';
+        body.innerHTML = `<div class="empty"><b>${
+          bags.length ? (q ? '没有匹配的袋子' : `「${esc(viewLabel)}」下还没有书`) : '还没有袋子'
+        }</b>${
           bags.length
-            ? '换个关键词试试'
+            ? q
+              ? '换个关键词试试'
+              : '切到「全部」看看，或者新建一本'
             : `点「＋ 新建袋子」先分个类（比如玄幻、科幻）；新建小说时填的${
                 isFan() ? '原作品' : '类型'
               }也会自动变成袋子`
         }</div>`;
         return;
       }
-      body.innerHTML = `<div class="char-grid">${list.map(bagCard).join('')}</div>`;
+      body.innerHTML = `<div class="char-grid">${list.map((b) => bagCard(b, bagCount(b))).join('')}</div>`;
       body.querySelectorAll('[data-bag]').forEach((el) => {
         el.addEventListener('click', () => {
           state.bag = el.dataset.bag;
@@ -347,6 +373,8 @@ export async function NovelView(root, shelfId, opts = {}) {
       state.view = btn.dataset.v;
       paintTabs();
       paintBody();
+      // 袋子数量也跟视图走（出版视图里不该算上只有网络书的袋子）
+      paintMeta();
     });
 
     root.querySelector('[data-new-bag]').addEventListener('click', async () => {
@@ -362,7 +390,9 @@ export async function NovelView(root, shelfId, opts = {}) {
       try {
         await api.createNovelBag(id, v.title);
         bags = (await api.novelBags(id)).items || [];
-        toast(`已创建「${v.title}」`);
+        // 空袋子在列表里是隐藏的，建完直接进去，不然刚建的东西「不见了」
+        state.bag = String(v.title).trim();
+        toast(`已创建「${state.bag}」`);
         paintMeta();
         paintBody();
       } catch (err) {

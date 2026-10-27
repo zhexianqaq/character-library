@@ -16,14 +16,17 @@ async function req(url, opts = {}) {
   const res = await fetch(url, opts);
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`;
+    let j = null;
     try {
-      const j = await res.json();
+      j = await res.json();
       if (j && j.error) msg = j.error;
     } catch {
       /* 非 JSON */
     }
     const err = new Error(msg);
     err.status = res.status;
+    // 带上原始 body：调用方要用结构化信息（比如转换漫画时到底有几个视频）
+    if (j && typeof j === 'object') err.body = j;
     throw err;
   }
   // 写操作一律让总览作废：宁可多查一次，也不要显示旧数字
@@ -86,6 +89,8 @@ export const api = {
     if (id) thumbBumps.set(Number(id), Date.now());
   },
   preview: (id) => (id ? `/pv/${id}` : ''),
+  /** 正文文件原样读取（txt 用字节流自己判编码，其余浏览器直接打开） */
+  raw: (id, download = false) => `/api/media/${id}/raw${download ? '?download=1' : ''}`,
   original: (id) => `/m/${id}`,
 
   overview: ({ fresh = false } = {}) => {
@@ -126,9 +131,13 @@ export const api = {
   deletePack: (id, { withMedia = false } = {}) =>
     req(`/api/packs/${id}${withMedia ? '?withMedia=1' : ''}`, { method: 'DELETE' }),
   packMedia: (id) => req(`/api/packs/${id}/media`),
+  /** 图包 ⇄ 漫画：只改 packs.kind / media.page_no，文件不动 */
+  convertPack: (id, to, opts = {}) => json('POST')(`/api/packs/${id}/convert`, { to, ...opts }),
   addMediaToPack: (packId, ids) => json('POST')(`/api/packs/${packId}/media`, { ids }),
   pickMedia: (params) => req(`/api/media/pick${qs(params)}`),
   characterMedia: (id, params) => req(`/api/characters/${id}/media${qs(params)}`),
+  /** 小说正文文件列表（kind='file'） */
+  charTexts: (id) => req(`/api/characters/${id}/texts`),
 
   media: (id) => req(`/api/media/${id}`),
   updateMedia: (id, patch) => json('PATCH')(`/api/media/${id}`, patch),
