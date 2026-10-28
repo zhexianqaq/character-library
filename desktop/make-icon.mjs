@@ -142,7 +142,16 @@ async function renderSize(size) {
   }
 
   if (PNG_MODE) {
-    // PNG 自带 alpha，不需要 AND mask，也不需要 bit 位运算
+    // PNG 自带 alpha，不需要 AND mask，也不需要 bit 位运算。
+    // 但全透明像素的 RGB 仍然抹白 —— 和 BMP 分支同一条理由：万一某条渲染路径
+    // 不看 alpha，看到的是白角而不是黑框。
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] < 8) {
+        data[i] = 255;
+        data[i + 1] = 255;
+        data[i + 2] = 255;
+      }
+    }
     return await sharp(data, { raw: { width: size, height: size, channels: 4 } })
       .png({ compressionLevel: 9 })
       .toBuffer();
@@ -203,5 +212,5 @@ const ico = Buffer.concat([header, ...images.map((i) => i.dib)]);
 mkdirSync(path.dirname(out), { recursive: true });
 writeFileSync(out, ico);
 console.log(
-  `[ok] ${out} (${Math.round(ico.length / 1024)} KB, ${SIZES.join('/')} —— ${SIZES.length} 张 32bpp)`,
+  `[ok] ${out} (${Math.round(ico.length / 1024)} KB, ${SIZES.join('/')} —— ${SIZES.length} 张 ${PNG_MODE ? 'PNG' : '32bpp BMP'})`,
 );

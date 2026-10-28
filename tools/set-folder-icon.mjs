@@ -6,9 +6,11 @@
  *   2. `desktop.ini` 加 隐藏 + 系统 属性，目录本身加 系统 属性（否则 shell 不读它）
  *   3. 通知 shell 刷新图标缓存（`ie4uinit.exe -show`）
  *
- * 默认给两个目录各配一张：
- *   - 程序目录（仓库根）→ `desktop/assets/icon.ico`        书本
+ * 默认给这些目录配图标：
+ *   - 程序目录（仓库根）→ `desktop/assets/icon.ico`          书本
  *   - 数据目录（CL_DATA_DIR）→ `desktop/assets/icon-data.ico` 角色抱着文件
+ *   - 八个库目录 → `desktop/assets/shelves/<kind>.ico`        从数据库现读库名
+ *   - `.catalog` / `.covers` → `desktop/assets/meta/*.ico`    元数据目录
  *
  * 为什么用 Node 而不是 .ps1：`desktop.ini` 要 UTF-16 LE（中文路径必须），
  * 而 Windows PowerShell 5.1 跑 UTF-8 无 BOM 的 .ps1 遇到中文注释会解析失败。
@@ -53,6 +55,15 @@ function shelfIcon(kind, variant) {
 }
 
 /**
+ * 数据目录下的两个元数据目录。它们不是「库」，没有 shelves 记录，
+ * 单独挂图标 —— 否则夹在八个彩色库目录中间会显得像漏掉了。
+ */
+const META_ICON = [
+  ['.catalog', 'catalog.ico'], // 索引库：文件夹 + 文档 + 星轨
+  ['.covers', 'covers.ico'], // 自定义封面：文件夹 + 相片
+];
+
+/**
  * 默认：程序目录用书本、数据目录用角色，八个库目录各挂自己的图标。
  *
  * 库名从数据库现读 —— 库里改过名（v3.55 那轮）也不会错位；
@@ -81,6 +92,14 @@ function defaultPlan() {
   } catch (err) {
     console.log(`- 读库失败，跳过库目录：${err.message}`);
   }
+
+  for (const [name, ico] of META_ICON) {
+    plan.push({
+      dir: path.join(DATA_DIR, name),
+      icon: path.join(root, 'desktop', 'assets', 'meta', ico),
+    });
+  }
+
   return plan;
 }
 

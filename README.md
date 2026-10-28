@@ -69,11 +69,12 @@ start.bat
 想让这些文件夹在资源管理器里显示成图标（而不是黄文件夹）：
 
 ```bash
-node tools/set-folder-icon.mjs        # 程序目录 + 数据目录 + 八个库目录，各挂各的
+node tools/set-folder-icon.mjs        # 程序目录 + 数据目录 + 八个库目录 + 两个元数据目录
 ```
 
-九个图标（数据目录 + 八个库）来自同一套设计稿，源图在 `desktop/assets/` 与 `desktop/assets/shelves/`，
-用 `node desktop/make-icon.mjs <源图> <输出.ico>` 各自生成七种尺寸；文件夹图标加 `--png` 压体积。
+十一个图标来自同一套设计稿，源图分三处：程序与数据目录在 `desktop/assets/`，
+八个库在 `desktop/assets/shelves/`，`.catalog` / `.covers` 在 `desktop/assets/meta/`。
+都用 `node desktop/make-icon.mjs <源图> <输出.ico>` 生成七种尺寸；文件夹图标加 `--png` 压体积。
 源图主体贴到画布边的（角色那张），加 `--inset=0.9` 缩进去一点，否则圆角会切到头发。
 
 靠 `desktop.ini`（UTF-16 LE）+ 文件夹的系统属性实现，**只在本机生效** ——
