@@ -58,6 +58,25 @@ const upload = multer({
   limits: { fileSize: 4 * 1024 ** 3, files: 400 },
 });
 
+/**
+ * 压缩包上传的体检日志：每次尝试记一行，出问题不用再靠猜。
+ * 落在 `<CACHE>/archive-log.jsonl`，超过 2 MB 轮转一份 `.1`。
+ *
+ * v3.69 那次「还是跳过了」查了半天没有现场：请求是 200 还是 400、文件名是什么、
+ * 有没有带密码、解出几个文件、入库几个 —— 全靠猜。这里一次记全。
+ */
+function logArchiveAttempt(entry) {
+  try {
+    const file = path.join(CACHE_DIR, 'archive-log.jsonl');
+    if (fs.existsSync(file) && fs.statSync(file).size > 2 * 1024 * 1024) {
+      fs.renameSync(file, `${file}.1`);
+    }
+    fs.appendFileSync(file, `${JSON.stringify({ at: nowIso(), ...entry })}\n`);
+  } catch {
+    /* 记日志失败不能影响上传本身 */
+  }
+}
+
 function decodeName(n) {
   try {
     const utf8 = Buffer.from(String(n), 'latin1').toString('utf8');
@@ -3152,6 +3171,13 @@ export function createApp() {
     const shelfRow = db.prepare('SELECT kind FROM shelves WHERE id = ?').get(char.shelf_id);
     const shelfKind = (shelfRow && shelfRow.kind) || '';
 
+    // 压缩包本该走 /archive；如果它出现在这里，说明前端把它当成了图片 / 视频 ——
+    // 表现就是「上传结束，N 个跳过」，日志里留个现场，别再让它变成悬案
+    const strays = files.map((f) => decodeName(f.originalname)).filter((n) => isArchiveName(n));
+    if (strays.length) {
+      logArchiveAttempt({ via: 'media', stage: 'wrong-route', names: strays.slice(0, 5), charId });
+    }
+
     const out = await ingestFiles(
       db,
       char,
@@ -3245,7 +3271,9 @@ export function createApp() {
       if (!req.file) return res.status(400).json({ error: '没有收到压缩包' });
 
       const originalName = decodeName(req.file.originalname);
+      logArchiveAttempt({ via: 'upload', name: originalName, bytes: req.file.size, password: !!(req.body && req.body.password), stage: 'received' });
       if (!isArchiveName(originalName)) {
+        logArchiveAttempt({ via: 'upload', name: originalName, stage: 'reject', code: 'NOT_ARCHIVE' });
         await cleanup();
         return res.status(400).json({ error: '只支持 zip / rar / 7z / tar / tar.gz 压缩包' });
       }
@@ -3275,6 +3303,13 @@ export function createApp() {
           password: String((req.body && req.body.password) || '').slice(0, 128),
         });
       } catch (err) {
+        logArchiveAttempt({
+          via: 'upload',
+          name: originalName,
+          stage: 'extract',
+          code: err.code || 'ARCHIVE_FAILED',
+          error: err.message || '解压失败',
+        });
         const kept = await keepArchive();
         await cleanup();
         return res.status(400).json({
@@ -3287,6 +3322,17 @@ export function createApp() {
       // 只要图片 / 视频：压缩包里通常还有 readme、种子、网址快捷方式
       const media = packed.files.filter((f) => ['image', 'video'].includes(kindOfExt(path.extname(f.name))));
       if (!media.length) {
+        logArchiveAttempt({
+          via: 'upload',
+          name: originalName,
+          stage: 'filter',
+          format: packed.format,
+          tool: packed.tool || null,
+          entries: packed.files.length,
+          media: 0,
+          sample: packed.files.slice(0, 8).map((f) => f.name),
+          code: 'NO_MEDIA',
+        });
         const kept = await keepArchive();
         await cleanup();
         return res.status(400).json({
@@ -3336,6 +3382,18 @@ export function createApp() {
           },
         });
       }
+      logArchiveAttempt({
+        via: 'upload',
+        name: originalName,
+        stage: 'done',
+        format: packed.format,
+        tool: packed.tool || null,
+        entries: packed.files.length,
+        media: media.length,
+        added: out.added.length,
+        skipped: out.skipped.length,
+        packId: pack ? pack.id : null,
+      });
       const summary = {
         added: out.added.length,
         ids: out.added,

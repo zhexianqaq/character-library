@@ -5,6 +5,29 @@
 > 功能索引（每个功能是哪一版加的）、版本历史总表、提交与 tag 约定，见 **[README.md](README.md#功能一览)**。
 > 本文件只记「每个版本具体改了什么、踩到了什么坑」。
 
+## v3.70 — 压缩包上传留现场：每次尝试都记一行
+
+v3.69 之后仍然收到「还是跳过了」，但库里只多了一个手建的空包（0 个媒体），`.cache/failed` 里没有记录、服务端也没有日志 —— **没有任何现场可查**，只能靠猜。
+
+现在每次压缩包上传都往 `<缓存>/archive-log.jsonl` 追加一行（超过 2 MB 轮转 `.1`）：
+
+```
+{"stage":"received","name":"#水淼Aqua_…50P.tar","bytes":81959424,"password":true}
+{"stage":"done","format":"tar","tool":"native","entries":51,"media":50,"added":50,"skipped":0,"packId":1136}
+```
+
+`stage` 有五种，对应链路上五个可能出事的点：
+
+| stage | 含义 |
+|---|---|
+| `received` | 收到了，记下文件名 / 大小 / 有没有带密码 |
+| `reject` | 扩展名不在支持列表（`NOT_ARCHIVE`） |
+| `extract` | 解压抛错（带 `code`：`NEED_PASSWORD` / `BAD_PASSWORD` / `ARCHIVE_FAILED`） |
+| `filter` | 解出来了但没有图片视频（带前 8 个文件名样本） |
+| `done` | 入库成功（`entries` / `media` / `added` / `skipped` / `packId`） |
+
+另外媒体上传接口也会记一笔 `via:"media", stage:"wrong-route"`：**压缩包如果被前端当成图片视频发到了 `/media`，这里会留下现场** —— 那种情况在界面上正好显示成「跳过」，而服务端什么都不会说。
+
 ## v3.69 — tar 与嵌套包：为什么那个 `.tar` 被「跳过」
 
 现象：拖入 `#水淼Aqua_…_50P.tar`（81 MB），上传直接失败 / 被跳过，界面上一句「没有图片或视频」或者干脆没反应。
