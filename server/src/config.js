@@ -106,6 +106,36 @@ export function slugify(name) {
   return cleanSegment(name, 60);
 }
 
+/**
+ * **文件名**用的段落清洗：超长时保留扩展名，并且留下结尾那一截。
+ *
+ * 抖音 / QQ / 夸克这类导出的一批文件，名字常常是「超长标题 + _001.jpg」「…_002.jpg」，
+ * 十来个文件前 80 个字符完全一样。`cleanSegment()` 只砍尾巴，会同时砍掉两样东西：
+ *   1. `.jpg` —— 兄弟代码按扩展名判类型，于是整包被判成「没有图片或视频」；
+ *   2. `_001` —— 12 个文件变成同一个名字，只能靠 `-1 … -11` 区分。
+ *
+ * 所以这里改成**中间省略**：头 60% 留标题，尾 40% 留区分位，扩展名单独接回去。
+ * 按 Unicode 码点切，不会把 🛰️ 这类代理对劈开（含 emoji 时 JS 的 `.length` 会比 maxLen
+ * 多几个单元，比起 NTFS 的 255 上限仍然很宽裕）。
+ */
+export function cleanFileSegment(raw, maxLen = 100) {
+  const safe = cleanSegment(raw, 2040); // 特殊字符 / 保留字 / 结尾的点先在这一步处理掉
+  if (safe.length <= maxLen) return safe;
+
+  const m = /(\.[A-Za-z0-9]{1,10})$/.exec(safe);
+  const ext = m ? m[1] : '';
+  const stem = ext ? safe.slice(0, -ext.length) : safe;
+  const budget = maxLen - ext.length - 1; // 1 个字符留给分隔用的 ~
+  if (budget < 8) return safe.slice(0, maxLen); // 扩展名长得离谱，退回老的截断方式
+
+  const cp = Array.from(stem);
+  const headLen = Math.ceil(budget * 0.6);
+  const tailLen = budget - headLen;
+  const head = cp.slice(0, headLen).join('');
+  const tail = tailLen > 0 ? cp.slice(Math.max(headLen, cp.length - tailLen)).join('') : '';
+  return `${head}~${tail}${ext}`;
+}
+
 /** 启动时确认数据盘在位，否则直接报清楚，不要让它悄悄建到 C 盘 */
 export function assertStorageReady() {
   const parent = path.dirname(DATA_DIR);

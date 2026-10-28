@@ -17,7 +17,7 @@
 | Desktop shell | Rust · tao + wry (WebView2), **a 1.4 MB single-file exe** (icon and version info compiled into the PE), statically linked CRT, no DLL dependencies |
 | Storage | SQLite index + media files on disk; paths are stored **relative**, so moving the library to another drive needs no data change |
 
-This page documents **v3.65** (2026-10-28), 81 tags. The e2e suite (`npm test` in `server/`) runs 140 cases before a release.
+This page documents **v3.66** (2026-10-28), 82 tags. The e2e suite (`npm test` in `server/`) runs 140 cases before a release.
 
 ## Screenshots
 
@@ -98,7 +98,7 @@ If you want “double-click one file and it works”, build the desktop shell �
 - [Testing](#testing)
 - [Known limitations](#known-limitations)
 - [Version control](#version-control) — commit / tag / push conventions, lookup, rollback
-- [Version history](#version-history) — the full v2.0 → v3.65 table
+- [Version history](#version-history) — the full v2.0 → v3.66 table
 - [CHANGELOG.md](CHANGELOG.md) — per-version detail and the traps hit along the way (Chinese)
 
 > Other languages (Japanese / Korean / Traditional Chinese / Russian / French) carry a condensed overview;
@@ -1332,6 +1332,7 @@ are in **2026**.
 | v3.63 | 10-28 | **`.catalog` / `.covers` icons** — the two metadata folders get their own, so the data folder looks complete |
 | v3.64 | 10-28 | **Ctrl+F focuses the search box** — the browser find bar is intercepted (it cannot see lazily rendered cards); dialogs keep focus, pages without a search box fall back to the browser |
 | v3.65 | 10-28 | **Duplicate names rejected** — the uniqueness check now covers every shelf (not just novels), applies to create and rename, returns `409` with the existing id so the UI jumps there; batch create reports skips separately from failures |
+| v3.66 | 10-28 | **Long filenames keep their extension** — truncation during extraction and upload now elides the middle, preserving both the extension and the trailing `_001`; Douyin/Qzone archives are no longer rejected as "no images or videos" |
 
 **e2e count over time** (recorded since v3.14): 111 → 115 → 116 → 118 → 119 → 120 → 122 → 125 → 133 → 140.
 Versions that only add features (like v3.23) keep the previous count.

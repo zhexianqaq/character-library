@@ -5,7 +5,7 @@ import zlib from 'node:zlib';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { spawn } from 'node:child_process';
-import { cleanSegment } from './config.js';
+import { cleanFileSegment } from './config.js';
 
 /**
  * 压缩包解压（只做「拆开成散文件」，不认识图片视频）。
@@ -191,7 +191,7 @@ function safeRelParts(name) {
     .split('/')
     .map((s) => s.trim())
     .filter((s) => s && s !== '.' && s !== '..' && !/^[a-z]:$/i.test(s))
-    .map((s) => cleanSegment(s, 80));
+    .map((s) => cleanFileSegment(s, 80));
 }
 
 async function uniqueTarget(root, parts) {

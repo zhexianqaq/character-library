@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
-import { DATA_DIR, INBOX_DIR, cleanSegment, slugify } from './config.js';
+import { DATA_DIR, INBOX_DIR, cleanFileSegment, slugify } from './config.js';
 
 const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.avif', '.heic', '.jfif', '.tif', '.tiff']);
 const VIDEO_EXT = new Set(['.mp4', '.mov', '.mkv', '.avi', '.wmv', '.webm', '.m4v', '.flv', '.ts', '.mpg', '.mpeg', '.3gp']);
@@ -44,12 +44,7 @@ export async function hashFileOf(abs) {
  * 设备名 / 结尾点空格由 cleanSegment 处理（CON.mp4 这类在 Windows 上也建不出来）。
  */
 export function safeFileName(name) {
-  const base = path.basename(String(name || 'file'));
-  const clean = cleanSegment(base, 255);
-  if (clean.length <= 100) return clean;
-  const ext = path.extname(clean).slice(0, 12);
-  const stem = cleanSegment(clean.slice(0, Math.max(1, 100 - ext.length)), Math.max(1, 100 - ext.length));
-  return stem + ext;
+  return cleanFileSegment(path.basename(String(name || 'file')), 100);
 }
 
 function extOf(name) {
