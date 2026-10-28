@@ -18,7 +18,7 @@ use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use tao::dpi::LogicalSize;
+use tao::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoop};
 use tao::window::WindowBuilder;
@@ -157,6 +157,92 @@ fn log(msg: &str) {
     {
         let _ = f.write_all(line.as_bytes());
     }
+}
+
+/// 窗口几何。`x` / `y` 是外框左上角，`w` / `h` 是客户区内尺寸，单位都是物理像素
+/// （tao 的 `outer_position` / `inner_size` 原生就是这样，存成逻辑像素反而要反推 DPI）。
+/// `x = -1` 表示「没有记录过位置」，交给系统决定（通常居中）。
+#[derive(Clone, Copy)]
+struct WindowState {
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    maximized: bool,
+}
+
+/// 尺寸上限：比屏幕窄 80、矮 140（标题栏 + 任务栏），保证窗口四边都够得着。
+/// 多屏取最大的那块算上限 —— 小屏上开大窗口是用户自己的选择，
+/// 这里只拦「比屏幕还大」这一种情况。
+fn size_cap(monitors: &[tao::monitor::MonitorHandle]) -> (u32, u32) {
+    let w = monitors.iter().map(|m| m.size().width).max().unwrap_or(1920);
+    let h = monitors.iter().map(|m| m.size().height).max().unwrap_or(1080);
+    (w.saturating_sub(80).max(600), h.saturating_sub(140).max(400))
+}
+
+fn state_path() -> PathBuf {
+    log_dir().join("window.json")
+}
+
+/// 只认整数，够用且不用把 serde 拖进 release 构建。
+fn json_int(raw: &str, key: &str) -> Option<i64> {
+    let k = format!("\"{key}\"");
+    let mut rest = &raw[raw.find(&k)? + k.len()..];
+    // 跳过 key 与值之间的 `:` 和空白
+    rest = &rest[rest.find(|c: char| c == '-' || c.is_ascii_digit())?..];
+    let end = rest
+        .find(|c: char| !(c == '-' || c.is_ascii_digit()))
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+fn json_bool(raw: &str, key: &str) -> Option<bool> {
+    let k = format!("\"{key}\"");
+    let rest = &raw[raw.find(&k)? + k.len()..];
+    let rest = &rest[rest.find(|c: char| c == 't' || c == 'f')?..];
+    Some(rest.starts_with('t'))
+}
+
+fn load_state() -> Option<WindowState> {
+    let raw = fs::read_to_string(state_path()).ok()?;
+    Some(WindowState {
+        x: json_int(&raw, "x")? as i32,
+        y: json_int(&raw, "y")? as i32,
+        // 下限挡住手改坏的值；上限挡住「记住了一个 50000 宽的窗口」
+        w: json_int(&raw, "w")?.clamp(400, 20000) as u32,
+        h: json_int(&raw, "h")?.clamp(300, 20000) as u32,
+        maximized: json_bool(&raw, "max").unwrap_or(false),
+    })
+}
+
+fn save_state(s: WindowState) {
+    let body = format!(
+        "{{\"x\":{},\"y\":{},\"w\":{},\"h\":{},\"max\":{}}}\n",
+        s.x,
+        s.y,
+        s.w,
+        s.h,
+        if s.maximized { "true" } else { "false" }
+    );
+    let _ = fs::write(state_path(), body);
+}
+
+/// 记忆的矩形还落在某块屏幕上吗？拔掉外接显示器 / 改分辨率后，
+/// 上次记的坐标可能整块跑到可见区域之外，窗口就成了「点开看不到」。
+/// 判定用交集：残留宽度 ≥120、高度 ≥60，保证标题栏抓得住。
+fn state_visible(s: &WindowState, monitors: &[tao::monitor::MonitorHandle]) -> bool {
+    let (x0, y0) = (s.x, s.y);
+    let (x1, y1) = (s.x + s.w as i32, s.y + s.h as i32);
+    for m in monitors {
+        let mp = m.position();
+        let ms = m.size();
+        let ix = x1.min(mp.x + ms.width as i32) - x0.max(mp.x);
+        let iy = y1.min(mp.y + ms.height as i32) - y0.max(mp.y);
+        if ix >= 120 && iy >= 60 {
+            return true;
+        }
+    }
+    false
 }
 
 /// 工程根目录：从 exe 往上找带 `server/src/index.js` 的那一层。
@@ -420,12 +506,57 @@ fn main() {
     }
 
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new()
+
+    // 位置/大小记忆：先确认上次记的矩形还落在某块屏幕上。外接显示器拔掉、
+    // 分辨率改小之后，旧坐标可能整块越界，恢复出来就是「点开什么都没有」。
+    let monitors: Vec<_> = event_loop.available_monitors().collect();
+    let restored = load_state().filter(|s| s.x != -1 && state_visible(s, &monitors));
+    log(&format!(
+        "window state: {:?} (monitors: {})",
+        restored.map(|s| (s.x, s.y, s.w, s.h, s.maximized)),
+        monitors.len()
+    ));
+    let (cap_w, cap_h) = size_cap(&monitors);
+    // 本机是 200% 缩放，1440×900 逻辑 = 2880×1800 物理，正好顶满整块屏 ——
+    // 外框一加上就比屏幕还大，右边和下边被切。所以默认值也要过一遍上限。
+    let scale = monitors.first().map(|m| m.scale_factor()).unwrap_or(1.0);
+    let initial = match restored {
+        Some(mut s) => {
+            // 换了更小的屏幕：尺寸夹到上限，位置仍用记的那个
+            s.w = s.w.min(cap_w);
+            s.h = s.h.min(cap_h);
+            s
+        }
+        None => WindowState {
+            x: -1,
+            y: -1,
+            w: ((1440.0 * scale) as u32).min(cap_w),
+            h: ((900.0 * scale) as u32).min(cap_h),
+            maximized: false,
+        },
+    };
+
+    let win_builder = WindowBuilder::new()
         .with_title("资料库")
-        .with_inner_size(LogicalSize::new(1440.0, 900.0))
         .with_min_inner_size(LogicalSize::new(960.0, 640.0))
-        .build(&event_loop)
-        .expect("window");
+        .with_inner_size(PhysicalSize::new(initial.w, initial.h));
+    let win_builder = if initial.x != -1 {
+        win_builder.with_position(PhysicalPosition::new(initial.x, initial.y))
+    } else {
+        win_builder
+    };
+    let window = win_builder.build(&event_loop).expect("window");
+    if initial.maximized {
+        window.set_maximized(true);
+    }
+
+    // 持续记录「非最大化」的几何：最大化时的 inner_size 是整屏尺寸，
+    // 存下来下次还原就成了整屏大小，而不是用户自己拖出来的那个大小。
+    let mut last_pos = window
+        .outer_position()
+        .map(|p| (p.x, p.y))
+        .unwrap_or((initial.x, initial.y));
+    let mut last_normal = (initial.w, initial.h);
 
     // WebView2 默认把用户数据（缓存 / cookie）拉在 exe 旁边，叫「资料库.exe.WebView2」，
     // 放在项目根又脏又会被备份脚本拷走 —— 统一挪到 %LOCALAPPDATA%\ams-desktop\webview2
@@ -509,32 +640,58 @@ fn main() {
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
-        if let Event::WindowEvent {
-            event: WindowEvent::CloseRequested,
-            ..
-        } = event
-        {
-            // 先让窗口消失。收尾（等 checkpoint、杀进程、销毁 WebView2）还在主线程上，
-            // 但用户已经看不到它了 —— 以前是窗口僵在那里同步 sleep(900)，点完像卡死。
-            let _ = window.set_visible(false);
-            // 服务是我们起的才由我们收尸；复用别人起的就别乱杀
-            if let Some(mut c) = child.take() {
-                let started = Instant::now();
-                let graceful = ask_shutdown(port);
-                // 答应了就多给点时间 checkpoint；没答应（连不上 / 不是我们的服务）就别等
-                let limit = if graceful { 2500 } else { 300 };
-                if !wait_exit(&mut c, Duration::from_millis(limit)) {
-                    let _ = c.kill();
-                    let _ = c.wait();
+        let Event::WindowEvent { event, .. } = event else {
+            return;
+        };
+        match event {
+            // 拖动 / 缩放时持续记账，关窗那一刻直接用，不用再读窗口
+            WindowEvent::Moved(p) => {
+                if !window.is_maximized() {
+                    last_pos = (p.x, p.y);
                 }
-                log(&format!(
-                    "server stopped: {} in {}ms",
-                    if graceful { "graceful" } else { "forced" },
-                    started.elapsed().as_millis()
-                ));
             }
-            log("---- shell exit ----");
-            *control_flow = ControlFlow::Exit;
+            WindowEvent::Resized(size) => {
+                if !window.is_maximized() && size.width > 0 && size.height > 0 {
+                    last_normal = (size.width, size.height);
+                }
+            }
+            WindowEvent::CloseRequested => {
+                let state = WindowState {
+                    x: last_pos.0,
+                    y: last_pos.1,
+                    w: last_normal.0,
+                    h: last_normal.1,
+                    maximized: window.is_maximized(),
+                };
+                save_state(state);
+                log(&format!(
+                    "save window state: ({}, {}, {}, {}) max={}",
+                    state.x, state.y, state.w, state.h, state.maximized
+                ));
+
+                // 先让窗口消失。收尾（等 checkpoint、杀进程、销毁 WebView2）还在主线程上，
+                // 但用户已经看不到它了 —— 以前是窗口僵在那里同步 sleep(900)，点完像卡死。
+                let _ = window.set_visible(false);
+                // 服务是我们起的才由我们收尸；复用别人起的就别乱杀
+                if let Some(mut c) = child.take() {
+                    let started = Instant::now();
+                    let graceful = ask_shutdown(port);
+                    // 答应了就多给点时间 checkpoint；没答应（连不上 / 不是我们的服务）就别等
+                    let limit = if graceful { 2500 } else { 300 };
+                    if !wait_exit(&mut c, Duration::from_millis(limit)) {
+                        let _ = c.kill();
+                        let _ = c.wait();
+                    }
+                    log(&format!(
+                        "server stopped: {} in {}ms",
+                        if graceful { "graceful" } else { "forced" },
+                        started.elapsed().as_millis()
+                    ));
+                }
+                log("---- shell exit ----");
+                *control_flow = ControlFlow::Exit;
+            }
+            _ => {}
         }
     });
 }
