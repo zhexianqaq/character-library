@@ -91,6 +91,52 @@ mod win32 {
         fn IsIconic(hwnd: *mut c_void) -> i32;
         fn BringWindowToTop(hwnd: *mut c_void) -> i32;
         fn SetForegroundWindow(hwnd: *mut c_void) -> i32;
+        fn SendMessageW(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize;
+        fn CreateIconFromResourceEx(
+            bits: *const u8,
+            size: u32,
+            is_icon: i32,
+            ver: u32,
+            cx: i32,
+            cy: i32,
+            flags: u32,
+        ) -> *mut c_void;
+    }
+
+    /// `with_window_icon` 只落到 ICON_SMALL（标题栏对），实测 WM_GETICON 的
+    /// ICON_BIG 仍是 0 —— 任务栏分组和 Alt+Tab 会退回去显示默认图标。
+    /// 这里直接从同一份 ICO 的 DIB 造一个 HICON 补上。
+    pub fn apply_big_icon(hwnd: isize, ico: &[u8]) {
+        if hwnd == 0 || ico.len() < 22 {
+            return;
+        }
+        let hwnd = hwnd as *mut c_void;
+        let off = u32::from_le_bytes([ico[18], ico[19], ico[20], ico[21]]) as usize;
+        let Some(dib) = ico.get(off..) else {
+            return;
+        };
+        if dib.is_empty() {
+            return;
+        }
+        unsafe {
+            let hicon = CreateIconFromResourceEx(
+                dib.as_ptr(),
+                dib.len() as u32,
+                1, // fIcon
+                0x0003_0000,
+                0,
+                0,
+                0,
+            );
+            if hicon.is_null() {
+                return;
+            }
+            const WM_SETICON: u32 = 0x0080;
+            const ICON_BIG: usize = 1;
+            const ICON_SMALL: usize = 0;
+            SendMessageW(hwnd, WM_SETICON, ICON_BIG, hicon as isize);
+            SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon as isize);
+        }
     }
 
     fn wide(s: &str) -> Vec<u16> {
@@ -508,6 +554,52 @@ fn json_escape(s: &str) -> String {
     out
 }
 
+/// 图标字节：`desktop/make-icon.mjs` 生成，48×48 32bpp。
+const ICON_ICO: &[u8] = include_bytes!("../assets/icon.ico");
+
+/// 从 ICO 里取第一张图转成 tao 的 Icon。
+///
+/// 只认「32bpp 未压缩 BMP」这一支 —— 图标是 `desktop/make-icon.mjs` 自己生成的，
+/// 格式可控；换成 PNG-compressed ICO 就返回 None 退回系统默认图标，不 panic。
+/// 解析手写而不引 `image` crate：一张 48×48 的图不值得让 release 构建多等半分钟。
+fn load_icon(bytes: &[u8]) -> Option<tao::window::Icon> {
+    // ICONDIR: reserved(u16=0) type(u16=1) count(u16)
+    if bytes.len() < 22 || bytes[0] != 0 || bytes[1] != 0 || bytes[2] != 1 || bytes[3] != 0 {
+        return None;
+    }
+    if u16::from_le_bytes([bytes[4], bytes[5]]) == 0 {
+        return None;
+    }
+    let entry = &bytes[6..22];
+    let w = entry[0] as u32;
+    let h = entry[1] as u32;
+    let off = u32::from_le_bytes([entry[12], entry[13], entry[14], entry[15]]) as usize;
+    let dib = bytes.get(off..)?;
+    if dib.len() < 40 {
+        return None;
+    }
+    let bit_count = u16::from_le_bytes([dib[14], dib[15]]);
+    let compression = u32::from_le_bytes([dib[16], dib[17], dib[18], dib[19]]);
+    if bit_count != 32 || compression != 0 || w == 0 || h == 0 {
+        return None;
+    }
+    let row = w as usize * 4;
+    let pixels = dib.get(40..)?.get(..row * h as usize)?;
+    let mut rgba = vec![0u8; row * h as usize];
+    // BMP 是 bottom-up、BGRA；Icon::from_rgba 要 top-down RGBA
+    for y in 0..h as usize {
+        let src = &pixels[(h as usize - 1 - y) * row..][..row];
+        for x in 0..w as usize {
+            let o = (y * w as usize + x) * 4;
+            rgba[o] = src[x * 4 + 2];
+            rgba[o + 1] = src[x * 4 + 1];
+            rgba[o + 2] = src[x * 4];
+            rgba[o + 3] = src[x * 4 + 3];
+        }
+    }
+    tao::window::Icon::from_rgba(rgba, w, h).ok()
+}
+
 fn main() {
     let port: u16 = env::var("AMS_PORT")
         .ok()
@@ -587,8 +679,14 @@ fn main() {
         },
     };
 
+    let icon = load_icon(ICON_ICO);
+    log(&format!(
+        "window icon: {}",
+        if icon.is_some() { "loaded" } else { "default" }
+    ));
     let win_builder = WindowBuilder::new()
         .with_title("资料库")
+        .with_window_icon(icon)
         .with_min_inner_size(LogicalSize::new(960.0, 640.0))
         .with_inner_size(PhysicalSize::new(initial.w, initial.h));
     let win_builder = if initial.x != -1 {
@@ -597,6 +695,11 @@ fn main() {
         win_builder
     };
     let window = win_builder.build(&event_loop).expect("window");
+    #[cfg(windows)]
+    {
+        use tao::platform::windows::WindowExtWindows;
+        win32::apply_big_icon(window.hwnd(), ICON_ICO);
+    }
     if initial.maximized {
         window.set_maximized(true);
     }
