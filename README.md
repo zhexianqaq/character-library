@@ -66,6 +66,15 @@ set CL_CACHE_DIR=D:\my-cache
 start.bat
 ```
 
+想让这两个文件夹在资源管理器里显示成项目图标（而不是黄文件夹）：
+
+```bash
+node tools/set-folder-icon.mjs        # 程序目录 + 数据目录；也可以传别的目录
+```
+
+靠 `desktop.ini`（UTF-16 LE）+ 文件夹的系统属性实现，**只在本机生效** ——
+`desktop.ini` 已被 `.gitignore` 排除，换机器或重新 clone 后重跑一次即可。
+
 想要「双击一个文件就能用」，再构建桌面壳 —— 见下面「桌面壳」一节。
 
 ## 目录
