@@ -63,6 +63,77 @@ const SHELL_JS: &str = r#"
 })();
 "#;
 
+/// 单实例判定：命名互斥量 + 把已有窗口叫到前台。
+///
+/// 不用 `windows-sys` 之类的 crate，只声明这三个函数——加依赖会让 release 构建
+/// 变慢，也会把 `Cargo.lock` 撑大，而这里需要的功能就这么点。
+#[cfg(windows)]
+mod win32 {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+    use std::time::Duration;
+
+    const ERROR_ALREADY_EXISTS: i32 = 183;
+    const SW_RESTORE: i32 = 9;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CreateMutexW(attrs: *const c_void, owner: i32, name: *const u16) -> *mut c_void;
+    }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn FindWindowW(class: *const u16, title: *const u16) -> *mut c_void;
+        fn ShowWindow(hwnd: *mut c_void, cmd: i32) -> i32;
+        fn IsIconic(hwnd: *mut c_void) -> i32;
+        fn BringWindowToTop(hwnd: *mut c_void) -> i32;
+        fn SetForegroundWindow(hwnd: *mut c_void) -> i32;
+    }
+
+    fn wide(s: &str) -> Vec<u16> {
+        std::ffi::OsStr::new(s)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    }
+
+    /// `None` = 已经有实例在跑；`Some(handle)` = 我们是第一个。
+    /// handle 故意不关闭：进程退出时内核自动释放，这正是互斥量的生命周期。
+    pub fn acquire_mutex() -> Option<*mut c_void> {
+        let name = wide(r"Local\ams-character-library-shell");
+        let h = unsafe { CreateMutexW(ptr::null(), 0, name.as_ptr()) };
+        if h.is_null() {
+            // 建不出来（极少见）就别拦着用户启动
+            return Some(ptr::null_mut());
+        }
+        // 必须在 CreateMutexW 之后立刻取，中间不能插别的 API 调用
+        let exists = std::io::Error::last_os_error().raw_os_error() == Some(ERROR_ALREADY_EXISTS);
+        if exists { None } else { Some(h) }
+    }
+
+    /// 找标题为 `title` 的窗口并激活。旧实例可能还在启动（窗口尚未创建），
+    /// 所以在 1.5 秒内重试，避免「双击两次出两个窗口」的竞态。
+    pub fn activate_window(title: &str) -> bool {
+        let t = wide(title);
+        for _ in 0..15 {
+            let h = unsafe { FindWindowW(ptr::null(), t.as_ptr()) };
+            if !h.is_null() {
+                unsafe {
+                    if IsIconic(h) != 0 {
+                        ShowWindow(h, SW_RESTORE);
+                    }
+                    BringWindowToTop(h);
+                    SetForegroundWindow(h);
+                }
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        false
+    }
+}
+
 fn stamp() -> String {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
     format!("{}.{:03}", now.as_secs(), now.subsec_millis())
@@ -300,6 +371,19 @@ fn main() {
         .unwrap_or(DEFAULT_PORT);
 
     log("---- shell start ----");
+
+    // 双击两次只该有一个窗口。抢到互斥量 = 第一个；抢不到就把已有窗口叫到前台再退出。
+    // 注意这里不能提前 return 掉服务逻辑的判断：抢不到时连服务都不该碰。
+    #[cfg(windows)]
+    match win32::acquire_mutex() {
+        None => {
+            let hit = win32::activate_window("资料库");
+            log(&format!("duplicate instance; activate existing window: {hit}"));
+            return;
+        }
+        Some(_guard) => log("single instance: primary"),
+    }
+
     let app = find_app_dir();
     log(&format!("app dir: {:?}", app));
 
