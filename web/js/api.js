@@ -232,6 +232,14 @@ export function uploadArchive(charId, file, { packId = null, category = null, pa
  * 桌面壳专用：按本机绝对路径导入。
  * 浏览器拿不到路径，只有壳的 drop 事件能给；`move` 默认 true —— 入库成功才删源文件。
  */
-export function importPaths({ paths, charId, packId = null, category = null, password = '', move = true }) {
-  return json('POST')('/api/import/paths', { paths, charId, packId, category, password, move });
+export function importPaths({
+  paths,
+  charId,
+  packId = null,
+  category = null,
+  password = '',
+  passwords = [],
+  move = true,
+}) {
+  return json('POST')('/api/import/paths', { paths, charId, packId, category, password, passwords, move });
 }

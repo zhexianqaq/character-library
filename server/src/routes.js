@@ -3668,6 +3668,12 @@ export function createApp() {
     const forcedPackId = b.packId ? Number(b.packId) : null;
     const category = String(b.category || '').trim().slice(0, 20) || null;
     const password = String(b.password || '').slice(0, 128);
+    // 桌面壳拖进来的压缩包不会弹密码框（那条链路是「路径导入」，没有上传队列的 UI）。
+    // 所以前端把本机记住过的密码整串带过来，服务端逐个试 —— 试对了零交互。
+    const savedPasswords = (Array.isArray(b.passwords) ? b.passwords : [])
+      .map((x) => String(x || '').slice(0, 128))
+      .filter(Boolean);
+    let usedPassword = '';
     const move = b.move !== false;
     const shelfRow = db.prepare('SELECT kind FROM shelves WHERE id = ?').get(char.shelf_id);
     const shelfKind = (shelfRow && shelfRow.kind) || '';
@@ -3738,13 +3744,48 @@ export function createApp() {
             batch.push({ path: tmp, name: path.basename(f) });
           }
         } else if (isArchiveName(path.basename(abs))) {
-          const workDir = await fsp.mkdtemp(path.join(CACHE_DIR, 'unzip-'));
-          workDirs.push(workDir);
-          let packed;
-          try {
-            packed = await extractArchive(abs, workDir, { password });
-          } catch (err) {
-            skipped.push({ name: path.basename(abs), reason: err.message || '解压失败', code: err.code });
+          const tries = [...new Set([password, ...savedPasswords].filter(Boolean))];
+          let packed = null;
+          let lastErr = null;
+          for (const pw of tries.length ? tries : ['']) {
+            // 每次都用新目录：密码错了会写出一堆解坏的半成品，不能复用
+            const workDir = await fsp.mkdtemp(path.join(CACHE_DIR, 'unzip-'));
+            workDirs.push(workDir);
+            try {
+              packed = await extractArchive(abs, workDir, { password: pw });
+              if (pw) usedPassword = pw;
+              lastErr = null;
+              break;
+            } catch (err) {
+              lastErr = err;
+              // 只有「密码不对 / 没密码」才值得换下一个密码试
+              if (err.code !== 'NEED_PASSWORD' && err.code !== 'BAD_PASSWORD') break;
+            }
+          }
+          logArchiveAttempt({
+            via: 'path',
+            name: path.basename(abs),
+            bytes: st.size,
+            stage: packed ? 'done' : 'extract',
+            tried: tries.filter(Boolean).length,
+            code: packed ? 'OK' : (lastErr && lastErr.code) || 'ARCHIVE_FAILED',
+            error: packed ? undefined : lastErr && lastErr.message,
+          });
+          if (!packed) {
+            // 要密码 / 密码全错：整包失败，交给前端弹窗问一次
+            if (lastErr && ['NEED_PASSWORD', 'BAD_PASSWORD', 'ZIP_AES'].includes(lastErr.code)) {
+              const err = new Error(lastErr.message || '压缩包需要密码');
+              err.status = 400;
+              err.code = lastErr.code;
+              err.archiveName = path.basename(abs);
+              err.tried = tries.filter(Boolean).length;
+              throw err;
+            }
+            skipped.push({
+              name: path.basename(abs),
+              reason: (lastErr && lastErr.message) || '解压失败',
+              code: lastErr && lastErr.code,
+            });
             continue;
           }
           archiveName = path.basename(abs);
@@ -3795,8 +3836,10 @@ export function createApp() {
           }
           removed.push(`${path.basename(abs)}/ (${gone}/${files.length})`);
         } else if (archiveName) {
-          // 压缩包本身不入库：解出来的文件要么新入库、要么全是重复，才认为可以删
-          const allOk = out.added.length > 0 || out.skipped.every((s) => s.reason === '重复文件');
+          // 压缩包本身不入库。**只有真的从里面捞出新东西才删源盘上的包**。
+          // 以前「全是重复」也算成功 → 拖一个库里已经有的包，界面提示「跳过」，
+          // 源文件却被删了（v3.71 修）。宁可留个重复的包，也不静默删用户的文件。
+          const allOk = out.added.length > 0;
           if (allOk) {
             await fsp
               .unlink(abs)
@@ -3821,10 +3864,31 @@ export function createApp() {
           entityId: added[0],
           action: 'add',
           source: 'shell',
-          payload: { ids: added, charId, packId: packId || null },
+          payload: { ids: added, charId, packId: forcedPackId },
         });
       }
-      res.json({ added: added.length, ids: added, skipped, removed, kept });
+      logArchiveAttempt({
+        via: 'path',
+        stage: 'summary',
+        charId,
+        packId: forcedPackId,
+        added: added.length,
+        skipped: skipped.length,
+        removed: removed.length,
+        kept: kept.length,
+      });
+      res.json({ added: added.length, ids: added, skipped, removed, kept, passwordUsed: usedPassword });
+    } catch (err) {
+      // 密码类的错误要有自己的形状：前端靠 code 决定「弹窗问密码」还是「直接报错」
+      if (err && ['NEED_PASSWORD', 'BAD_PASSWORD', 'ZIP_AES'].includes(err.code)) {
+        return res.status(400).json({
+          error: err.message,
+          code: err.code,
+          archiveName: err.archiveName || null,
+          tried: err.tried || 0,
+        });
+      }
+      throw err;
     } finally {
       await Promise.all(
         workDirs.map((d) => fsp.rm(d, { recursive: true, force: true, maxRetries: 2 }).catch(() => {}))

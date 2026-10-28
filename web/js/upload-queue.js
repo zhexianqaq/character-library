@@ -386,6 +386,14 @@ export const queue = {
 };
 
 /** 从拖拽事件里取出文件，支持文件夹递归 */
+/* 路径导入（桌面壳拖拽）没有上传队列的 UI，但密码库是同一份：
+   它需要「读已保存的密码列表」和「没辙时弹一次密码框」，所以把内部实现放出来。 */
+export const archivePasswords = {
+  known: savedPasswords,
+  remember: rememberPassword,
+  ask: askPassword,
+};
+
 export async function filesFromDataTransfer(dt) {
   const items = dt && dt.items ? Array.from(dt.items) : [];
   const entries = items

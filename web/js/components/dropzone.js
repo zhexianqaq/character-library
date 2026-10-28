@@ -1,4 +1,4 @@
-import { filesFromDataTransfer, queue } from '../upload-queue.js';
+import { filesFromDataTransfer, queue, archivePasswords } from '../upload-queue.js';
 import { importPaths } from '../api.js';
 import { esc, toast } from '../util.js';
 
@@ -12,27 +12,63 @@ import { esc, toast } from '../util.js';
  * 桌面壳拖进来的路径：走服务端「从路径导入」。
  * 这是唯一能删掉源文件的通道 —— 浏览器上传只给字节，不知道文件在哪。
  */
+/** 「跳过」不能只报数字：把第一条原因说出来，用户才知道下一步干什么 */
+function describeImport(res) {
+  const bits = [];
+  if (res.added) bits.push(`入库 ${res.added} 个`);
+  if (res.removed && res.removed.length) bits.push(`删源 ${res.removed.length} 项`);
+  if (res.kept && res.kept.length) bits.push(`保留 ${res.kept.length} 项`);
+  const skipped = res.skipped || [];
+  if (skipped.length) {
+    const allDup = skipped.every((x) => x.reason === '重复文件');
+    bits.push(allDup ? `已在库里（${skipped.length} 项）` : `跳过 ${skipped.length} 项：${skipped[0].reason}`);
+  }
+  return bits.join(' · ') || '没有可导入的内容';
+}
+
 async function importFromPaths(target, paths) {
   if (!paths || !paths.length) return;
-  toast(`正在导入 ${paths.length} 项…`);
-  try {
-    const res = await importPaths({
+  // 桌面壳这条链路没有上传队列的密码框，所以先把本机记住的密码整串带上，
+  // 服务端会逐个试；全试完还不行才弹一次框（比每次拖都问要好得多）。
+  const known = archivePasswords.known();
+  const send = (password = '') =>
+    importPaths({
       paths,
       charId: target.charId,
       packId: target.packId || null,
       category: target.category || null,
+      password,
+      passwords: known,
     });
-    const bits = [];
-    if (res.added) bits.push(`入库 ${res.added} 个`);
-    if (res.removed && res.removed.length) bits.push(`删源 ${res.removed.length} 项`);
-    if (res.kept && res.kept.length) bits.push(`保留 ${res.kept.length} 项`);
-    if (res.skipped && res.skipped.length) bits.push(`跳过 ${res.skipped.length} 项`);
-    toast(bits.join(' · ') || '没有可导入的内容');
-    // 让当前视图重新拉数据，新素材立刻出现
-    window.dispatchEvent(new CustomEvent('app:route'));
+
+  toast(`正在导入 ${paths.length} 项…`);
+  let res;
+  try {
+    res = await send();
   } catch (err) {
-    toast(err && err.message ? err.message : '导入失败');
+    const body = (err && err.body) || {};
+    if (body.code === 'NEED_PASSWORD' || body.code === 'BAD_PASSWORD') {
+      const tried = Number(body.tried) || 0;
+      const who = body.archiveName ? `「${body.archiveName}」` : '这个压缩包';
+      const pw = await archivePasswords.ask(
+        body.code === 'BAD_PASSWORD'
+          ? `${who}试过本机记住的 ${tried} 个密码都不对，再输一次`
+          : `${who}有密码，输一次就能解（会记在本机，下次自动用）`
+      );
+      if (!pw) return toast('已取消导入');
+      try {
+        res = await send(pw);
+      } catch (err2) {
+        return toast((err2 && err2.body && err2.body.error) || err2.message || '导入失败');
+      }
+    } else {
+      return toast(body.error || (err && err.message) || '导入失败');
+    }
   }
+  if (res && res.passwordUsed) archivePasswords.remember(res.passwordUsed);
+  toast(describeImport(res));
+  // 让当前视图重新拉数据，新素材立刻出现
+  window.dispatchEvent(new CustomEvent('app:route'));
 }
 
 // 全局兜底：拖到顶栏或窗口空白处松手时，别让浏览器直接打开这个文件
@@ -97,7 +133,7 @@ export function bindDropUpload(el, getTarget, opts = {}) {
         </div>
         <b>松手开始上传</b>
         <span>${hint}</span>
-        ${opts.noArchive ? '' : '<em class="drop-tip">压缩包（zip / rar / 7z）会自动解压</em>'}
+        ${opts.noArchive ? '' : '<em class="drop-tip">压缩包（zip / rar / 7z / tar）会自动解压，有密码会问你</em>'}
       </div>`;
     document.body.appendChild(mask);
     requestAnimationFrame(() => mask && mask.classList.add('on'));

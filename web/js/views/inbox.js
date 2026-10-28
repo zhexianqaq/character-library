@@ -782,7 +782,7 @@ export async function InboxView(root, shelfId, opts = {}) {
     const input = document.createElement('input');
     input.type = 'file';
     input.multiple = true;
-    input.accept = 'image/*,video/*,.zip,.rar,.7z,.tgz,.tar';
+    input.accept = 'image/*,video/*,.zip,.rar,.7z,.tgz,.tar,.tar.gz';
     input.style.display = 'none';
     root.appendChild(input);
     input.addEventListener('change', () => {
