@@ -1796,14 +1796,14 @@ button.char-card {
   overflow: visible;
 }
 /* 播放器下面那颗小按钮（只有视频有）：白胶囊，跟名称胶囊同一套语言 */
-.mp-actions {
+.mp-coverbar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 6px;
   z-index: 3;
 }
-.mp-actions[hidden] { display: none; }
+.mp-coverbar[hidden] { display: none; }
 .mp-cover {
   height: 30px;
   padding: 0 14px;

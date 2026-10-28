@@ -58,7 +58,7 @@ export async function MediaView(root, id) {
           <button class="mp-x" data-close aria-label="关闭">✕</button>
         </div>
         <div class="mp-canvas" data-canvas></div>
-        <div class="mp-actions" data-actions hidden>
+        <div class="mp-coverbar" data-actions hidden>
           <button class="mp-cover" data-cover>设为视频封面</button>
           <button class="mp-cover ghost" data-cover-reset hidden>恢复默认封面</button>
         </div>
@@ -112,8 +112,10 @@ export async function MediaView(root, id) {
       h = availH;
       w = h * ar;
     }
-    canvas.style.width = `${Math.round(w)}px`;
-    canvas.style.height = `${Math.round(h)}px`;
+    // 向下取整：可用高度正好等于「视频 + 间距 + 按钮」，四舍五入多出来的 1px
+    // 会让整个内容超出容器（justify-content:center 会让它上下各顶出去一半）
+    canvas.style.width = `${Math.floor(w)}px`;
+    canvas.style.height = `${Math.floor(h)}px`;
   }
 
   function renderStage() {
@@ -154,6 +156,10 @@ export async function MediaView(root, id) {
     }
     stage.classList.toggle('is-video', isVideo);
     syncCoverButtons();
+    // 尺寸要等按钮栏可见之后再算：actions.hidden 仍为 true 时 offsetHeight 是 0，
+    // 算出来的可用高度多 40px，竖屏视频就会顶出白卡（上面那次 fitVideo 只覆盖
+    // 元数据已缓存的情况，它在 syncCoverButtons 之前跑）。
+    if (isVideo) fitVideo();
   }
 
   function renderInfo() {
