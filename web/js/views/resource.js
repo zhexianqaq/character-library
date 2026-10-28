@@ -1,5 +1,18 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fadeIn, toast, copyText, charDeleteMessage, splitAliases } from '../util.js';
+import {
+  esc,
+  fmtNum,
+  fadeIn,
+  toast,
+  copyText,
+  charDeleteMessage,
+  splitAliases,
+  isSelectAllKey,
+  isTypingTarget,
+  keepScroll,
+} from '../util.js';
+import { applyPickClick } from '../selection.js';
+import { escDepth } from '../esc.js';
 import { topbarHtml, bindTopbar, bindTopbarSearch } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openTagPicker } from '../components/tag-picker.js';
@@ -20,6 +33,10 @@ export async function ResourceView(root, id) {
   let packs = packData.items || [];
   // 顶栏搜索：同时过滤「官方图包」和「相关角色 / 人物」两块
   let q = '';
+  // 多选：picked 存 id，跨搜索过滤保留；「全选」只作用于当前筛选结果
+  let selecting = false;
+  const picked = new Set();
+  let anchorId = null;
 
   root.innerHTML =
     topbarHtml({
@@ -59,8 +76,11 @@ export async function ResourceView(root, id) {
        <div class="section-head">
          <h2>相关角色 / 人物</h2>
          <span class="meta" data-related-count></span>
+         <button class="tb-btn" data-add-char>＋ 添加角色</button>
+         <button class="tb-btn" data-select-toggle>选取</button>
        </div>
        <div class="char-grid" data-related></div>
+       <div class="sel-bar" data-selbar hidden></div>
      </main>`;
 
   bindTopbar(root);
@@ -233,6 +253,8 @@ export async function ResourceView(root, id) {
       : related.length
         ? `${related.length} 个`
         : '';
+    const toggle = root.querySelector('[data-select-toggle]');
+    if (toggle) toggle.textContent = selecting ? '完成' : '选取';
     if (!list.length) {
       grid.innerHTML = kw
         ? `<div class="empty" style="grid-column:1/-1">
@@ -240,15 +262,18 @@ export async function ResourceView(root, id) {
            </div>`
         : `<div class="empty" style="grid-column:1/-1">
              <b>还没有关联的条目</b>
-             去「人物集 / 角色集」给条目打上「${esc(r.name)}」标签，或者把出处写成「${esc(r.name)}」，就会出现在这里
+             点上面的「＋ 添加角色」挑几个，或者去「人物集 / 角色集」给条目打上「${esc(r.name)}」标签
            </div>`;
+      syncSelCount();
       return;
     }
     grid.innerHTML = list
       .map((c) => {
         const img = c.coverMediaId ? api.thumb(c.coverMediaId) : '';
         const kind = c.kind === 'work' ? '角色' : '人物';
-        return `<a class="char-card" href="/c/${c.id}?res=${encodeURIComponent(r.name)}" data-link data-entry="${c.id}">
+        const on = selecting && picked.has(c.id);
+        return `<a class="char-card${on ? ' is-sel' : ''}" href="/c/${c.id}?res=${encodeURIComponent(r.name)}" data-link data-entry="${c.id}">
+          ${selecting ? '<span class="tick" aria-hidden="true"></span>' : ''}
           <div class="cover">
             ${img ? `<img src="${img}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : '<div class="cover-empty">待添加</div>'}
             <span class="badge">${fmtNum(c.mediaCount)}</span>
@@ -261,6 +286,368 @@ export async function ResourceView(root, id) {
       })
       .join('');
     grid.querySelectorAll('img').forEach(fadeIn);
+    syncSelCount();
+  }
+
+  // ---------- 多选：相关角色 / 人物 ----------
+  const selBar = () => root.querySelector('[data-selbar]');
+
+  function resetSelection() {
+    selecting = false;
+    picked.clear();
+    anchorId = null;
+    const bar = selBar();
+    if (bar) {
+      bar.hidden = true;
+      bar.innerHTML = '';
+    }
+    const t = root.querySelector('[data-select-toggle]');
+    if (t) t.textContent = '选取';
+    root.classList.remove('is-selecting');
+  }
+
+  function syncSelCount() {
+    const bar = selBar();
+    if (!bar || bar.hidden) return;
+    const n = bar.querySelector('.sel-n b');
+    if (n) n.textContent = String(picked.size);
+    // 选中项可能有一部分被当前搜索挡住了，这里点一下数
+    const visible = new Set(visibleRelated().map((c) => c.id));
+    let hidden = 0;
+    picked.forEach((id) => {
+      if (!visible.has(id)) hidden += 1;
+    });
+    const hint = bar.querySelector('.sel-hide');
+    if (hint) hint.textContent = hidden ? `（${hidden} 个不在当前筛选里）` : '';
+    bar.querySelectorAll('button[data-sel]').forEach((b) => {
+      const k = b.dataset.sel;
+      b.disabled = picked.size === 0 && k !== 'all' && k !== 'exit';
+    });
+  }
+
+  function buildSelBar() {
+    const bar = selBar();
+    if (!bar) return;
+    bar.hidden = false;
+    bar.innerHTML = `
+      <span class="sel-n">已选 <b>0</b> 个条目<span class="sel-hide"></span></span>
+      <button data-sel="all">全选当前结果</button>
+      <button data-sel="move">移动到作品…</button>
+      <button data-sel="unlink">移除关联</button>
+      <button data-sel="del" class="danger">删除</button>
+      <button data-sel="exit" class="primary">完成</button>`;
+    bar.querySelectorAll('button[data-sel]').forEach((b) => {
+      b.addEventListener('click', () => onSelAction(b.dataset.sel));
+    });
+    syncSelCount();
+  }
+
+  function markSelecting(on) {
+    selecting = on;
+    root.classList.toggle('is-selecting', on);
+    const t = root.querySelector('[data-select-toggle]');
+    if (t) t.textContent = on ? '完成' : '选取';
+  }
+
+  function enterSelect() {
+    keepScroll(() => {
+      picked.clear();
+      anchorId = null;
+      markSelecting(true);
+      paintRelated();
+      buildSelBar();
+    });
+  }
+
+  function exitSelect() {
+    keepScroll(() => {
+      resetSelection();
+      paintRelated();
+    });
+  }
+
+  function pickByClick(entryId, ev) {
+    const ordered = visibleRelated().map((c) => c.id);
+    const r2 = applyPickClick({ picked, ordered, id: entryId, ev, anchorId });
+    anchorId = r2.anchorId;
+    syncPickMarks();
+  }
+
+  function syncPickMarks() {
+    root.querySelectorAll('.char-card[data-entry]').forEach((el) => {
+      el.classList.toggle('is-sel', picked.has(Number(el.dataset.entry)));
+    });
+    syncSelCount();
+  }
+
+  /** 全选「当前筛选结果」—— 搜索框里打了字就只选筛出来的那些 */
+  function selectAllShown(toggle = true) {
+    const ids = visibleRelated().map((c) => c.id);
+    const allOn = ids.length > 0 && ids.every((id) => picked.has(id));
+    if (toggle && allOn) picked.clear();
+    else ids.forEach((id) => picked.add(id));
+    anchorId = ids.length ? ids[ids.length - 1] : null;
+    syncPickMarks();
+  }
+
+  function selectAllViaKeyboard() {
+    const ids = visibleRelated().map((c) => c.id);
+    if (!ids.length) return false;
+    if (selecting) {
+      selectAllShown(false);
+      return true;
+    }
+    picked.clear();
+    ids.forEach((id) => picked.add(id));
+    anchorId = ids[ids.length - 1];
+    markSelecting(true);
+    paintRelated();
+    buildSelBar();
+    return true;
+  }
+
+  /** 关联变了就重拉一次详情：hero 里的统计、区头计数都跟着动 */
+  async function reloadRelated() {
+    const fresh = await api.resource(id);
+    d = fresh;
+    r = fresh.resource;
+    related = fresh.related;
+    paintHero();
+    paintRelated();
+  }
+
+  async function onSelAction(action) {
+    if (action === 'exit') return exitSelect();
+    if (action === 'all') return selectAllShown();
+    if (!picked.size) return;
+    const ids = [...picked];
+    if (action === 'unlink') return unlinkEntries(ids);
+    if (action === 'del') return deleteEntries(ids);
+    if (action === 'move') return moveEntries(ids);
+  }
+
+  async function unlinkEntries(ids) {
+    const names = ids.map((x) => (related.find((c) => c.id === x) || {}).name).filter(Boolean);
+    const ok = await confirmDialog(
+      `从「${r.name}」移除 ${ids.length} 个条目？`,
+      `只会去掉「${r.name}」这个标签和同名出处，条目、图包、媒体都不动。${
+        names.length ? ` 分别是：${names.slice(0, 6).join('、')}${names.length > 6 ? ' 等' : ''}。` : ''
+      }`
+    );
+    if (!ok) return;
+    try {
+      const res = await api.resourceLink(r.id, ids, 'remove');
+      toast(`已移除 ${res.changed} 个关联`);
+      resetSelection();
+      await reloadRelated();
+    } catch (err) {
+      toast(err.message || '移除失败');
+    }
+  }
+
+  async function deleteEntries(ids) {
+    const items = ids.map((x) => related.find((c) => c.id === x)).filter(Boolean);
+    const media = items.reduce((n, c) => n + (c.mediaCount || 0), 0);
+    const packsN = items.reduce((n, c) => n + (c.packCount || 0), 0);
+    const ok = await confirmDialog(
+      `删除 ${ids.length} 个条目？`,
+      `会连同 ${packsN} 个图包、${media} 个媒体一起删掉，磁盘文件也一起删，不可撤销。` +
+        ` 只想断开关联的话，用「移除关联」。`
+    );
+    if (!ok) return;
+    let okN = 0;
+    const failed = [];
+    for (const cid of ids) {
+      try {
+        await api.deleteCharacter(cid);
+        okN += 1;
+      } catch {
+        failed.push(cid);
+      }
+    }
+    toast(failed.length ? `已删除 ${okN} 个，${failed.length} 个失败` : `已删除 ${okN} 个条目`);
+    resetSelection();
+    await reloadRelated();
+  }
+
+  /** 把关联挪到另一张作品卡：等价于「去掉本作品的标签 + 打上目标作品的标签」 */
+  async function moveEntries(ids) {
+    if (!ids.length) return;
+    const idx = await api.resourceIndex().catch(() => ({ items: [] }));
+    const targets = (idx.items || []).filter((x) => x.id !== r.id);
+    if (!targets.length) return toast('作品录里还没有别的作品');
+    const v = await openModal({
+      title: `移动 ${ids.length} 个条目`,
+      description: `把关联从「${r.name}」换到目标作品上：只改标签和出处，媒体、目录都不动。`,
+      fields: [
+        {
+          name: 'targetId',
+          label: '目标作品',
+          type: 'select',
+          options: targets.map((x) => ({
+            value: String(x.id),
+            label: x.category ? `${x.name}（${x.category}）` : x.name,
+          })),
+          value: String(targets[0].id),
+        },
+      ],
+      submitText: '移动',
+    });
+    if (!v || !v.targetId) return;
+    try {
+      const res = await api.resourceLink(r.id, ids, 'move', Number(v.targetId));
+      toast(`已移动 ${res.changed} 个条目`);
+      resetSelection();
+      await reloadRelated();
+    } catch (err) {
+      toast(err.message || '移动失败');
+    }
+  }
+
+  async function renameEntry(c) {
+    const v = await openModal({
+      title: '重命名条目',
+      description: '只改显示名，磁盘目录不会跟着改。',
+      fields: [{ name: 'name', label: '名称', value: c.name, required: true }],
+      submitText: '保存',
+    });
+    if (!v) return;
+    try {
+      await api.updateCharacter(c.id, { name: v.name });
+      toast('已重命名');
+      await reloadRelated();
+    } catch (err) {
+      toast(err.message || '重命名失败');
+    }
+  }
+
+  /**
+   * 给这个作品挑条目：搜服务端（条目多也不卡），勾完一次性打标签。
+   * 已经在关联里的不会出现在候选里（查询时排除）。
+   */
+  async function addEntries() {
+    const chosen = new Set();
+    let keyword = '';
+    let seq = 0;
+    let list = [];
+
+    const dom = document.createElement('div');
+    dom.className = 'pick-wrap';
+    dom.innerHTML = `
+      <label class="search pick-search">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <circle cx="7" cy="7" r="4.6"/><path d="M10.6 10.6L14 14"/>
+        </svg>
+        <input type="search" data-pick-q placeholder="搜条目名 / 别名 / 账号" autocomplete="off" spellcheck="false" />
+      </label>
+      <div class="pick-head">
+        <label class="pick-all"><input type="checkbox" data-pick-all /> 全选当前结果</label>
+        <span class="pick-count" data-pick-count></span>
+      </div>
+      <div class="pick-list" data-pick-list></div>`;
+
+    const listEl = dom.querySelector('[data-pick-list]');
+    const allBox = dom.querySelector('[data-pick-all]');
+    const countEl = dom.querySelector('[data-pick-count]');
+    const qEl = dom.querySelector('[data-pick-q]');
+
+    const syncAll = () => {
+      const ids = list.map((x) => x.id);
+      allBox.checked = ids.length > 0 && ids.every((x) => chosen.has(x));
+      allBox.disabled = !ids.length;
+      countEl.textContent = chosen.size ? `已选 ${chosen.size} 个` : '';
+      const okBtn = dom.closest('.modal') && dom.closest('.modal').querySelector('[data-ok]');
+      if (okBtn) okBtn.disabled = chosen.size === 0;
+    };
+
+    const paintList = () => {
+      if (!list.length) {
+        listEl.innerHTML = keyword
+          ? `<div class="pick-empty">没有匹配「${esc(keyword)}」的条目</div>`
+          : '<div class="pick-empty">没有可关联的条目了 —— 都已经在这个作品下</div>';
+        syncAll();
+        return;
+      }
+      listEl.innerHTML = list
+        .map((c) => {
+          const on = chosen.has(c.id);
+          const sub = [c.kind === 'work' ? '角色' : c.kind === 'novel' ? '小说' : '人物', c.shelfName, `${fmtNum(c.mediaCount)} 个媒体`]
+            .filter(Boolean)
+            .join(' · ');
+          return `<label class="pick-item${on ? ' is-on' : ''}" data-pick="${c.id}">
+            <input type="checkbox"${on ? ' checked' : ''} />
+            <span class="nm">${esc(c.name)}</span>
+            <span class="mt">${esc(sub)}</span>
+          </label>`;
+        })
+        .join('');
+      syncAll();
+    };
+
+    const load = async () => {
+      const my = ++seq;
+      const res = await api.resourceCandidates(r.id, keyword).catch(() => ({ items: [] }));
+      if (my !== seq) return;
+      list = res.items || [];
+      paintList();
+    };
+
+    let timer = 0;
+    qEl.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        keyword = qEl.value.trim();
+        load();
+      }, 220);
+    });
+    // 弹窗里 Enter 会直接提交，搜索框里只当「刷新列表」
+    qEl.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      e.stopPropagation();
+      keyword = qEl.value.trim();
+      load();
+    });
+    dom.querySelector('[data-pick-list]').addEventListener('click', (e) => {
+      const row = e.target.closest('[data-pick]');
+      if (!row) return;
+      e.preventDefault();
+      const cid = Number(row.dataset.pick);
+      if (chosen.has(cid)) chosen.delete(cid);
+      else chosen.add(cid);
+      row.classList.toggle('is-on', chosen.has(cid));
+      const box = row.querySelector('input');
+      if (box) box.checked = chosen.has(cid);
+      syncAll();
+    });
+    allBox.addEventListener('change', () => {
+      const ids = list.map((x) => x.id);
+      if (allBox.checked) ids.forEach((x) => chosen.add(x));
+      else ids.forEach((x) => chosen.delete(x));
+      paintList();
+    });
+
+    const v = await openModal({
+      title: `给「${r.name}」添加角色`,
+      description: '只建立关联（打上和作品同名的标签），不移动也不复制任何文件。',
+      fields: [],
+      className: 'pick-modal',
+      submitText: '关联',
+      onMount: (body) => {
+        body.appendChild(dom);
+        syncAll();
+        load();
+      },
+      transform: () => ({ ids: [...chosen] }),
+    });
+    if (!v || !v.ids || !v.ids.length) return;
+    try {
+      const res = await api.resourceLink(r.id, v.ids, 'add');
+      toast(`已关联 ${res.changed} 个条目`);
+      await reloadRelated();
+    } catch (err) {
+      toast(err.message || '关联失败');
+    }
   }
 
   /** 打开条目；withRes=true 时带上标签筛选 */
@@ -297,11 +684,19 @@ export async function ResourceView(root, id) {
       { label: '编辑标签', hint: '关联靠标签', onClick: editTags },
       { label: '复制资源名', hint: '给条目打标签用', onClick: () => copyName(r.name) },
       { separator: true },
+      { label: '添加角色…', hint: '关联已有条目', onClick: addEntries },
+      {
+        label: selecting ? '退出多选' : '进入多选模式',
+        onClick: () => (selecting ? exitSelect() : enterSelect()),
+      },
+      { label: '全选当前结果', onClick: () => selectAllShown(false) },
+      { separator: true },
       { label: '删除资源', danger: true, onClick: deleteResource },
     ];
   }
 
   function entryMenu(c) {
+    const on = picked.has(c.id);
     return [
       { label: '打开条目', onClick: () => gotoEntry(c.id, false) },
       {
@@ -311,7 +706,27 @@ export async function ResourceView(root, id) {
       },
       { label: '打开本地文件夹', onClick: () => api.reveal('character', c.id).catch(() => toast('目录已丢失')) },
       { separator: true },
+      { label: '重命名…', onClick: () => renameEntry(c) },
+      { label: '移动到其他作品…', onClick: () => moveEntries([c.id]) },
       { label: '复制条目名', onClick: () => copyName(c.name) },
+      { separator: true },
+      {
+        label: selecting ? '退出多选' : '进入多选模式',
+        onClick: () => (selecting ? exitSelect() : enterSelect()),
+      },
+      selecting
+        ? {
+            label: on ? '取消选中这个条目' : '把这个条目加入选中',
+            onClick: () => {
+              if (on) picked.delete(c.id);
+              else picked.add(c.id);
+              syncPickMarks();
+            },
+          }
+        : null,
+      { separator: true },
+      { label: `从「${r.name}」移除`, hint: '只断开关联，不删条目', onClick: () => unlinkEntries([c.id]) },
+      { label: '删除条目…', danger: true, onClick: () => deleteEntries([c.id]) },
     ];
   }
 
@@ -332,6 +747,55 @@ export async function ResourceView(root, id) {
   }
 
   bindContextMenus();
+
+  // ---------- 相关角色的交互接线 ----------
+  root.querySelector('[data-add-char]').addEventListener('click', addEntries);
+  root.querySelector('[data-select-toggle]').addEventListener('click', () => {
+    if (selecting) exitSelect();
+    else enterSelect();
+  });
+
+  /* 选取态里点卡片 = 勾选，不跳转。
+     capture 阶段拦下来，document 上那个 a[data-link] 的跳转处理器就收不到这次点击了 */
+  root.querySelector('[data-related]').addEventListener(
+    'click',
+    (e) => {
+      if (!selecting) return;
+      const card = e.target.closest('.char-card[data-entry]');
+      if (!card) return;
+      e.preventDefault();
+      e.stopPropagation();
+      pickByClick(Number(card.dataset.entry), e);
+    },
+    true
+  );
+
+  /** Esc 退出多选；Ctrl+A 全选当前筛选结果；Delete 删除选中 */
+  const onPageKey = (e) => {
+    if (isTypingTarget(e.target)) return;
+    if (escDepth() > 0) return; // 弹窗 / 右键菜单 / 下拉开着时键盘归它们
+    if (isSelectAllKey(e) && selectAllViaKeyboard()) {
+      e.preventDefault();
+      return;
+    }
+    if (!selecting) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      exitSelect();
+      return;
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (!picked.size) return;
+      e.preventDefault();
+      deleteEntries([...picked]);
+      return;
+    }
+    if (e.key === 'Enter' && picked.size === 1) {
+      e.preventDefault();
+      gotoEntry([...picked][0], false);
+    }
+  };
+  document.addEventListener('keydown', onPageKey);
 
   root.querySelector('[data-edit]').addEventListener('click', async () => {
     const v = await openModal({
@@ -454,4 +918,7 @@ export async function ResourceView(root, id) {
   paintRelated();
   paintPacks();
   document.title = `${r.name} · 资料库`;
+
+  // 换页时把这个视图的键盘监听摘掉，否则会越积越多
+  return () => document.removeEventListener('keydown', onPageKey);
 }

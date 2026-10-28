@@ -2095,9 +2095,63 @@ button.char-card {
 .tile.is-sel { box-shadow: 0 0 0 2.5px var(--accent), var(--s2); }
 .pack-card.is-sel { box-shadow: 0 0 0 2.5px var(--accent), var(--s2); }
 .tile.is-sel:hover { transform: none; }
+/* 作品详情页的「相关角色」卡片：勾选圈贴卡片内角，选中用描边 */
+.char-card { position: relative; }
+.char-card .tick { left: 14px; top: 14px; }
+.char-card.is-sel { box-shadow: 0 0 0 2.5px var(--accent), var(--s2); }
+.char-card.is-sel:hover { transform: none; }
 
 /* 选择模式下让勾选圈独占左上角，别和「含视频」角标叠在一起 */
 .is-selecting .pack-card .kind { display: none; }
+
+/* ============ 作品录：添加角色弹窗 ============ */
+.pick-modal { width: 560px; }
+.pick-wrap { display: flex; flex-direction: column; gap: 10px; }
+.pick-search { width: 100%; height: 38px; }
+.pick-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 2px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.pick-all { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.pick-count { margin-left: auto; color: var(--text-3); }
+.pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 46vh;
+  overflow-y: auto;
+  margin: 0 -6px;
+  padding: 2px 6px 6px;
+}
+.pick-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.pick-item:hover { background: var(--fill); }
+.pick-item.is-on { background: var(--fill-2); }
+.pick-item input { width: 15px; height: 15px; accent-color: var(--accent); flex: 0 0 auto; }
+.pick-item .nm { font-size: 13.5px; color: var(--text); }
+.pick-item .mt {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+}
+.pick-empty { padding: 26px 12px; text-align: center; font-size: 12.5px; color: var(--text-3); }
+
+/* 批量条上的「不在当前筛选里」提示 */
+.sel-hide { margin-left: 4px; color: var(--text-3); }
 
 /* 底部操作条 */
 .sel-bar {

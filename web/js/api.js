@@ -122,6 +122,10 @@ export const api = {
   inboxShelf: (shelfId, params) => req(`/api/shelves/${shelfId}/inbox${qs(params)}`),
   resources: (shelfId) => req(`/api/shelves/${shelfId}/resources`),
   resource: (id) => req(`/api/resources/${id}`),
+  // 作品 ↔ 条目：候选（还没关联上的）与批量增删 / 移动关联
+  resourceCandidates: (id, q) => req(`/api/resources/${id}/candidates${qs({ q })}`),
+  resourceLink: (id, ids, action, targetId) =>
+    json('POST')(`/api/resources/${id}/related`, { ids, action, targetId }),
   resourceIndex: () => req('/api/resources/index'),
   ensureResource: (name, category) => json('POST')('/api/resources/ensure', { name, category }),
   createCharacter: (data) => json('POST')('/api/characters', data),

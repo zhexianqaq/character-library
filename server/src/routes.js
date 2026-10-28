@@ -1572,6 +1572,130 @@ export function createApp() {
     });
   });
 
+  /**
+   * 关联到某个作品的候选条目：人物 / 角色 / 小说里还没关联上的。
+   *
+   * `q` 直接打服务端（名称 / 别名 / 平台账号），条目上千也能搜；
+   * 「已关联」的判定和详情页的 related 查询保持一致（同名标签 or 同名出处）。
+   */
+  app.get('/api/resources/:id/candidates', (req, res) => {
+    const db = getDb();
+    const id = Number(req.params.id);
+    const row = db.prepare('SELECT id, name FROM characters WHERE id = ?').get(id);
+    if (!row) return res.status(404).json({ error: '资源不存在' });
+
+    const q = String(req.query.q || '').trim();
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 80));
+    const like = `%"handle":"${row.name}"%`;
+
+    const rows = db
+      .prepare(
+        `SELECT c.id, c.name, c.account, c.cover_media_id,
+           sh.name AS shelf_name, sh.kind AS shelf_kind,
+           (SELECT COUNT(*) FROM media m WHERE m.character_id = c.id) AS media_count,
+           (SELECT COUNT(*) FROM packs p WHERE p.character_id = c.id) AS pack_count
+         FROM characters c JOIN shelves sh ON sh.id = c.shelf_id
+         WHERE c.is_container = 0 AND c.id <> @id AND sh.kind IN ('people','work','novel')
+           AND NOT EXISTS (SELECT 1 FROM character_tags ct JOIN tags t ON t.id = ct.tag_id
+                           WHERE ct.character_id = c.id AND t.name = @name)
+           AND c.platforms NOT LIKE @like
+           ${q ? 'AND (c.name LIKE @q OR c.account LIKE @q OR c.aliases LIKE @q)' : ''}
+         ORDER BY media_count DESC, c.name
+         LIMIT @limit`
+      )
+      .all({ id, name: row.name, like, q: `%${q}%`, limit });
+
+    res.json({
+      items: rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        account: r.account || '',
+        kind: r.shelf_kind,
+        shelfName: r.shelf_name || '',
+        mediaCount: r.media_count || 0,
+        packCount: r.pack_count || 0,
+        coverMediaId: r.cover_media_id || null,
+      })),
+    });
+  });
+
+  /**
+   * 批量改「作品 ↔ 条目」的关联。
+   *
+   * 关联的本体只有两样：**同名标签** 和 **platforms 里的同名出处**，
+   * 所以这里只动这两样，不碰媒体、不碰目录。
+   *   add    补上标签（已有就跳过，不覆盖这个条目的其它标签）
+   *   remove 去掉标签 + 去掉同名出处
+   *   move   先按 remove 清掉本作品的痕迹，再补上目标作品的标签
+   *
+   * body: { ids: number[], action: 'add' | 'remove' | 'move', targetId? }
+   */
+  app.post('/api/resources/:id/related', (req, res) => {
+    const db = getDb();
+    const id = Number(req.params.id);
+    const self = db.prepare('SELECT id, name FROM characters WHERE id = ?').get(id);
+    if (!self) return res.status(404).json({ error: '资源不存在' });
+
+    const b = req.body || {};
+    const action = String(b.action || 'add');
+    if (!['add', 'remove', 'move'].includes(action)) return res.status(400).json({ error: '未知操作' });
+
+    const ids = [...new Set((Array.isArray(b.ids) ? b.ids : []).map(Number).filter((n) => n > 0 && n !== id))];
+    if (!ids.length) return res.status(400).json({ error: '没有选中条目' });
+
+    let target = null;
+    if (action === 'move') {
+      const tid = Number(b.targetId);
+      target =
+        tid && tid !== id
+          ? db
+              .prepare(
+                `SELECT c.id, c.name FROM characters c JOIN shelves sh ON sh.id = c.shelf_id
+                 WHERE c.id = ? AND sh.kind = 'resource'`
+              )
+              .get(tid)
+          : null;
+      if (!target) return res.status(400).json({ error: '目标作品不存在' });
+    }
+
+    const sameHandle = (p, name) => String(p.handle || '').trim() === name;
+    let changed = 0;
+
+    const tx = db.transaction(() => {
+      for (const cid of ids) {
+        const row = db.prepare('SELECT id, platforms FROM characters WHERE id = ?').get(cid);
+        if (!row) continue;
+        let tags = tagsOf(db, cid);
+        const before = safeJson(row.platforms);
+
+        if (action === 'add') {
+          if (!tags.includes(self.name)) tags.push(self.name);
+        } else {
+          tags = tags.filter((t) => t !== self.name);
+          if (action === 'move' && !tags.includes(target.name)) tags.push(target.name);
+        }
+        applyTags(db, cid, tags);
+
+        // 出处也是关联依据之一：留着它的话，「移除」之后条目还会挂在这个作品下面
+        if (action !== 'add') {
+          const after = before.filter((p) => !sameHandle(p, self.name));
+          if (after.length !== before.length) {
+            db.prepare('UPDATE characters SET platforms = ?, updated_at = ? WHERE id = ?').run(
+              JSON.stringify(after),
+              nowIso(),
+              cid
+            );
+          }
+        }
+        changed += 1;
+      }
+      ensureSelfTags(db); // 条目自己的名字标签删不掉
+    });
+    tx();
+
+    res.json({ ok: true, changed, action });
+  });
+
   app.post('/api/characters', async (req, res) => {
     const db = getDb();
     const b = req.body || {};
