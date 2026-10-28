@@ -14,10 +14,10 @@
 |---|---|
 | Frontend | Plain ES modules, **zero build step** (no webpack / vite / bundler), one set of CSS variables + hand-written components |
 | Backend | Node 22 · Express 5 · better-sqlite3 · sharp (libvips) · ffmpeg |
-| Desktop shell | Rust · tao + wry (WebView2), **a 689 KB single-file exe**, statically linked CRT, no DLL dependencies |
+| Desktop shell | Rust · tao + wry (WebView2), **a 1.4 MB single-file exe** (icon and version info compiled into the PE), statically linked CRT, no DLL dependencies |
 | Storage | SQLite index + media files on disk; paths are stored **relative**, so moving the library to another drive needs no data change |
 
-This page documents **v3.48** (2026-10-27), 63 tags. The e2e suite (`npm test` in `server/`) runs 140 cases before a release.
+This page documents **v3.54** (2026-10-28), 69 tags. The e2e suite (`npm test` in `server/`) runs 140 cases before a release.
 
 ## Screenshots
 
@@ -98,7 +98,7 @@ If you want “double-click one file and it works”, build the desktop shell �
 - [Testing](#testing)
 - [Known limitations](#known-limitations)
 - [Version control](#version-control) — commit / tag / push conventions, lookup, rollback
-- [Version history](#version-history) — the full v2.0 → v3.48 table
+- [Version history](#version-history) — the full v2.0 → v3.54 table
 - [CHANGELOG.md](CHANGELOG.md) — per-version detail and the traps hit along the way (Chinese)
 
 > Other languages (Japanese / Korean / Traditional Chinese / Russian / French) carry a condensed overview;
@@ -1315,6 +1315,12 @@ are in **2026**.
 | v3.46 | 10-27 | **Operation log + incremental sync**: `fs_ops` / `fs_sync_runs` tables, every frontend change written in the same transaction as the data change; a badge in the top bar and a sync that “only processes these”; moving between packs inside an entry / dissolving a pack / creating an empty pack now wait for sync; new `/ops` page and a full-verification entry point |
 | v3.47 | 10-27 | **Closing no longer stalls**: the window is hidden before cleanup and polling `try_wait` replaced the fixed `sleep(900)`, measured 257 ms end to end (previously 1.2~2.8 s) |
 | v3.48 | 10-27 | **Repository made public**: README rewritten as a project home page (positioning / stack / capability list / quick start / data model), machine-specific paths and real-library statistics stripped from the code and docs, license notice added |
+| v3.49 | 10-28 | **Desktop shell: single instance** — a named mutex is acquired first; a second launch restores and focuses the existing window instead of opening another |
+| v3.50 | 10-28 | **Window geometry memory** — position / size / maximised state saved on close, validated against the current monitors on start, oversized sizes clamped |
+| v3.51 | 10-28 | **Startup skeleton page** — spawning the server and polling health moved to a background thread, so the window shows a loading page instead of a white screen for up to 30 s |
+| v3.52 | 10-28 | **Window icon (first pass)** — hand-written ICO parser feeding `tao::Icon`, plus the `ICON_BIG` slot that `with_window_icon` never sets |
+| v3.53 | 10-28 | **Log rotation** — `shell.log` renamed to `.1` once it passes 2 MB, one generation kept |
+| v3.54 | 10-28 | **Final icon + PE resources** — 16/24/32/48/64/128/256 generated from the design (successive halving, rounded corners cut to transparent), `build.rs` drives `rc.exe` to compile the icon and version info into the exe |
 
 **e2e count over time** (recorded since v3.14): 111 → 115 → 116 → 118 → 119 → 120 → 122 → 125 → 133 → 140.
 Versions that only add features (like v3.23) keep the previous count.

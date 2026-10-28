@@ -105,14 +105,11 @@ mod win32 {
 
     /// `with_window_icon` 只落到 ICON_SMALL（标题栏对），实测 WM_GETICON 的
     /// ICON_BIG 仍是 0 —— 任务栏分组和 Alt+Tab 会退回去显示默认图标。
-    /// 这里直接从同一份 ICO 的 DIB 造一个 HICON 补上。
-    pub fn apply_big_icon(hwnd: isize, ico: &[u8]) {
-        if hwnd == 0 || ico.len() < 22 {
-            return;
-        }
-        let hwnd = hwnd as *mut c_void;
-        let off = u32::from_le_bytes([ico[18], ico[19], ico[20], ico[21]]) as usize;
-        let Some(dib) = ico.get(off..) else {
+    ///
+    /// 两个槽分别给最合适的原生尺寸：BIG 用 256、SMALL 用 32（200% 缩放下标题栏
+    /// 正好 32）。给同一张 256 会让标题栏自己去缩，边缘反而不如原生 32 锐。
+    fn set_one_icon(hwnd: *mut c_void, ico: &[u8], want: u32, slot: usize) {
+        let Some((_, _, dib)) = super::ico_pick(ico, want) else {
             return;
         };
         if dib.is_empty() {
@@ -132,11 +129,17 @@ mod win32 {
                 return;
             }
             const WM_SETICON: u32 = 0x0080;
-            const ICON_BIG: usize = 1;
-            const ICON_SMALL: usize = 0;
-            SendMessageW(hwnd, WM_SETICON, ICON_BIG, hicon as isize);
-            SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon as isize);
+            SendMessageW(hwnd, WM_SETICON, slot, hicon as isize);
         }
+    }
+
+    pub fn apply_icons(hwnd: isize, ico: &[u8]) {
+        if hwnd == 0 {
+            return;
+        }
+        let h = hwnd as *mut c_void;
+        set_one_icon(h, ico, 256, 1); // ICON_BIG：Alt+Tab、任务栏大图标
+        set_one_icon(h, ico, 32, 0); // ICON_SMALL：标题栏
     }
 
     fn wide(s: &str) -> Vec<u16> {
@@ -572,39 +575,69 @@ fn json_escape(s: &str) -> String {
     out
 }
 
-/// 图标字节：`desktop/make-icon.mjs` 生成，48×48 32bpp。
+/// 图标字节：`desktop/make-icon.mjs` 从 `assets/icon-source.png` 生成，
+/// 16/24/32/48/64/128/256 七张 32bpp BMP，共 364 KB。
 const ICON_ICO: &[u8] = include_bytes!("../assets/icon.ico");
 
-/// 从 ICO 里取第一张图转成 tao 的 Icon。
+/// 取 ICO 里第 `index` 张图，返回 (宽, 高, DIB 切片)。
 ///
 /// 只认「32bpp 未压缩 BMP」这一支 —— 图标是 `desktop/make-icon.mjs` 自己生成的，
-/// 格式可控；换成 PNG-compressed ICO 就返回 None 退回系统默认图标，不 panic。
-/// 解析手写而不引 `image` crate：一张 48×48 的图不值得让 release 构建多等半分钟。
-fn load_icon(bytes: &[u8]) -> Option<tao::window::Icon> {
+/// 格式可控；换成 PNG-compressed 条目这里会返回 None（壳退回默认图标，不 panic）。
+/// 手写解析而不引 `image` crate：release 构建不值得为几张图标多等半分钟。
+fn ico_image(bytes: &[u8], index: usize) -> Option<(u32, u32, &[u8])> {
     // ICONDIR: reserved(u16=0) type(u16=1) count(u16)
-    if bytes.len() < 22 || bytes[0] != 0 || bytes[1] != 0 || bytes[2] != 1 || bytes[3] != 0 {
+    if bytes.len() < 6 || bytes[0] != 0 || bytes[1] != 0 || bytes[2] != 1 || bytes[3] != 0 {
         return None;
     }
-    if u16::from_le_bytes([bytes[4], bytes[5]]) == 0 {
+    let count = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
+    if index >= count {
         return None;
     }
-    let entry = &bytes[6..22];
-    let w = entry[0] as u32;
-    let h = entry[1] as u32;
+    let entry = bytes.get(6 + index * 16..6 + index * 16 + 16)?;
+    // 宽高是 u8：256 一律写 0（ICO 规范的约定）
+    let w = if entry[0] == 0 { 256 } else { entry[0] as u32 };
+    let h = if entry[1] == 0 { 256 } else { entry[1] as u32 };
     let off = u32::from_le_bytes([entry[12], entry[13], entry[14], entry[15]]) as usize;
-    let dib = bytes.get(off..)?;
-    if dib.len() < 40 {
+    let size = u32::from_le_bytes([entry[8], entry[9], entry[10], entry[11]]) as usize;
+    // 按 bytesInRes 精确截断：不然后面的条目会一起被当成这张图的数据
+    let dib = bytes.get(off..off.checked_add(size)?)?;
+    if dib.len() < 40 || w == 0 || h == 0 {
         return None;
     }
     let bit_count = u16::from_le_bytes([dib[14], dib[15]]);
     let compression = u32::from_le_bytes([dib[16], dib[17], dib[18], dib[19]]);
-    if bit_count != 32 || compression != 0 || w == 0 || h == 0 {
+    if bit_count != 32 || compression != 0 {
         return None;
     }
+    if dib.len() < 40 + (w as usize) * 4 * h as usize {
+        return None;
+    }
+    Some((w, h, dib))
+}
+
+/// 挑一张最接近 `want` 的图。Windows 按 DPI 自己挑尺寸，但 tao 的
+/// `Icon::from_rgba` 只收一张 —— 给它 48（标题栏/任务栏都用得上）。
+fn ico_pick(bytes: &[u8], want: u32) -> Option<(u32, u32, &[u8])> {
+    let count = u16::from_le_bytes([*bytes.get(4)?, *bytes.get(5)?]) as usize;
+    let mut best: Option<(u32, u32, &[u8])> = None;
+    let mut best_diff = u32::MAX;
+    for i in 0..count {
+        if let Some((w, h, dib)) = ico_image(bytes, i) {
+            let diff = w.abs_diff(want);
+            if diff < best_diff {
+                best_diff = diff;
+                best = Some((w, h, dib));
+            }
+        }
+    }
+    best
+}
+
+/// DIB（bottom-up BGRA）→ top-down RGBA，`Icon::from_rgba` 要后者。
+fn dib_to_rgba(dib: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
     let row = w as usize * 4;
     let pixels = dib.get(40..)?.get(..row * h as usize)?;
     let mut rgba = vec![0u8; row * h as usize];
-    // BMP 是 bottom-up、BGRA；Icon::from_rgba 要 top-down RGBA
     for y in 0..h as usize {
         let src = &pixels[(h as usize - 1 - y) * row..][..row];
         for x in 0..w as usize {
@@ -615,6 +648,12 @@ fn load_icon(bytes: &[u8]) -> Option<tao::window::Icon> {
             rgba[o + 3] = src[x * 4 + 3];
         }
     }
+    Some(rgba)
+}
+
+fn load_icon(bytes: &[u8]) -> Option<tao::window::Icon> {
+    let (w, h, dib) = ico_pick(bytes, 48)?;
+    let rgba = dib_to_rgba(dib, w, h)?;
     tao::window::Icon::from_rgba(rgba, w, h).ok()
 }
 
@@ -717,7 +756,7 @@ fn main() {
     #[cfg(windows)]
     {
         use tao::platform::windows::WindowExtWindows;
-        win32::apply_big_icon(window.hwnd(), ICON_ICO);
+        win32::apply_icons(window.hwnd(), ICON_ICO);
     }
     if initial.maximized {
         window.set_maximized(true);

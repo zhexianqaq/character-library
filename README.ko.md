@@ -61,7 +61,7 @@
 |---|---|
 | 프런트엔드 | 순수 ES Modules, **빌드 과정 없음**(webpack / vite / 번들러 없음), CSS 변수와 직접 만든 컴포넌트 |
 | 백엔드 | Node 22 · Express 5 · better-sqlite3 · sharp(libvips) · ffmpeg |
-| 데스크톱 셸 | Rust · tao + wry(WebView2) — **689 KB 단일 exe**, CRT 정적 링크, 함께 배포할 DLL 없음 |
+| 데스크톱 셸 | Rust · tao + wry(WebView2) — **1.4 MB 단일 exe**, CRT 정적 링크, 함께 배포할 DLL 없음 |
 | 저장 방식 | SQLite 인덱스 + 디스크의 원본. 경로는 데이터 루트 기준 **상대 경로**라 드라이브를 옮겨도 데이터를 고칠 필요가 없음 |
 
 ## 빠른 시작

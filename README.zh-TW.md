@@ -54,7 +54,7 @@
 |---|---|
 | 前端 | 原生 ES Modules，**零建置**（沒有 webpack / vite / 打包步驟），CSS 變數 + 手寫元件 |
 | 後端 | Node 22 · Express 5 · better-sqlite3 · sharp（libvips）· ffmpeg |
-| 桌面殼 | Rust · tao + wry（WebView2），**689 KB 單一 exe**，靜態連結 CRT，不需要任何 dll |
+| 桌面殼 | Rust · tao + wry（WebView2），**1.4 MB 單一 exe**，靜態連結 CRT，不需要任何 dll |
 | 儲存 | SQLite 索引 + 磁碟上的原件；路徑以資料根目錄的**相對路徑**儲存，換硬碟不必改資料 |
 
 ## 快速開始

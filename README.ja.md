@@ -61,7 +61,7 @@
 |---|---|
 | フロントエンド | 素の ES Modules。**ビルド工程なし**（webpack / vite / バンドラ不使用）、CSS 変数と手書きコンポーネント |
 | バックエンド | Node 22 · Express 5 · better-sqlite3 · sharp（libvips）· ffmpeg |
-| デスクトップシェル | Rust · tao + wry（WebView2）。**689 KB の単一 exe**、CRT 静的リンク、同梱 DLL なし |
+| デスクトップシェル | Rust · tao + wry（WebView2）。**1.4 MB の単一 exe**、CRT 静的リンク、同梱 DLL なし |
 | 保存形式 | SQLite のインデックス＋ディスク上の原本。パスはデータルートからの**相対パス**なので、ドライブを移してもデータを書き換えずに済む |
 
 ## クイックスタート
