@@ -17,7 +17,7 @@
 | Desktop shell | Rust · tao + wry (WebView2), **a 1.4 MB single-file exe** (icon and version info compiled into the PE), statically linked CRT, no DLL dependencies |
 | Storage | SQLite index + media files on disk; paths are stored **relative**, so moving the library to another drive needs no data change |
 
-This page documents **v3.68** (2026-10-28), 84 tags. The e2e suite (`npm test` in `server/`) runs 140 cases before a release.
+This page documents **v3.69** (2026-10-28), 85 tags. The e2e suite (`npm test` in `server/`) runs 140 cases before a release.
 
 ## Screenshots
 
@@ -98,7 +98,7 @@ If you want “double-click one file and it works”, build the desktop shell �
 - [Testing](#testing)
 - [Known limitations](#known-limitations)
 - [Version control](#version-control) — commit / tag / push conventions, lookup, rollback
-- [Version history](#version-history) — the full v2.0 → v3.68 table
+- [Version history](#version-history) — the full v2.0 → v3.69 table
 - [CHANGELOG.md](CHANGELOG.md) — per-version detail and the traps hit along the way (Chinese)
 
 > Other languages (Japanese / Korean / Traditional Chinese / Russian / French) carry a condensed overview;
@@ -1335,6 +1335,7 @@ are in **2026**.
 | v3.66 | 10-28 | **Long filenames keep their extension** — truncation during extraction and upload now elides the middle, preserving both the extension and the trailing `_001`; Douyin/Qzone archives are no longer rejected as "no images or videos" |
 | v3.67 | 10-28 | **Video detail layout fixed** — the cover button bar and the info panel shared the `.mp-actions` class, so a stray 20px margin pushed portrait videos out of the card; renamed to `.mp-coverbar` and fixed the sizing order |
 | v3.68 | 10-28 | **Manage characters from a work card** — multi-select the related characters (search results included), unlink / delete / move them, and add candidates by searching; the new endpoint only touches tags and credits, never media |
+| v3.69 | 10-28 | **tar and nested archives** — tar / tar.gz extracted in pure JS (bsdtar mangled UTF-8 names), archives inside archives unpacked automatically, and ZipCrypto-encrypted zips can be opened in-app |
 
 **e2e count over time** (recorded since v3.14): 111 → 115 → 116 → 118 → 119 → 120 → 122 → 125 → 133 → 140.
 Versions that only add features (like v3.23) keep the previous count.

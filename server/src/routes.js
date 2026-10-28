@@ -3247,7 +3247,7 @@ export function createApp() {
       const originalName = decodeName(req.file.originalname);
       if (!isArchiveName(originalName)) {
         await cleanup();
-        return res.status(400).json({ error: '只支持 zip / rar / 7z / tar.gz 压缩包' });
+        return res.status(400).json({ error: '只支持 zip / rar / 7z / tar / tar.gz 压缩包' });
       }
 
       const forcedPackId = req.body && req.body.packId ? Number(req.body.packId) : null;
