@@ -389,7 +389,12 @@ export async function LibraryView(root, shelfId) {
         submitText: '保存',
       });
       if (!v) return;
-      await api.updateCharacter(item.id, { name: v.name });
+      try {
+        await api.updateCharacter(item.id, { name: v.name });
+      } catch (err) {
+        toast(err.message || '改名失败');
+        return;
+      }
       toast('已重命名');
       render();
     }
@@ -442,7 +447,19 @@ export async function LibraryView(root, shelfId) {
 
       try {
         if (names.length === 1) {
-          const c = await api.createCharacter({ shelfId: state.shelfId, name: names[0], intro: v.intro });
+          let c;
+          try {
+            c = await api.createCharacter({ shelfId: state.shelfId, name: names[0], intro: v.intro });
+          } catch (err) {
+            // 同名条目已经存在（服务端 409）：别再建第二个，直接带到已有的那个去
+            if (err.status === 409 && err.body && err.body.id) {
+              toast(`${noun}「${names[0]}」已经存在，已为你打开`);
+              history.pushState({}, '', `/c/${err.body.id}`);
+              window.dispatchEvent(new CustomEvent('app:route'));
+              return;
+            }
+            throw err;
+          }
           // 磁盘上已有同名目录时会自动加 -2 后缀，别让用户以为目录建错了地方
           toast(
             c.dirRenamed
@@ -458,19 +475,21 @@ export async function LibraryView(root, shelfId) {
         // 中途切一次库（tab 点击）剩下的条目就会被丢进另一个库里
         const targetShelf = state.shelfId;
         const failed = [];
+        const dupNames = [];
         for (const name of names) {
           try {
             await api.createCharacter({ shelfId: targetShelf, name, intro: v.intro });
-          } catch {
-            failed.push(name);
+          } catch (err) {
+            // 重名和真失败分开报，否则用户以为是自己输入错了
+            if (err.status === 409 && err.body && err.body.id) dupNames.push(name);
+            else failed.push(name);
           }
         }
-        const okCount = names.length - failed.length;
-        toast(
-          failed.length
-            ? `已创建 ${okCount} 个，失败 ${failed.length} 个（${failed.slice(0, 3).join('、')}）`
-            : `已创建 ${okCount} 个${noun}`
-        );
+        const okCount = names.length - failed.length - dupNames.length;
+        const bits = [`已创建 ${okCount} 个${noun}`];
+        if (dupNames.length) bits.push(`${dupNames.length} 个重名已跳过（${dupNames.slice(0, 3).join('、')}）`);
+        if (failed.length) bits.push(`${failed.length} 个失败（${failed.slice(0, 3).join('、')}）`);
+        toast(bits.join('，'));
         await render();
       } catch (err) {
         toast(err.message || '创建失败');

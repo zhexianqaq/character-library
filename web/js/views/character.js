@@ -2012,7 +2012,13 @@ export async function CharacterView(root, id) {
         return;
       }
       // 弹窗里是「用顿号隔开的一行字」，接口要数组
-      await api.updateCharacter(c.id, typeof v.aliases === 'string' ? { ...v, aliases: splitAliases(v.aliases) } : v);
+      try {
+        await api.updateCharacter(c.id, typeof v.aliases === 'string' ? { ...v, aliases: splitAliases(v.aliases) } : v);
+      } catch (err) {
+        // 重名会被服务端挡回来（409），把原话显示出来，别静默失败
+        toast(err.message || '保存失败');
+        return;
+      }
       c = await api.character(id);
       paint();
       toast('已保存');

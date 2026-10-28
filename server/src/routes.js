@@ -184,6 +184,21 @@ function cleanAliases(v) {
   return out;
 }
 
+/**
+ * 同一个库里有没有同名条目（隐藏容器不算 —— 收件箱 / 表情包那个壳的名字是占位的）。
+ *
+ * 新建与改名都走这里。`excludeId` 给改名用：不能把自己算成重名。
+ *
+ * v3.65 之前只有小说库查这一条，人物 / 角色集任由重名建下去：界面里两个一模一样
+ * 的名字，磁盘上两个目录（第二个被 `uniqueDirName()` 改成「名字-2」），用户分不清
+ * 哪个是哪个，素材也会散在两边。
+ */
+function sameNameChar(db, shelfId, name, excludeId = 0) {
+  return db
+    .prepare('SELECT id, dir_slug FROM characters WHERE shelf_id = ? AND is_container = 0 AND name = ? AND id <> ?')
+    .get(shelfId, name, excludeId);
+}
+
 function mapChar(row, tags) {
   return {
     id: row.id,
@@ -1571,13 +1586,12 @@ export function createApp() {
     const novelGroup = isNovel ? String(b.novelGroup || '').trim().slice(0, 60) : '';
     if (isNovel && !novelGroup) return res.status(400).json({ error: '请先选一个归类文件夹' });
 
-    // 小说库内不允许重名（跨库同名合法：原创书《原神》与同人书分组「原神」互不干扰）。
-    // 人物 / 角色集保持原行为 —— 同名条目以前就允许，会各自生成「名字-2」目录。
-    if (isNovel) {
-      const dup = db
-        .prepare('SELECT id FROM characters WHERE shelf_id = ? AND is_container = 0 AND name = ?')
-        .get(shelfId, name.slice(0, 100));
-      if (dup) return res.status(409).json({ error: `这个库里已经有《${name}》了`, id: dup.id });
+    // 同库内不允许重名，跨库同名合法（原创书《原神》与同人书分组「原神」互不干扰）。
+    // 以前只拦小说库，人物 / 角色集重名会静默建出第二个条目 + 「名字-2」目录。
+    const dupName = name.slice(0, 100);
+    const dup = sameNameChar(db, shelfId, dupName);
+    if (dup) {
+      return res.status(409).json({ error: `这个库里已经有「${dupName}」了`, id: dup.id, dirSlug: dup.dir_slug });
     }
 
     const dirSlug = await uniqueCharRelDir(db, shelfId, name, novelGroup);
@@ -1691,15 +1705,18 @@ export function createApp() {
     const nextName = typeof b.name === 'string' && b.name.trim() ? b.name.trim().slice(0, 100) : row.name;
     const nextGroup =
       typeof b.novelGroup === 'string' ? b.novelGroup.trim().slice(0, 60) : String(row.novel_group || '');
+
+    // 改名或者换库都要重新查重名 —— 同库不允许两个同名条目。
+    // 只改简介 / 别名这类操作不查，省一次查询。
+    const nextShelfId = b.shelfId ? Number(b.shelfId) : row.shelf_id;
+    if (nextName !== row.name || nextShelfId !== row.shelf_id) {
+      const dup = sameNameChar(db, nextShelfId, nextName, id);
+      if (dup) return res.status(409).json({ error: `这个库里已经有「${nextName}」了`, id: dup.id });
+    }
+
     let targetRel = row.dir_slug;
     if (isNovel) {
       if (!nextGroup) return res.status(400).json({ error: '归类文件夹不能为空' });
-      if (nextName !== row.name) {
-        const dup = db
-          .prepare('SELECT id FROM characters WHERE shelf_id = ? AND is_container = 0 AND name = ? AND id <> ?')
-          .get(row.shelf_id, nextName, id);
-        if (dup) return res.status(409).json({ error: `这个库里已经有《${nextName}》了` });
-      }
       const shelfSlug = shelfSlugOf(db, row.shelf_id);
       targetRel = `${shelfSlug}/${slugify(nextGroup)}/${slugify(nextName)}`;
     }
