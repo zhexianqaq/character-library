@@ -50,6 +50,17 @@ const RADIUS_RATIO = 287 / 1254; // 实测值（两张源图分别是 287 / 288�
 // 逐级减半的起点按源图实际宽度取，别写死 512 —— 换个尺寸的源图也不至于缩错
 const sourceWidth = (await sharp(src).metadata()).width || 512;
 
+/**
+ * 内容占画布的比例（0.5~1，默认 1）。贴边的主体（比如角色插画）用 0.9：
+ * 缩进去一点、四周补白，圆角切的就是留白而不是头发。
+ * 设计稿本身就带留白的（比如书本那张）保持 1，别白缩一圈。
+ */
+const INSET = (() => {
+  const hit = process.argv.slice(2).find((a) => a.startsWith('--inset='));
+  const v = hit ? Number(hit.split('=')[1]) : 1;
+  return Number.isFinite(v) && v > 0.5 && v <= 1 ? v : 1;
+})();
+
 function buildDib(bgra, size) {
   const dib = Buffer.alloc(40);
   dib.writeUInt32LE(40, 0); // biSize
@@ -72,16 +83,32 @@ async function renderSize(size) {
       `<rect width="${size}" height="${size}" rx="${radius}" ry="${radius}" fill="#fff"/></svg>`,
   );
 
+  // 内容占画布的比例。设计稿若有留白用 1，角色/物件贴到画布边的用 <1：
+  // 贴边的图被圆角切一刀，边缘会显得「硬切」，加白边后切口落在留白上就自然了。
+  const inner = Math.max(8, Math.round(size * INSET));
+
   // 从 512 一步缩到 16 是 32 倍，lanczos 会混叠出一圈噪点（试过，星星的
   // 白描边全变成麻点）。逐级减半让每一步都不超过 2 倍，边缘干净得多。
   let buf = await sharp(src).png().toBuffer();
   let cur = sourceWidth;
-  while (cur / 2 >= size && cur / 2 >= 16) {
+  while (cur / 2 >= inner && cur / 2 >= 16) {
     cur /= 2;
     buf = await sharp(buf).resize(cur, cur, { kernel: 'lanczos3' }).png().toBuffer();
   }
 
-  const { data, info } = await sharp(buf)
+  // 先把内容缩到 inner，再铺到 size×size 的白底上居中 —— 圆角遮罩随后
+  // 作用在这张白底图的外缘，切到的永远是留白，不会切到主体
+  let layer = await sharp(buf).resize(inner, inner, { fit: 'fill', kernel: 'lanczos3' }).png().toBuffer();
+  if (inner !== size) {
+    layer = await sharp({
+      create: { width: size, height: size, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } },
+    })
+      .composite([{ input: layer, gravity: 'center' }])
+      .png()
+      .toBuffer();
+  }
+
+  const { data, info } = await sharp(layer)
     .resize(size, size, { fit: 'fill', kernel: 'lanczos3' })
     .ensureAlpha()
     .composite([{ input: mask, blend: 'dest-in' }]) // 用遮罩的 alpha 乘目标 alpha

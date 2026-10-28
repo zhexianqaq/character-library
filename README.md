@@ -74,6 +74,7 @@ node tools/set-folder-icon.mjs        # 程序目录用书本图标，数据目�
 
 两张图来自同一套设计稿（`desktop/assets/icon-source.png` 书本、`icon-data-source.png` 角色抱文件），
 用 `node desktop/make-icon.mjs <源图> <输出.ico>` 各自生成七种尺寸。
+源图主体贴到画布边的（角色那张），加 `--inset=0.9` 缩进去一点，否则圆角会切到头发。
 
 靠 `desktop.ini`（UTF-16 LE）+ 文件夹的系统属性实现，**只在本机生效** ——
 `desktop.ini` 已被 `.gitignore` 排除，换机器或重新 clone 后重跑一次即可。
