@@ -33,7 +33,7 @@ const cmpName = (a, b) => collator.compare(nameOf(a), nameOf(b));
 const kindRank = (m) => (m && m.kind === 'video' ? 1 : 0);
 
 /**
- * 时间键：优先取文件名里的日期（角色库是 `<角色>(<账号>)-<YYYYMMDD>-<帖子ID>`），
+ * 时间键：优先取文件名里的日期（角色集是 `<角色>(<账号>)-<YYYYMMDD>-<帖子ID>`），
  * 没有就退回入库日期。统一截到「天」再比，两种来源才不会互相打架；
  * 同一天的文件再按名称升序，顺序稳定。
  */

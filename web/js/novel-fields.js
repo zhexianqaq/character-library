@@ -7,7 +7,7 @@
  * `transform` 负责把「万字」换算成「字」（库里存原始字数）。
  */
 
-/** 原创库的常用类型；datalist 可手输，没列出来的照样能用 */
+/** 原创书的常用类型；datalist 可手输，没列出来的照样能用 */
 export const ORIGIN_TYPES = [
   '玄幻',
   '仙侠',
@@ -26,7 +26,7 @@ export const STATUS = ['连载', '完结', '暂停'];
 
 /**
  * @param {object} o
- * @param {boolean} o.fan    同人库（原作 + 篇幅）还是原创库（类型 + 出版方式）
+ * @param {boolean} o.fan    同人书（原作 + 篇幅）还是原创书（类型 + 出版方式）
  * @param {string[]} o.groups 归类文件夹的可选值（同人=原作品名，原创=已有类型）
  * @param {object|null} o.item 编辑已有小说时传入
  *

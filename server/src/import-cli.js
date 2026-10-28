@@ -33,7 +33,7 @@ if (moveSource) console.log('[模式] --move：入库成功后删除源文件（
 getDb();
 const shelfId = defaultShelfId();
 if (!shelfId) {
-  console.error('没有可用的角色库');
+  console.error('没有可用的角色集');
   process.exit(1);
 }
 

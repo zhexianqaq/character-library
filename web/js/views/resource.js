@@ -24,7 +24,7 @@ export async function ResourceView(root, id) {
   root.innerHTML =
     topbarHtml({
       back: true,
-      title: r.shelf.name || '资源库',
+      title: r.shelf.name || '作品录',
       sub: '',
       search: true,
       placeholder: '搜索条目或图包',
@@ -240,7 +240,7 @@ export async function ResourceView(root, id) {
            </div>`
         : `<div class="empty" style="grid-column:1/-1">
              <b>还没有关联的条目</b>
-             去「人物库 / 角色库」给条目打上「${esc(r.name)}」标签，或者把出处写成「${esc(r.name)}」，就会出现在这里
+             去「人物集 / 角色集」给条目打上「${esc(r.name)}」标签，或者把出处写成「${esc(r.name)}」，就会出现在这里
            </div>`;
       return;
     }

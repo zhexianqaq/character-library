@@ -2,7 +2,7 @@ import { api } from '../api.js';
 import { esc, fmtBytes, toast, fadeIn, debounce } from '../util.js';
 import { pushEsc } from '../esc.js';
 
-// 范围都是相对的：人物库叫「本角色」，表情库这种扁平库叫「本库」
+// 范围都是相对的：人物集叫「本角色」，表情包这种扁平库叫「本库」
 const scopesFor = (selfLabel) => [
   { key: 'all', label: '全部素材' },
   { key: 'character', label: selfLabel },

@@ -1,5 +1,5 @@
 /**
- * 把所有「官图」目录里的素材退回「全部库 → 未分发」，但**保留鸣潮**。
+ * 把所有「官图」目录里的素材退回「收件箱 → 未分发」，但**保留鸣潮**。
  *
  * 判定用的是磁盘路径 `%/官图/%`，不是 packs.category ——
  * 官图小库里还有一批「未分类」包的媒体，它们不在 category='官图' 的包里，
@@ -61,7 +61,7 @@ const keep = all.filter((m) => keepSet.has(m.character_id));
 
 console.log(`「${DIR}」目录下共 ${all.length} 条`);
 if (KEEP) console.log(`  保留（${KEEP}）      ${keep.length} 条 / ${new Set(keep.map((m) => m.character_id)).size} 个角色`);
-console.log(`  退到全部库        ${move.length} 条 / ${new Set(move.map((m) => m.character_id)).size} 个角色`);
+console.log(`  退到收件箱        ${move.length} 条 / ${new Set(move.map((m) => m.character_id)).size} 个角色`);
 console.log(`  其中图片 ${move.filter((m) => m.kind === 'image').length} / 视频 ${move.filter((m) => m.kind === 'video').length}`);
 
 if (!APPLY) {

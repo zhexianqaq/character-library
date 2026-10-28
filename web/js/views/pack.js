@@ -38,11 +38,11 @@ function gotoMedia(mediaId) {
 export async function PackView(root, id) {
   const [pack, media] = await Promise.all([api.pack(id), api.packMedia(id)]);
   let items = media.items;
-  // 表情库的图包挂在容器条目下，面包屑要回到库页而不是条目页
+  // 表情包的图包挂在容器条目下，面包屑要回到库页而不是条目页
   const shelfKind = (pack.shelf && pack.shelf.kind) || 'people';
   // 漫画包：页序由 media.page_no 决定，和「图包排序」是两回事
   const isComic = pack.kind === 'comic';
-  // 真人（人物库）里是照片合集，不给「转成漫画」；小说袋也由后端拒绝
+  // 真人（人物集）里是照片合集，不给「转成漫画」；书袋也由后端拒绝
   const canComic = shelfKind !== 'people' && shelfKind !== 'novel';
   const lastPage = (() => {
     if (!isComic) return 0;
@@ -52,11 +52,11 @@ export async function PackView(root, id) {
       return 0;
     }
   })();
-  // 散图库和表情库一样是扁平库：没有条目这一层，图包也不做跨列排版
+  // 散图集和表情包一样是扁平库：没有条目这一层，图包也不做跨列排版
   const emoji = shelfKind === 'emoji' || shelfKind === 'loose';
   const resource = shelfKind === 'resource';
   const ownerNoun = shelfKind === 'work' ? '角色' : resource ? '资源' : '人物';
-  // 资源库的图包回到资源详情（/r/:id），别把人带到条目页
+  // 作品录的图包回到资源详情（/r/:id），别把人带到条目页
   const crumbHref = emoji ? `/s/${pack.shelf.id}` : resource ? `/r/${pack.character.id}` : `/c/${pack.character.id}`;
   const crumbName = emoji ? pack.shelf.name : pack.character.name;
 
@@ -175,7 +175,7 @@ export async function PackView(root, id) {
         showPage: isComic,
         selectable: selecting,
         isPicked: (it) => picked.has(it.id),
-        // 人物库 / 角色库的图包跟条目页保持同一套排版；表情库不动
+        // 人物集 / 角色集的图包跟条目页保持同一套排版；表情包不动
         spanWide: !emoji,
         onContext: selecting
           ? null
@@ -185,7 +185,7 @@ export async function PackView(root, id) {
                 onOpen: () => gotoMedia(item.id),
                 onChange: reload,
                 pack: { id: pack.id, title: pack.title },
-                // 表情库挂在容器条目上，没有「人物 / 角色」可设
+                // 表情包挂在容器条目上，没有「人物 / 角色」可设
                 owner: emoji ? null : { id: pack.character.id, name: pack.character.name, noun: ownerNoun },
                 shelfKind: (pack.shelf && pack.shelf.kind) || '',
                 // 滚到下面时顶部「选取」按钮早就不在屏幕里了，右键也能进多选
@@ -361,12 +361,12 @@ export async function PackView(root, id) {
     }
   }
 
-  /** 批量移出库：退回「全部库 → 未分发」，文件跟着搬 */
+  /** 批量移出库：退回「收件箱 → 未分发」，文件跟着搬 */
   async function bulkEject() {
     const ids = [...picked];
     const ok = await confirmDialog(
       `把 ${ids.length} 个素材移出当前图包？`,
-      '会移到「全部库 → 未分发」，之后可以在那里重新分发；磁盘上的文件跟着搬，不会复制。'
+      '会移到「收件箱 → 未分发」，之后可以在那里重新分发；磁盘上的文件跟着搬，不会复制。'
     );
     if (!ok) return;
     try {
@@ -376,7 +376,7 @@ export async function PackView(root, id) {
         bad
           ? `已移出 ${r.moved} 个，${bad} 个没成功（${r.skipped[0].reason}）`
           : r.merged
-            ? `已移出 ${r.moved} 个，${r.merged} 个与全部库重复已合并`
+            ? `已移出 ${r.moved} 个，${r.merged} 个与收件箱重复已合并`
             : `已移出 ${r.moved} 个素材`
       );
       exitSelect();
@@ -456,7 +456,7 @@ export async function PackView(root, id) {
       charName: emoji ? pack.shelf.name : pack.character.name,
       packId: pack.id,
       packTitle: pack.title,
-      // 表情库没有条目，菜单里不能写「从本角色素材添加」
+      // 表情包没有条目，菜单里不能写「从本角色素材添加」
       selfLabel: emoji ? '本库' : '本角色',
       onUpload: () => pickFiles(),
       onDone: reload,

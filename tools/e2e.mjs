@@ -199,7 +199,7 @@ try {
   if (shelves.length > 1) {
     const tabCount = await evaluate(`document.querySelectorAll('[data-shelf]').length`);
     check('库标签数量与接口一致', tabCount === shelves.length, `${tabCount} 个标签`);
-    // 表情库没有条目层，切它不会停在 /s/:id，所以这里挑一个普通库来验 URL
+    // 表情包没有条目层，切它不会停在 /s/:id，所以这里挑一个普通库来验 URL
     const regular = shelves.filter((s) => s.kind === 'people' || s.kind === 'work');
     const last = regular[regular.length - 1] || shelves[0];
     await evaluate(`document.querySelector('[data-shelf="${last.id}"]').click()`);
@@ -214,23 +214,23 @@ try {
       JSON.stringify(after)
     );
 
-    // 资源库标签进 /rs/:id
+    // 作品录标签进 /rs/:id
     const resTab = shelves.find((s) => s.kind === 'resource');
     if (resTab) {
       await evaluate(`document.querySelector('[data-shelf="${resTab.id}"]').click()`);
       await sleep(1600);
       const p2 = await evaluate(`location.pathname`);
-      check('资源库标签跳到 /rs/:id', p2 === `/rs/${resTab.id}`, p2);
+      check('作品录标签跳到 /rs/:id', p2 === `/rs/${resTab.id}`, p2);
       await goto(`${BASE}/`, 1600);
     }
 
-    // 表情库标签直接进自己的页面
+    // 表情包标签直接进自己的页面
     const emojiTab = shelves.find((s) => s.kind === 'emoji');
     if (emojiTab) {
       await evaluate(`document.querySelector('[data-shelf="${emojiTab.id}"]').click()`);
       await sleep(1600);
       const p = await evaluate(`location.pathname`);
-      check('表情库标签跳到 /e/:id', p === `/e/${emojiTab.id}`, p);
+      check('表情包标签跳到 /e/:id', p === `/e/${emojiTab.id}`, p);
       await goto(`${BASE}/`, 1600);
     }
 
@@ -567,7 +567,7 @@ try {
   );
   check('详情页标签含条目名', (detail.tags || []).includes('纸悦'), (detail.tags || []).join(' '));
   check('详情页有介绍文案', (detail.intro || '').length > 4, detail.intro);
-  check('存储位置带上库 / 条目 / 图包', /人物库.*纸悦/.test(detail.place || ''), detail.place);
+  check('存储位置带上库 / 条目 / 图包', /人物集.*纸悦/.test(detail.place || ''), detail.place);
 
   // 点图片进灯箱，Esc 只关灯箱、不退出详情页
   await evaluate(`document.querySelector('.mp-canvas img').click()`);
@@ -648,7 +648,7 @@ try {
   check('平台 ID 左边缘对齐', !!overflow && overflow.aligned === true);
   await evaluate(`fetch('/api/characters/${tmpId}', { method: 'DELETE' })`);
 
-  // 6.5 虚拟角色库：那一栏改成「出处」，弹窗是「出处类型 + 作品名」
+  // 6.5 虚拟角色集：那一栏改成「出处」，弹窗是「出处类型 + 作品名」
   const workId = await evaluate(`
     (async () => {
       const ov = await (await fetch('/api/overview')).json();
@@ -690,7 +690,7 @@ try {
       };
     })()`);
     check(
-      '虚拟角色库显示「出处」而不是「平台」',
+      '虚拟角色集显示「出处」而不是「平台」',
       workPane.head === '出处' && workPane.card.includes('原神') && workPane.card.includes('游戏'),
       JSON.stringify(workPane)
     );
@@ -812,7 +812,7 @@ try {
 
     await evaluate(`fetch('/api/characters/${workId}', { method: 'DELETE' })`);
   } else {
-    check('虚拟角色库', true, '没有 work 类型的库，跳过');
+    check('虚拟角色集', true, '没有 work 类型的库，跳过');
   }
 
   // 7. 新建角色
@@ -1145,7 +1145,7 @@ try {
 
     await openMenu();
     const labels = labelsOf();
-    // 人物库叫「设为人物封面」、角色库叫「设为角色封面」，别写死
+    // 人物集叫「设为人物封面」、角色集叫「设为角色封面」，别写死
     const ownerLabel = labels.find((l) => l !== '设为图包封面' && l.startsWith('设为') && l.includes('封面')) || '';
     clickItem(ownerLabel);
     await sleep(1300);
@@ -1294,7 +1294,7 @@ try {
   await evaluate(`document.querySelector('.modal [data-cancel]').click()`);
   await sleep(300);
 
-  // 8.6 资源库：卡片 → 详情 → 关联角色（带标签筛选）→ 出处跳回资源
+  // 8.6 作品录：卡片 → 详情 → 关联角色（带标签筛选）→ 出处跳回资源
   const resShelf = shelves.find((s) => s.kind === 'resource');
   if (resShelf) {
     await goto(`${BASE}/rs/${resShelf.id}`, 2200);
@@ -1318,9 +1318,9 @@ try {
       await goto(`${BASE}/rs/${resShelf.id}`, 1800);
       resList = await readList();
     }
-    check('资源库按分类分组展示卡片', resList.cards > 0 && resList.tabs.some((t) => t.startsWith('游戏')), resList.tabs.join(' / '));
+    check('作品录按分类分组展示卡片', resList.cards > 0 && resList.tabs.some((t) => t.startsWith('游戏')), resList.tabs.join(' / '));
 
-    // 资源库也要在资料库根目录里有自己的文件夹（否则资源管理器里少一个库）
+    // 作品录也要在资料库根目录里有自己的文件夹（否则资源管理器里少一个库）
     const resDirInfo = await (async () => {
       const ov = await fetch(`${BASE}/api/overview`).then((r) => r.json());
       const list = await fetch(`${BASE}/api/shelves/${resShelf.id}/resources`).then((r) => r.json());
@@ -1329,7 +1329,7 @@ try {
       const prefix = String(first.dirSlug).split('/')[0];
       return { ok: fs.existsSync(path.join(ov.library.rootPath, prefix)), prefix };
     })();
-    check('资源库在磁盘上有专属目录', resDirInfo.ok, resDirInfo.prefix);
+    check('作品录在磁盘上有专属目录', resDirInfo.ok, resDirInfo.prefix);
 
     // 每个资源都预置「官方」图包 + <作品>/官方/图片|视频（结构同其它库的 条目/图包/图片）
     const official = await (async () => {
@@ -1356,7 +1356,7 @@ try {
       return { has: !!dd, label: dd ? dd.querySelector('.dd-input').value : '', counts };
     })()`);
     check(
-      '资源库默认按关联数量排序',
+      '作品录默认按关联数量排序',
       resSort.has &&
         resSort.label === '关联数量' &&
         resSort.counts.every((v, i) => i === 0 || resSort.counts[i - 1] >= v),
@@ -1405,7 +1405,7 @@ try {
       return out;
     })()`);
     check(
-      '资源库空白处右键有菜单',
+      '作品录空白处右键有菜单',
       resBlank.includes('新建资源') && resBlank.includes('只看分类') && resBlank.includes('编辑库'),
       resBlank.join(' / ')
     );
@@ -1488,7 +1488,7 @@ try {
       viaOrigin.ok ? viaOrigin.path : '出处里没有这个名称'
     );
 
-    // 资源库支持逗号批量新建（造完立刻删，别影响后面的用例）
+    // 作品录支持逗号批量新建（造完立刻删，别影响后面的用例）
     await goto(`${BASE}/rs/${resShelf.id}`, 1800);
     const resBatch = await evaluate(`(async () => {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1513,7 +1513,7 @@ try {
       };
     })()`);
     check(
-      '资源库支持逗号批量新建',
+      '作品录支持逗号批量新建',
       resBatch.ok && resBatch.made.length === 3 && resBatch.cats.length === 1,
       resBatch.ok ? `${resBatch.made.join(' / ')} · ${resBatch.toast}` : resBatch.reason
     );
@@ -1530,7 +1530,7 @@ try {
     }
   }
 
-  // 9. 表情库：扁平库 = 图包 / 未分类 / 全部素材
+  // 9. 表情包：扁平库 = 图包 / 未分类 / 全部素材
   const emojiShelf = shelves.find((s) => s.kind === 'emoji');
   if (emojiShelf) {
     await goto(`${BASE}/e/${emojiShelf.id}`, 2600);
@@ -1548,12 +1548,12 @@ try {
       };
     })()`);
     check(
-      '表情库直接展示图包（没有条目层）',
+      '表情包直接展示图包（没有条目层）',
       emo.cards > 0 && emo.meta.includes('个图包') && emo.entryRows === 0,
       `${emo.cards} 个图包 · ${emo.meta}`
     );
     check(
-      '表情库图包默认按素材数量排序',
+      '表情包图包默认按素材数量排序',
       emo.sortLabel === '素材数量' &&
         emo.packCounts.every((v, i) => i === 0 || emo.packCounts[i - 1] >= v),
       `${emo.sortLabel} · ${emo.packCounts.join(' / ')}`
@@ -1619,7 +1619,7 @@ try {
       return out;
     })()`);
     check(
-      '表情库图包能多选 / 解散 / 删除',
+      '表情包图包能多选 / 解散 / 删除',
       emoSel.n === '2' && emoSel.acts.includes('解散') && emoSel.acts.includes('删除'),
       `${emoSel.n} 个 · ${emoSel.acts.join(' ')}`
     );
@@ -1646,7 +1646,7 @@ try {
       })()`);
       check('gif 详情页用原件（能动）', gif.src === `/m/${gifId}`, gif.src);
       check(
-        '表情库详情页只显示库 / 图包，不显示条目',
+        '表情包详情页只显示库 / 图包，不显示条目',
         gif.chip.startsWith(emojiShelf.name) && !gif.rows.includes('关联'),
         `${gif.chip} · ${gif.rows.join('/')}`
       );
@@ -1859,7 +1859,7 @@ try {
         const m = document.querySelector('.modal');
         m.querySelector('[name=name]').value = names.join('，');
         m.querySelector('[data-ok]').click();
-        // 批量还在跑的时候切到角色库：以前循环里读的是可变的 state.shelfId，剩下的会被丢进新库
+        // 批量还在跑的时候切到角色集：以前循环里读的是可变的 state.shelfId，剩下的会被丢进新库
         setTimeout(() => document.querySelector('[data-shelf="${workShelf.id}"]').click(), 160);
         await sleep(4200);
         const rows = [];
@@ -1988,8 +1988,8 @@ try {
   const jpost = jbody('POST');
   const jpatch = jbody('PATCH');
 
-  let ns = (await (await fetch(`${BASE}/api/overview`)).json()).shelves.find((s) => s.name === 'E2E原创库');
-  if (!ns) ns = await jpost('/api/shelves', { name: 'E2E原创库', kind: 'novel', variant: 'original' });
+  let ns = (await (await fetch(`${BASE}/api/overview`)).json()).shelves.find((s) => s.name === 'E2E原创书');
+  if (!ns) ns = await jpost('/api/shelves', { name: 'E2E原创书', kind: 'novel', variant: 'original' });
   // 每次跑用唯一后缀：小说库内重名会被 409 拦下，残留数据不能让下一轮直接失败
   const tag = String(Date.now()).slice(-6);
   const n1 = `E2E长夜${tag}`;
@@ -2016,12 +2016,12 @@ try {
   const tabs = await evaluate(
     `[...document.querySelectorAll('[data-view] button')].map(b => b.textContent.replace(/\\d+$/, ''))`
   );
-  check('原创库分类视图 = 全部/出版/网络', tabs.join('/') === '全部/出版/网络', tabs.join('/'));
+  check('原创书分类视图 = 全部/出版/网络', tabs.join('/') === '全部/出版/网络', tabs.join('/'));
 
   const groupNames = await evaluate(`[...document.querySelectorAll('.ng-head span')].map(x => x.textContent)`);
   const folderIcons = await evaluate(`document.querySelectorAll('.ng-head .ng-ico').length`);
   check(
-    '原创库按小说类型分组（标题带文件夹图标）',
+    '原创书按小说类型分组（标题带文件夹图标）',
     groupNames.includes(g1) && groupNames.includes(g2) && folderIcons >= 2,
     `${groupNames.join(' / ')} · 图标 ${folderIcons} 个`
   );
@@ -2034,7 +2034,7 @@ try {
   const pubOnly = await evaluate(`[...document.querySelectorAll('.novel-card .name')].map(x => x.textContent)`);
   check('切到「出版」只剩出版的书', pubOnly.length === 1 && pubOnly[0] === n2, pubOnly.join(' / '));
 
-  const dirOf = (g, n) => path.join(DATA_ROOT, 'E2E原创库', g, n);
+  const dirOf = (g, n) => path.join(DATA_ROOT, 'E2E原创书', g, n);
   check(
     '目录 = 库 / 类型 / 书名（含未分类/文件）',
     fs.existsSync(path.join(dirOf(g1, n1), '未分类', '文件')),
@@ -2057,9 +2057,9 @@ try {
   ).status;
   check('同库重名被拦下（409）', dupStatus === 409, `HTTP ${dupStatus}`);
 
-  // 同人库：原作品名会自动变成标签，资源库那张作品卡才能关联到
-  let fans = (await (await fetch(`${BASE}/api/overview`)).json()).shelves.find((s) => s.name === 'E2E同人库');
-  if (!fans) fans = await jpost('/api/shelves', { name: 'E2E同人库', kind: 'novel', variant: 'fanfic' });
+  // 同人书：原作品名会自动变成标签，作品录那张作品卡才能关联到
+  let fans = (await (await fetch(`${BASE}/api/overview`)).json()).shelves.find((s) => s.name === 'E2E同人书');
+  if (!fans) fans = await jpost('/api/shelves', { name: 'E2E同人书', kind: 'novel', variant: 'fanfic' });
   const f1 = await jpost('/api/characters', {
     shelfId: fans.id,
     name: `E2E同人篇${tag}`,
@@ -2185,8 +2185,8 @@ try {
   await fetch(`${BASE}/api/shelves/${ns.id}`, { method: 'DELETE' });
   await fetch(`${BASE}/api/characters/${f1.id}`, { method: 'DELETE' });
   await fetch(`${BASE}/api/shelves/${fans.id}`, { method: 'DELETE' });
-  fs.rmSync(path.join(DATA_ROOT, 'E2E原创库'), { recursive: true, force: true });
-  fs.rmSync(path.join(DATA_ROOT, 'E2E同人库'), { recursive: true, force: true });
+  fs.rmSync(path.join(DATA_ROOT, 'E2E原创书'), { recursive: true, force: true });
+  fs.rmSync(path.join(DATA_ROOT, 'E2E同人书'), { recursive: true, force: true });
 
   check('页面无 JS 报错', consoleErrors.length === 0, consoleErrors.slice(0, 2).join(' | '));
 } catch (err) {

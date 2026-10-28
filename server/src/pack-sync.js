@@ -236,7 +236,7 @@ export async function renamePackDir(db, packId) {
 /**
  * 全量同步。dryRun=true 只算不动（给前端弹确认框用）。
  *
- * 顺序：图包目录 → 未归包素材 → 清空空目录。
+ * 顺序：图包目录 → 无包素材 → 清空空目录。
  * 简单改名走「整目录 rename + 批量改 rel_path」，散包才逐个文件搬。
  */
 export async function syncPackDirs(db, { dryRun = true, scope = null } = {}) {
@@ -477,7 +477,7 @@ export async function syncPackDirs(db, { dryRun = true, scope = null } = {}) {
       }
     }
 
-    /* ---------- 未归包素材：收回 <条目>/未分类/图片|视频|文件 ---------- */
+    /* ---------- 无包素材：收回 <条目>/未分类/图片|视频|文件 ---------- */
     const looseRows = mediaIds
       ? mediaIds.length
         ? db

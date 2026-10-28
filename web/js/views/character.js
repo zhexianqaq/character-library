@@ -41,10 +41,10 @@ async function resourceIndex() {
 export async function CharacterView(root, id) {
   let c = await api.character(id);
   /**
-   * 当前是「图包」还是「全部媒体」。
+   * 当前是「图包」还是「素材」。
    *
    * 这个视图以前只活在内存里，一关掉详情页、整页重挂载就退回图包页 ——
-   * 在「全部媒体」里点开一张图再关回来，人会莫名其妙落到别的列表上。
+   * 在「素材」里点开一张图再关回来，人会莫名其妙落到别的列表上。
    * 现在存两处：历史项（`history.state.tab`，前进 / 后退 / 刷新都带着）+
    * sessionStorage（别处 `replaceState({}, …)` 把 state 清掉时的兜底）。
    */
@@ -59,8 +59,8 @@ export async function CharacterView(root, id) {
     }
     return 'packs';
   })();
-  // 虚拟角色库的三个小库；人物库不启用
-  const CATEGORIES = ['官图', 'cosplay', '同人'];
+  // 虚拟角色集的三个小库；人物集不启用
+  const CATEGORIES = ['官图', 'cos', '同人'];
   let cat = CATEGORIES[0];
   let mediaItems = [];
   let packsCache = [];
@@ -146,7 +146,7 @@ export async function CharacterView(root, id) {
          <div class="toolbar">
            <div class="segmented" data-view>
              <button class="on" data-v="packs">图包</button>
-             <button data-v="media">全部媒体</button>
+             <button data-v="media">素材</button>
            </div>
            <span data-pack-sort></span>
            <div class="filter-bar" data-filter-bar hidden>
@@ -182,7 +182,7 @@ export async function CharacterView(root, id) {
     paintIntro();
   }
 
-  /** 真人库放「平台账号」，虚拟角色库放「作品出处」——同一块区域，两种语义 */
+  /** 真人库放「平台账号」，虚拟角色集放「作品出处」——同一块区域，两种语义 */
   function isWorkShelf() {
     return !!(c.shelf && c.shelf.kind === 'work');
   }
@@ -191,18 +191,18 @@ export async function CharacterView(root, id) {
     return !!(c.shelf && c.shelf.kind === 'novel');
   }
 
-  /** 同人库的「原作」是另一部作品，原创库没有这一层 */
+  /** 同人书的「原作」是另一部作品，原创书没有这一层 */
   function isFanficShelf() {
     return isNovelShelf() && c.shelf.variant === 'fanfic';
   }
 
-  /** 真人库里叫「人物」，虚拟角色库里叫「角色」，小说库里叫「小说」 */
+  /** 真人库里叫「人物」，虚拟角色集里叫「角色」，小说库里叫「小说」 */
   function noun() {
     return isNovelShelf() ? '小说' : isWorkShelf() ? '角色' : '人物';
   }
 
   /** 小说库没有「平台账号」：这一栏就是归类文件夹（原创=类型 / 同人=原作）。
-      它是 novel_group 的只读投影，点一下进编辑（同人若资源库里有同名作品就跳资源页）。 */
+      它是 novel_group 的只读投影，点一下进编辑（同人若作品录里有同名作品就跳资源页）。 */
   function paintNovelGroup() {
     const pane = root.querySelector('[data-platforms]');
     if (!pane) return;
@@ -385,7 +385,7 @@ export async function CharacterView(root, id) {
   /**
    * 新增/编辑一条：
    * - 真人库：上排「平台 + ID」，下排选填主页网址
-   * - 角色库：上排「出处类型 + 作品名」，下排选填作品链接
+   * - 角色集：上排「出处类型 + 作品名」，下排选填作品链接
    * 存储复用 {platform, handle, url}：虚拟角色时 platform=类型、handle=作品名。
    */
   async function openPlatformModal(index = -1) {
@@ -403,7 +403,7 @@ export async function CharacterView(root, id) {
           ? '编辑平台账号'
           : '添加平台账号',
       description: work
-        ? '作品名可以从已有的资源里选，也可以直接输入新的 —— 保存时会自动在资源库建一张卡。'
+        ? '作品名可以从已有的资源里选，也可以直接输入新的 —— 保存时会自动在作品录建一张卡。'
         : '',
       fields: work
         ? [
@@ -489,7 +489,7 @@ export async function CharacterView(root, id) {
         try {
           const r = await api.ensureResource(entry.handle, entry.platform);
           if (r && r.created) {
-            extra = ` · 已在资源库建立「${entry.handle}」`;
+            extra = ` · 已在作品录建立「${entry.handle}」`;
             // 新卡要能被出处点击和标签跳转认到，索引立刻过期
             RES_INDEX = null;
             RES_INDEX_AT = 0;
@@ -540,7 +540,7 @@ export async function CharacterView(root, id) {
   function gotoResourceByName(name) {
     const hit = RES_INDEX && RES_INDEX.get(name);
     if (!hit) {
-      toast(`「${name}」还没有对应的资源，去资源库建一张就能跳了`);
+      toast(`「${name}」还没有对应的资源，去作品录建一张就能跳了`);
       return false;
     }
     history.pushState({ from: location.pathname + location.search }, '', `/r/${hit.id}`);
@@ -769,7 +769,7 @@ export async function CharacterView(root, id) {
     if (!next) return;
     await api.updatePack(pack.id, { tags: next });
     toast(next.length ? `已保存 ${next.length} 个标签` : '已清空标签');
-    // 图包标签会下发给包内每张图，媒体缓存作废，切到「全部媒体」时重新拉
+    // 图包标签会下发给包内每张图，媒体缓存作废，切到「素材」时重新拉
     mediaAll = [];
     loadPacks();
   }
@@ -817,7 +817,7 @@ export async function CharacterView(root, id) {
   async function dissolvePack(pack) {
     const ok = await confirmDialog(
       '解散这个图包？',
-      `「${pack.title}」里的 ${pack.mediaCount} 个媒体会变成未归包，不会被删除。`,
+      `「${pack.title}」里的 ${pack.mediaCount} 个媒体会变成无包，不会被删除。`,
       '解散'
     );
     if (!ok) return;
@@ -1060,7 +1060,7 @@ export async function CharacterView(root, id) {
     if (action === 'dissolve') bulkPacks('dissolve');
     else if (action === 'del') mode === 'packs' ? bulkPacks('delete') : bulkMediaDelete();
     else if (action === 'move') bulkMediaMove();
-    // 图包视图的「移出库」= 把整包素材退回全部库，而不是逐个素材挑
+    // 图包视图的「移出库」= 把整包素材退回收件箱，而不是逐个素材挑
     else if (action === 'eject') (mode === 'packs' ? bulkEjectPacks() : bulkEject());
   }
 
@@ -1071,7 +1071,7 @@ export async function CharacterView(root, id) {
       del ? `删除 ${ids.length} 个图包和里面的媒体？` : `解散 ${ids.length} 个图包？`,
       del
         ? '图包里的图片 / 视频会一起删掉，磁盘文件也会删，不可恢复。'
-        : '只删图包这个壳，里面的媒体会变成未归包，文件一个都不动。',
+        : '只删图包这个壳，里面的媒体会变成无包，文件一个都不动。',
       del ? '删除' : '解散'
     );
     if (!ok) return;
@@ -1109,7 +1109,7 @@ export async function CharacterView(root, id) {
   }
 
   /**
-   * 图包批量「移出库」：把选中图包里的素材整体退回「全部库 → 未分发」。
+   * 图包批量「移出库」：把选中图包里的素材整体退回「收件箱 → 未分发」。
    * 走的是和单个素材一样的 eject 接口（会合并同 sha 的重复文件），
    * 搬空之后这些图包没有意义了，顺手解散 —— 和单个素材的语义保持一致。
    */
@@ -1123,7 +1123,7 @@ export async function CharacterView(root, id) {
       empty ? `解散这 ${ids.length} 个空图包？` : `把 ${ids.length} 个图包里的 ${count} 个素材移出当前${noun()}？`,
       empty
         ? '这些图包是空的，解散不会动任何文件。'
-        : '素材会移到「全部库 → 未分发」，之后可以在那里重新分发；图包搬空后会被解散。磁盘文件跟着搬，不会复制。',
+        : '素材会移到「收件箱 → 未分发」，之后可以在那里重新分发；图包搬空后会被解散。磁盘文件跟着搬，不会复制。',
       empty ? '解散' : '移出'
     );
     if (!ok) return;
@@ -1145,7 +1145,7 @@ export async function CharacterView(root, id) {
       await api.bulkPacks(ids, 'dissolve');
       const bits = [];
       if (mediaIds.length) bits.push(`已移出 ${moved} 个素材`);
-      if (merged) bits.push(`${merged} 个与全部库重复已合并`);
+      if (merged) bits.push(`${merged} 个与收件箱重复已合并`);
       if (bad) bits.push(`${bad} 个没成功`);
       bits.push(`解散 ${ids.length} 个图包`);
       toast(bits.join(' · '));
@@ -1158,12 +1158,12 @@ export async function CharacterView(root, id) {
     }
   }
 
-  /** 批量移出库：退回「全部库 → 未分发」，文件跟着搬 */
+  /** 批量移出库：退回「收件箱 → 未分发」，文件跟着搬 */
   async function bulkEject() {
     const ids = [...picked];
     const ok = await confirmDialog(
       `把 ${ids.length} 个素材移出当前${noun()}？`,
-      '会移到「全部库 → 未分发」，之后可以在那里重新分发；磁盘上的文件跟着搬，不会复制。',
+      '会移到「收件箱 → 未分发」，之后可以在那里重新分发；磁盘上的文件跟着搬，不会复制。',
       '移出'
     );
     if (!ok) return;
@@ -1174,7 +1174,7 @@ export async function CharacterView(root, id) {
         bad
           ? `已移出 ${r.moved} 个，${bad} 个没成功（${r.skipped[0].reason}）`
           : r.merged
-            ? `已移出 ${r.moved} 个，${r.merged} 个与全部库重复已合并`
+            ? `已移出 ${r.moved} 个，${r.merged} 个与收件箱重复已合并`
             : `已移出 ${r.moved} 个素材`
       );
       exitSelect();
@@ -1264,7 +1264,7 @@ export async function CharacterView(root, id) {
     });
   }
 
-  /** 当前小库；人物库或「未分类」时返回 null */
+  /** 当前小库；人物集或「未分类」时返回 null */
   function packCategory() {
     return isWorkShelf() && CATEGORIES.includes(cat) ? cat : null;
   }
@@ -1280,8 +1280,8 @@ export async function CharacterView(root, id) {
       if (k in counts) counts[k] += 1;
       else uncategorized += 1;
     }
-    // 关联图包显示在 cosplay 分栏，计数也得算上，否则「cosplay 0」里却有卡片
-    if (isWorkShelf() && linkedPacks.length) counts.cosplay += linkedPacks.length;
+    // 关联图包显示在 cos 分栏，计数也得算上，否则「cos 0」里却有卡片
+    if (isWorkShelf() && linkedPacks.length) counts.cos += linkedPacks.length;
     const tabs = CATEGORIES.map((k) => ({ k, n: counts[k] }));
     if (uncategorized) tabs.push({ k: '未分类', n: uncategorized });
     el.innerHTML = tabs
@@ -1299,14 +1299,14 @@ export async function CharacterView(root, id) {
 
   /**
    * 跨库「关联图包」：别的库里标签**正好等于**本条目名的图包，只读挂在这里。
-   * 角色库挂在 cosplay 分栏（那本来就是同人 / cos 素材的位置），其他库直接跟在图包后面。
+   * 角色集挂在 cos 分栏（那本来就是同人 / cos 素材的位置），其他库直接跟在图包后面。
    * 包还在原来的库里，不复制、不移动，点进去还是 /p/:id。
    */
   let linkedPacks = [];
-  const showLinked = () => !isWorkShelf() || cat === 'cosplay';
+  const showLinked = () => !isWorkShelf() || cat === 'cos';
 
   // 顶栏搜索词：图包视图过滤图包（标题 / 小库 / 标签），
-  // 全部媒体视图过滤素材（文件名 / 标签），正文区也会跟着过滤
+  // 素材视图过滤素材（文件名 / 标签），正文区也会跟着过滤
   let topQuery = '';
 
   /** 关键词是否命中（不区分大小写，空词恒真） */
@@ -1461,7 +1461,7 @@ export async function CharacterView(root, id) {
         const p = packsShown.find((x) => x.id === pid);
         if (!p) return;
         const comic = p.kind === 'comic';
-        // 真人（人物库）的照片合集不是漫画，不给这个入口
+        // 真人（人物集）的照片合集不是漫画，不给这个入口
         const canComic = !!(c.shelf && c.shelf.kind !== 'people');
         openContextMenu(e, [
           { label: '打开', onClick: () => card.querySelector('.pack-hit')?.click() },
@@ -1484,7 +1484,7 @@ export async function CharacterView(root, id) {
               ]
             : []),
           { separator: true },
-          { label: '解散图包', hint: '素材变未归包', onClick: () => dissolvePack(p) },
+          { label: '解散图包', hint: '素材变无包', onClick: () => dissolvePack(p) },
           { label: '删除图包', hint: '连素材一起删', danger: true, onClick: () => removePack(p) },
         ]);
       });
@@ -1507,8 +1507,8 @@ export async function CharacterView(root, id) {
 
   }
 
-  // ---------- 全部媒体的筛选 ----------
-  // 默认只看「未归包」：进全部媒体通常是想整理还没归包的东西
+  // ---------- 素材的筛选 ----------
+  // 默认只看「无包」：进素材通常是想整理还没归包的东西
   const filters = { kind: '', tag: '', pack: '__none__', cat: '', q: '', sort: 'new' };
   let mediaAll = [];
   let tagDD = null;
@@ -1594,13 +1594,13 @@ export async function CharacterView(root, id) {
         .map(([t, n]) => ({ value: t, label: `${t}（${n}）` }))
     );
     packDD.setOptions([
-      { value: '__none__', label: '未归包' },
+      { value: '__none__', label: '无包' },
       ...packsCache.map((p) => ({
         value: String(p.id),
         label: `${p.category ? `${p.category} / ` : ''}${p.title}（${p.mediaCount}）`,
       })),
     ]);
-    // 选项换完把显示同步回当前值（默认是「未归包」，不能停在裸 value 上）
+    // 选项换完把显示同步回当前值（默认是「无包」，不能停在裸 value 上）
     packDD.setValue(filters.pack);
   }
 
@@ -2052,7 +2052,7 @@ export async function CharacterView(root, id) {
 
   await resourceIndex(); // 先拿索引：标签要据此决定「能不能点进去」
   root.innerHTML = shellHtml();
-  // 骨架里写死的是「图包」高亮、筛选条隐藏；回到「全部媒体」要把这两处拨回去
+  // 骨架里写死的是「图包」高亮、筛选条隐藏；回到「素材」要把这两处拨回去
   if (mode === 'media') {
     root.querySelectorAll('[data-view] button').forEach((b) => b.classList.toggle('on', b.dataset.v === 'media'));
     const bar = root.querySelector('[data-filter-bar]');
@@ -2066,11 +2066,11 @@ export async function CharacterView(root, id) {
   bindToolbar();
   mountPackSort();
   buildFilterBar();
-  // 顶栏搜索：图包视图筛图包，全部媒体视图筛素材，小说库顺带筛正文
+  // 顶栏搜索：图包视图筛图包，素材视图筛素材，小说库顺带筛正文
   bindTopbarSearch(root, (val) => {
     topQuery = val;
     filters.q = val;
-    // 默认筛选是「未归包」——留着它，搜索只会在没归包的素材里找，等于白搜
+    // 默认筛选是「无包」——留着它，搜索只会在没归包的素材里找，等于白搜
     if (val && filters.pack === '__none__') {
       filters.pack = '';
       if (packDD) packDD.setValue('');
@@ -2098,7 +2098,7 @@ export async function CharacterView(root, id) {
   // 回来时该是哪一屏就加载哪一屏（等它加载完，滚动位置才有地方可落）
   if (mode === 'media') {
     await loadMedia();
-    // 小库分类栏（官图 / cosplay / 同人）的计数来自 packsCache，平时是 loadPacks 画的
+    // 小库分类栏（官图 / cos / 同人）的计数来自 packsCache，平时是 loadPacks 画的
     paintCats();
   } else {
     await loadPacks();

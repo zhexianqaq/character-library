@@ -50,7 +50,7 @@ function mediaRow(db, id) {
     .get(id);
 }
 
-/** 这个媒体现在该待的目录；包没了 / 未归包都落到「未分类」 */
+/** 这个媒体现在该待的目录；包没了 / 无包都落到「未分类」 */
 function mediaTarget(db, m) {
   if (!m) return null;
   const sub = m.kind === 'video' ? '视频' : m.kind === 'file' ? '文件' : '图片';

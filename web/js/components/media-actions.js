@@ -27,7 +27,7 @@ async function editMediaTags(item, onChange) {
 }
 
 /** 「移出图包」那条特殊选项：可输入下拉提交的是文本，靠它和空值一起辨认 */
-const OUT_OF_PACK = '（移出图包，变成未归包）';
+const OUT_OF_PACK = '（移出图包，变成无包）';
 
 async function moveMedia(item, characterId, onChange) {
   const data = await api.packs(characterId);
@@ -44,7 +44,7 @@ async function moveMedia(item, characterId, onChange) {
         // 能直接打名字：不存在的名字就地新建，和「批量移动」保持一致
         editable: true,
         placeholder: '选择或输入新图包名称',
-        hint: '输入不存在的名称会新建图包；选第一项或留空 = 移出图包，变成未归包',
+        hint: '输入不存在的名称会新建图包；选第一项或留空 = 移出图包，变成无包',
         options: [{ value: '', label: OUT_OF_PACK }, ...packOptions(packs)],
         value: item.packId && src ? String(item.packId) : '',
       },
@@ -60,7 +60,7 @@ async function moveMedia(item, characterId, onChange) {
     if (hit) packId = hit.id;
     else {
       try {
-        // 新建时沿用原图包的小库（角色库的官图 / cosplay / 同人），别把素材丢到「未分类」
+        // 新建时沿用原图包的小库（角色集的官图 / cos / 同人），别把素材丢到「未分类」
         const created = await api.createPack(characterId, {
           title: wanted.slice(0, 60),
           month: '',
@@ -76,7 +76,7 @@ async function moveMedia(item, characterId, onChange) {
 
   try {
     await api.updateMedia(item.id, { packId });
-    toast(packId ? '已移动' : '已移出图包，变成未归包');
+    toast(packId ? '已移动' : '已移出图包，变成无包');
     onChange && onChange();
   } catch (err) {
     toast(err.message || '移动失败');
@@ -84,18 +84,18 @@ async function moveMedia(item, characterId, onChange) {
 }
 
 /**
- * 移出库：从当前条目 / 图包退回到「全部库 → 未分发」，文件真的搬过去。
- * 「全部库」里本来就有同一份内容时，后端只留一份（记录合并），这里照实提示。
+ * 移出库：从当前条目 / 图包退回到「收件箱 → 未分发」，文件真的搬过去。
+ * 「收件箱」里本来就有同一份内容时，后端只留一份（记录合并），这里照实提示。
  */
 async function ejectMedia(item, onChange) {
   const ok = await confirmDialog(
     '把这张移出当前库？',
-    '会从条目 / 图包里移到「全部库 → 未分发」，之后可以在那里重新分发；磁盘上的文件跟着搬，不会复制。'
+    '会从条目 / 图包里移到「收件箱 → 未分发」，之后可以在那里重新分发；磁盘上的文件跟着搬，不会复制。'
   );
   if (!ok) return;
   try {
     const r = await api.ejectMedia([item.id]);
-    toast(r.merged ? '全部库里已有同一份文件，已合并（原条目这边移除）' : '已移到「全部库」');
+    toast(r.merged ? '收件箱里已有同一份文件，已合并（原条目这边移除）' : '已移到「收件箱」');
     onChange && onChange();
   } catch (err) {
     toast(err.message || '移出失败');
@@ -127,7 +127,7 @@ async function setPackCover(item, pack, onCover) {
   }
 }
 
-/** 设为角色 / 人物 / 资源封面：归属的条目是容器（表情库）时不出现 */
+/** 设为角色 / 人物 / 资源封面：归属的条目是容器（表情包）时不出现 */
 async function setOwnerCover(item, owner, onCover) {
   try {
     await api.updateCharacter(owner.id, { coverMediaId: item.id });
@@ -143,13 +143,13 @@ async function setOwnerCover(item, owner, onCover) {
  *
  * 封面两项彼此独立、显示条件也不同：
  * - 设为图包封面：这张图当前归属于某个图包才显示，没有图包时**隐藏**（点了也无处可设，置灰只是噪音）
- * - 设为「人物 / 角色 / 资源」封面：图片归属的条目就是封面主体；表情库的容器条目没有"条目"这层，隐藏
+ * - 设为「人物 / 角色 / 资源」封面：图片归属的条目就是封面主体；表情包的容器条目没有"条目"这层，隐藏
  *
  * @param {object} ctx.pack   { id, title } | null
  * @param {object} ctx.owner  { id, name, noun } | null  noun 决定菜单文案（人物 / 角色 / 资源）
  * @param {(kind:'pack'|'owner')=>void} ctx.onCover 设好之后刷新展示区
- * @param {boolean} ctx.allowMove  全部库这类没有图包归属的地方传 false
- * @param {Array} ctx.extra  额外菜单项，紧跟在「打开」后面（全部库用它加「分发到…」）
+ * @param {boolean} ctx.allowMove  收件箱这类没有图包归属的地方传 false
+ * @param {Array} ctx.extra  额外菜单项，紧跟在「打开」后面（收件箱用它加「分发到…」）
  * @param {()=>void} ctx.onSelect  进入 / 退出多选。素材多的时候顶部「选取」按钮早滚出屏幕了，
  *                                 右键是滚到一半时唯一顺手的入口
  * @param {boolean} ctx.selecting  当前是否已经在选取模式（决定文案是「选取素材」还是「退出选取」）
@@ -189,10 +189,10 @@ export function mediaMenu(
     ownerRef ? { label: `设为${ownerNoun}封面`, hint: ownerRef.name, onClick: () => setOwnerCover(item, ownerRef, onCover) } : null,
     { label: '打开本地文件夹', onClick: () => api.reveal('media', item.id).catch(() => toast('文件已丢失')) },
     { separator: true },
-    // 全部库里的素材没有图包可去（pack_id 一律为空），这一项没意义
+    // 收件箱里的素材没有图包可去（pack_id 一律为空），这一项没意义
     allowMove ? { label: '移动到其他图包', onClick: () => moveMedia(item, characterId, onChange) } : null,
-    // 已经在「全部库」里的没必要再移一次
-    shelfKind === 'inbox' ? null : { label: '移出库', hint: '放到全部库', onClick: () => ejectMedia(item, onChange) },
+    // 已经在「收件箱」里的没必要再移一次
+    shelfKind === 'inbox' ? null : { label: '移出库', hint: '放到收件箱', onClick: () => ejectMedia(item, onChange) },
     { separator: true },
     { label: '删除', danger: true, onClick: () => removeMedia(item, onChange) },
   ]);

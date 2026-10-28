@@ -68,12 +68,12 @@ export async function MediaView(root, id) {
       <aside class="mp-info" data-info></aside>
     </main>`;
 
-  /** 表情库：没有条目层级，标签 / 位置都按「库 + 图包」算 */
-  /** 扁平库：没有条目层级（表情库 / 全部库），媒体直接挂在库的容器条目下面 */
+  /** 表情包：没有条目层级，标签 / 位置都按「库 + 图包」算 */
+  /** 扁平库：没有条目层级（表情包 / 收件箱），媒体直接挂在库的容器条目下面 */
   const flatKind = () =>
     item.shelf && ['emoji', 'loose', 'inbox'].includes(item.shelf.kind) ? item.shelf.kind : '';
   const isFlat = () => !!flatKind();
-  /** 没有来源可退时回哪一页：表情库回 /e/，全部库回 /x/ */
+  /** 没有来源可退时回哪一页：表情包回 /e/，收件箱回 /x/ */
   // 扁平库（表情 / 全部）现在都嵌在首页的 /s/:id 里，没有可退的历史时回那里
   const flatHome = () => `/s/${item.shelf ? item.shelf.id : ''}`;
   const groupName = () => (item.pack ? item.pack.title : isFlat() ? '未分类' : item.character.name);
@@ -118,7 +118,7 @@ export async function MediaView(root, id) {
 
   function renderStage() {
     const isVideo = item.kind === 'video';
-    // 胶囊写「条目 · 图包」，比整条文件名好认；表情库只写库 + 图包
+    // 胶囊写「条目 · 图包」，比整条文件名好认；表情包只写库 + 图包
     chipName.textContent = isFlat()
       ? [item.shelf.name, groupName()].filter(Boolean).join(' · ')
       : [item.character.name, item.pack ? item.pack.title : ''].filter(Boolean).join(' · ');
@@ -162,7 +162,7 @@ export async function MediaView(root, id) {
     const animated = !isVideo && !!item.anim;
     const place = isFlat()
       ? [item.shelf.name, groupName()].filter(Boolean).join(' / ')
-      : [item.shelf.name, item.character.name, item.pack ? item.pack.title : '未归包']
+      : [item.shelf.name, item.character.name, item.pack ? item.pack.title : '无包']
           .filter(Boolean)
           .join(' / ');
     const intro =
@@ -391,19 +391,19 @@ export async function MediaView(root, id) {
   }
 
   /**
-   * 移出库：这张退回「全部库 → 未分发」，文件跟着搬（不复制）。
+   * 移出库：这张退回「收件箱 → 未分发」，文件跟着搬（不复制）。
    * 移完这一页已经不属于当前条目：有来源就退回去（列表会自己刷新），
-   * 没有来源（直接打开链接）就去全部库，免得停在一个「不属于任何人」的详情页上。
+   * 没有来源（直接打开链接）就去收件箱，免得停在一个「不属于任何人」的详情页上。
    */
   async function ejectItem() {
     const ok = await confirmDialog(
       '把这张移出当前库？',
-      '会移到「全部库 → 未分发」，之后可以在那里重新分发；磁盘上的文件跟着搬，不会复制。'
+      '会移到「收件箱 → 未分发」，之后可以在那里重新分发；磁盘上的文件跟着搬，不会复制。'
     );
     if (!ok) return;
     try {
       const r = await api.ejectMedia([item.id]);
-      toast(r.merged ? '全部库里已有同一份文件，已合并（原条目这边移除）' : '已移到「全部库」');
+      toast(r.merged ? '收件箱里已有同一份文件，已合并（原条目这边移除）' : '已移到「收件箱」');
       if (entryFrom) {
         history.back();
         return;

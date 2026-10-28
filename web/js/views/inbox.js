@@ -16,13 +16,13 @@ const PAGE_SIZE = 120;
 /**
  * 上次分发用的库（模块级：切库、重新渲染都还在）。
  *
- * 连续往角色库分发时，每次打开都落回「人物库」很烦 —— shelves[0] 永远是人物库。
+ * 连续往角色集分发时，每次打开都落回「人物集」很烦 —— shelves[0] 永远是人物集。
  * 只记库不记条目：条目默认还是第一个，免得不小心又分给上一个角色。
  */
 let lastDistShelf = 0;
 
 /**
- * 全部库（kind=inbox）：一个「收件箱 + 总览」两用的库。
+ * 收件箱（kind=inbox）：一个「收件箱 + 总览」两用的库。
  *
  *   未分发 —— 媒体挂在库的隐藏容器条目下面，文件在 <库名>/未分类/图片|视频
  *   已分发 —— 全库**其它所有**图片/视频的只读聚合，不复制、不移动，点开走 /i/:id
@@ -40,7 +40,7 @@ export async function InboxView(root, shelfId, opts = {}) {
   let total = 0;
   let counts = { undistributed: { image: 0, video: 0 }, distributed: { image: 0, video: 0 } };
   let items = [];
-  let shelfInfo = { id: shelfId, name: '全部库' };
+  let shelfInfo = { id: shelfId, name: '收件箱' };
   let containerId = 0;
   let selecting = false;
   const picked = new Set();
@@ -59,7 +59,7 @@ export async function InboxView(root, shelfId, opts = {}) {
       : topbarHtml({
           back: true,
           title: shelfInfo.name,
-          sub: '收件箱',
+          sub: '待分发',
         })) +
     `<main class="page">
        <div class="shelf-head">
@@ -72,7 +72,7 @@ export async function InboxView(root, shelfId, opts = {}) {
          <button class="tb-btn primary" data-upload>↑ 收素材</button>
        </div>
        <section class="lib-stats" data-stats>
-         <div class="ls-head"><b>库总览</b><span data-totals>加载中…</span></div>
+         <div class="ls-head"><b>总览</b><span data-totals>加载中…</span></div>
          <div class="ls-grid" data-ls-grid></div>
        </section>
        <div class="toolbar">
@@ -101,7 +101,7 @@ export async function InboxView(root, shelfId, opts = {}) {
      </main>`;
 
   if (!embedded) bindTopbar(root);
-  document.title = `${shelfInfo.name} · 全部库`;
+  document.title = shelfInfo.name;
 
   const bodyEl = root.querySelector('[data-body]');
 
@@ -114,7 +114,7 @@ export async function InboxView(root, shelfId, opts = {}) {
     root.querySelector('[data-meta]').textContent = [
       `待分发 ${fmtNum(st)}`,
       `已分发 ${fmtNum(di)}`,
-      st ? '选几项 →「分发到…」就会把文件搬进角色目录' : '拖入手机里的照片 / 视频就能开始',
+      st ? '选几项 →「分发到…」就会把文件搬进条目目录' : '拖入手机里的照片 / 视频就能开始',
     ].join(' · ');
   }
 
@@ -130,7 +130,7 @@ export async function InboxView(root, shelfId, opts = {}) {
   };
 
   /**
-   * 库总览：一行加起来的总数 + 每个库一张小卡（媒体数、条目数、占用、占比条）。
+   * 总览：一行加起来的总数 + 每个库一张小卡（媒体数、条目数、占用、占比条）。
    * 点卡片直接切到那个库 —— 首页标签条也能切，但这里能顺手看出谁的占用最大。
    *
    * 首页 embed 进来时 LibraryView 已经取过 overview，直接复用（opts.overview），
@@ -163,7 +163,7 @@ export async function InboxView(root, shelfId, opts = {}) {
     grid.innerHTML = shelves
       .map((s) => {
         const pct = t.bytes ? Math.round(((s.bytes || 0) / t.bytes) * 1000) / 10 : 0;
-        // 主数字是「多少个」：人物 / 角色 / 小说 / 作品 / 图包；全部库没有条目，用待分发素材数
+        // 主数字是「多少个」：人物 / 角色 / 小说 / 作品 / 图包；收件箱没有条目，用待分发素材数
         const cnt =
           s.kind === 'emoji' || s.kind === 'loose'
             ? s.packCount
@@ -213,7 +213,7 @@ export async function InboxView(root, shelfId, opts = {}) {
     if (kind) return `<div class="empty"><b>这里还没有${kind === 'image' ? '图片' : '视频'}</b>换成「全部」看看</div>`;
     return section === 'undistributed'
       ? '<div class="empty"><b>没有待分发的素材</b>把手机里存的一堆图片视频拖进这个页面，或点右上角「收素材」</div>'
-      : '<div class="empty"><b>还没有分发出去的素材</b>分发后会在这里留一个入口，文件仍在原来的角色目录里</div>';
+      : '<div class="empty"><b>还没有分发出去的素材</b>分发后会在这里留一个入口，文件仍在原来的条目目录里</div>';
   }
 
   /** 当前网格里已经画了多少张 —— 「加载更多」只补这之后的，不重画前面的 */
@@ -391,9 +391,9 @@ export async function InboxView(root, shelfId, opts = {}) {
   }
 
   /**
-   * 瓦片右键：和角色库 / 图包页共用同一套媒体菜单。
-   * 全部库有三项不该出现 —— 素材没有图包（设不了图包封面、也没处可移动）、
-   * 归属条目是隐藏容器（设不了「条目封面」）、本来就在全部库里（不用再移出）。
+   * 瓦片右键：和角色集 / 图包页共用同一套媒体菜单。
+   * 收件箱有三项不该出现 —— 素材没有图包（设不了图包封面、也没处可移动）、
+   * 归属条目是隐藏容器（设不了「条目封面」）、本来就在收件箱里（不用再移出）。
    *
    * 如果右键的是「已选中的那几张之一」，菜单换成批量动作 ——
    * 否则选了 50 张、右键点删除，只删一张会很意外。
@@ -572,7 +572,7 @@ export async function InboxView(root, shelfId, opts = {}) {
       shelves = [];
     }
     if (!shelves.length) {
-      toast('还没有人物库或角色库，先去首页建一个');
+      toast('还没有人物集或角色集，先去首页建一个');
       return;
     }
 

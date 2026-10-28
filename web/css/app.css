@@ -285,7 +285,7 @@ img { display: block; }
 }
 .novel-card .cover img { position: relative; z-index: 1; }
 
-/* 小说袋：卡片用 button（袋子不是条目），外观沿用书卡片 */
+/* 书袋：卡片用 button（书袋不是条目），外观沿用书卡片 */
 button.char-card {
   width: 100%;
   border: 0;
@@ -773,7 +773,7 @@ button.char-card {
 .pack-card .m { font-size: 11px; color: var(--text-3); margin-top: 2px; }
 
 /* ============ 瀑布流 ============ */
-/* 小库切换条（仅虚拟角色库）：官图 / cosplay / 同人 */
+/* 小库切换条（仅虚拟角色集）：官图 / cosplay / 同人 */
 .cat-row {
   display: flex;
   align-items: center;
@@ -1219,7 +1219,7 @@ button.char-card {
 .tb-btn.danger { background: #e24b4a; color: #fff; }
 .tb-btn.danger:hover { background: #c93b3a; }
 
-/* ============ 角色库切换 / 页头 ============ */
+/* ============ 角色集切换 / 页头 ============ */
 .segmented button i {
   font-style: normal;
   margin-left: 6px;
@@ -2228,7 +2228,7 @@ button.char-card {
   color: var(--text-3);
 }
 
-/* ============ 全部媒体的筛选条 ============ */
+/* ============ 素材的筛选条 ============ */
 .filter-bar {
   display: flex;
   align-items: center;
@@ -2290,7 +2290,7 @@ button.char-card {
 }
 .filter-search input { font-size: 12px; }
 
-/* ============ 表情库（扁平库：图包 / 未分类 / 全部素材） ============ */
+/* ============ 表情包（扁平库：图包 / 未分类 / 全部素材） ============ */
 .shelf-head {
   display: flex;
   align-items: flex-end;
@@ -2398,7 +2398,7 @@ button.char-card {
 }
 .tile.is-live:hover { transform: scale(1.75); }
 
-/* ============ 资源库（游戏 / 动画 / 电影 / 剧集） ============ */
+/* ============ 作品录（游戏 / 动画 / 电影 / 剧集） ============ */
 /* 封面左上角的分类角标，和右下角的数量角标对称 */
 .cat-chip {
   position: absolute;
@@ -2442,7 +2442,7 @@ button.char-card {
 }
 .filter-note button:hover { opacity: 0.7; }
 
-/* ── 全部库 ─────────────────────────────────────────────── */
+/* ── 收件箱 ─────────────────────────────────────────────── */
 /* 已分发可能上千条，用「加载更多」而不是无限滚动：位置确定，好接管 */
 .inbox-more { display: flex; justify-content: center; padding: 18px 0 6px; }
 /* display:flex 会压掉 [hidden] 的 UA 样式：加载完了要真的不占位 */
@@ -2522,7 +2522,7 @@ button.char-card {
 }
 .alias-empty { font-size: 11px; color: var(--text-3); line-height: 1.5; }
 
-/* ── 全部库：库总览 ───────────────────────────────────── */
+/* ── 收件箱：总览 ───────────────────────────────────── */
 .lib-stats {
   margin: 0 12px 4px;
   padding: 9px 11px 11px;

@@ -1,7 +1,7 @@
 /**
  * 总览缓存（库列表 + 每个库的条目数 / 媒体数 / 占用）。
  *
- * 首页渲染要一次，进「全部库」时库总览又要一次 —— 同一屏里打两遍同一个统计接口
+ * 首页渲染要一次，进「收件箱」时总览又要一次 —— 同一屏里打两遍同一个统计接口
  * 没有意义（那个接口每库 5 个子查询）。1.5 秒 TTL 只用来吸收这种「同一轮渲染」，
  * 任何写请求成功后立刻失效，导入 / 删除 / 移动不会读到旧数字。
  */
@@ -155,7 +155,7 @@ export const api = {
   bulkMedia: (ids, action, packId) => json('POST')('/api/media/bulk', { ids, action, packId }),
   bulkPacks: (ids, action) => json('POST')('/api/packs/bulk', { ids, action }),
   deleteMedia: (id) => req(`/api/media/${id}`, { method: 'DELETE' }),
-  /** 移出库：把素材退回到「全部库 → 未分发」，文件会搬过去 */
+  /** 移出库：把素材退回到「收件箱 → 未分发」，文件会搬过去 */
   ejectMedia: (ids) => json('POST')('/api/media/eject', { ids }),
   // 视频封面：把第 at 秒那一帧存成缩略图；恢复默认就是删掉它
   setVideoPoster: (id, at) => json('POST')(`/api/media/${id}/poster`, { at }),

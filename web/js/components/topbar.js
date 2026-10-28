@@ -2,7 +2,7 @@ import { esc } from '../util.js';
 
 export function topbarHtml({
   title = '资料库',
-  sub = '角色库',
+  sub = '角色集',
   search = false,
   back = false,
   actions = '',

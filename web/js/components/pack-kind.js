@@ -13,7 +13,7 @@ import { confirmDialog } from './modal.js';
  */
 export async function togglePackKind(pack) {
   if (!pack || pack.kind === 'novel') {
-    toast('小说袋不能转成漫画');
+    toast('书袋不能转成漫画');
     return false;
   }
 

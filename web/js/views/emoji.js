@@ -36,7 +36,7 @@ function gotoMedia(mediaId) {
 }
 
 /**
- * 表情库：扁平库，没有条目层级。
+ * 表情包：扁平库，没有条目层级。
  * 库里直接就是「图包 / 未分类 / 全部素材」三类，图包用前 9 张图拼成封面。
  */
 export async function EmojiView(root, shelfId, opts = {}) {
@@ -44,7 +44,7 @@ export async function EmojiView(root, shelfId, opts = {}) {
   const embedded = !!opts.embedded;
   let data = await api.emojiShelf(shelfId);
   let shelf = data.shelf;
-  // 散图库：同一套扁平结构，但只保留「图包 / 全部素材」两栏，也没有动图 / 表情筛选
+  // 散图集：同一套扁平结构，但只保留「图包 / 全部素材」两栏，也没有动图 / 表情筛选
   const isLoose = (shelf.kind || '') === 'loose';
   let packs = data.packs;
   let mediaAll = [];
@@ -54,7 +54,7 @@ export async function EmojiView(root, shelfId, opts = {}) {
   // 现在库是嵌在首页 /s/:id 里打开的，一改 URL 就把人带出首页、刷新后还落到旧页面
   let mode =
     (history.state && history.state.emojiTab) || new URLSearchParams(location.search).get('tab') || 'packs';
-  // 散图库没有「未分类」这一栏，历史里存着也退回图包
+  // 散图集没有「未分类」这一栏，历史里存着也退回图包
   if (isLoose && mode === 'loose') mode = 'packs';
   let selecting = false;
   const picked = new Set();
@@ -267,7 +267,7 @@ export async function EmojiView(root, shelfId, opts = {}) {
     });
     bar.querySelector('[data-f-sort]').replaceWith(sortDD.el);
 
-    // 散图库没有「动图 / 表情」这一段，绑定要可选
+    // 散图集没有「动图 / 表情」这一段，绑定要可选
     bar.querySelector('[data-f-kind]')?.addEventListener('click', (e) => {
       const btn = e.target.closest('button[data-k]');
       if (!btn) return;
@@ -300,7 +300,7 @@ export async function EmojiView(root, shelfId, opts = {}) {
         .map(([t, n]) => ({ value: t, label: `${t}（${n}）` }))
     );
     packDD.setOptions([
-      { value: '__none__', label: '未分类（未归包）' },
+      { value: '__none__', label: '未分类（无包）' },
       ...packs.map((p) => ({ value: String(p.id), label: `${p.title}（${p.mediaCount}）` })),
     ]);
   }
@@ -390,7 +390,7 @@ export async function EmojiView(root, shelfId, opts = {}) {
                   pack: item.packId
                     ? { id: item.packId, title: (packs.find((p) => p.id === item.packId) || {}).title || '这个图包' }
                     : null,
-                  // 表情库的条目是容器，没有「人物 / 角色」这一层
+                  // 表情包的条目是容器，没有「人物 / 角色」这一层
                   owner: null,
                   shelfKind: (shelf && shelf.kind) || 'emoji',
                   // 滚到下面时顶部「选取」按钮不在视野里，右键也能进多选

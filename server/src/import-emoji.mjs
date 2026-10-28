@@ -1,5 +1,5 @@
 /**
- * 一次性导入：把外部表情包目录整体搬进「表情库」。
+ * 一次性导入：把外部表情包目录整体搬进「表情包」。
  * 每个子目录 = 一个图包；文件名里带 .gif.jpg 这种转格式产物也照收。
  *
  * 用法（在 server 目录下）：
@@ -68,7 +68,7 @@ const insertMedia = db.prepare(
 );
 const findBySha = db.prepare('SELECT id FROM media WHERE character_id = ? AND sha256 = ?');
 
-console.log(`\n[表情库] ${shelf.name} · 容器条目 ${container.id} (${container.dir_slug})`);
+console.log(`\n[表情包] ${shelf.name} · 容器条目 ${container.id} (${container.dir_slug})`);
 console.log(`        源目录 ${sourceRoot}`);
 console.log(`        共 ${groups.length} 个来源目录\n`);
 

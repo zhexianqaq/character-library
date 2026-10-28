@@ -8,7 +8,7 @@
  * 反查已有图包只能靠文本，带数量后缀会让「尤诺」和「尤诺（0）」对不上。
  */
 
-/** 下拉里显示的文本：角色库带小库前缀（官图 / cosplay / 同人） */
+/** 下拉里显示的文本：角色集带小库前缀（官图 / cos / 同人） */
 export function packLabel(p) {
   return `${p && p.category ? `${p.category} / ` : ''}${(p && p.title) || ''}`;
 }

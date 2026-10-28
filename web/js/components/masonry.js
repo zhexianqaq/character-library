@@ -119,7 +119,7 @@ function bindFresh(container, items, indexById, onOpen, opts) {
  * 渲染瀑布流。列数按容器宽度决定；图片用各自宽高比占位，不裁剪。
  * onOpen(indexInItems) 回调由调用方决定灯箱范围。
  * opts.selectable / opts.isPicked 用来支持多选。
- * opts.spanWide = true 时启用跨列布局：宽/高 > WIDE_AR(1.7) 的素材占两列（人物库 / 角色库用）。
+ * opts.spanWide = true 时启用跨列布局：宽/高 > WIDE_AR(1.7) 的素材占两列（人物集 / 角色集用）。
  * opts.appendFrom = N 时只往已有网格后面补第 N 项之后的（「加载更多」用）——
  *   已经画好的卡片不再重建，跨列布局也只算一次位置（前面的位置不会因为追加而变）。
  *

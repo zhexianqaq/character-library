@@ -14,12 +14,12 @@ import { InboxView } from './inbox.js';
  *
  * 以前点这些标签会跳到 /e/:id、/rs/:id、/n/:id、/x/:id 四个二级页面 ——
  * 明明和其他库并排放在同一排标签里，点一下却整页换掉、还多出一个「返回」按钮。
- * 现在它们和人物库 / 角色库一样：顶栏和库切换条留在原地，只有内容换。
+ * 现在它们和人物集 / 角色集一样：顶栏和库切换条留在原地，只有内容换。
  * 四个视图都支持 embedded 参数，嵌入时只输出主体，不重复画顶栏。
  */
 const FLAT_VIEW = {
   emoji: EmojiView,
-  // 散图库和表情库共用一套扁平视图（容器条目挂图包），只是少「未分类」和动图筛选
+  // 散图集和表情包共用一套扁平视图（容器条目挂图包），只是少「未分类」和动图筛选
   loose: EmojiView,
   resource: ResourcesView,
   novel: NovelView,
@@ -66,7 +66,7 @@ export async function LibraryView(root, shelfId) {
   function paintCount() {
     const el = root.querySelector('[data-count]');
     if (!el) return;
-    el.textContent = `${chars.total} 个角色 · ${fmtNum(activeShelf ? activeShelf.mediaCount : 0)} 个媒体 · ${fmtBytes(
+    el.textContent = `${chars.total} 个${noun} · ${fmtNum(activeShelf ? activeShelf.mediaCount : 0)} 个媒体 · ${fmtBytes(
       activeShelf ? activeShelf.bytes || 0 : 0
     )}`;
   }
@@ -128,22 +128,22 @@ export async function LibraryView(root, shelfId) {
     const v = await openModal({
       title: '新建库',
       description:
-        '人物库 / 角色库按「条目 → 图包 → 素材」组织；散图库 / 表情库没有条目，只有「图包 + 全部素材」；小说库按「归类文件夹 → 书 → 分卷」组织；全部库是收件箱 + 全库总览。',
+        '人物集 / 角色集按「条目 → 图包 → 素材」组织；散图集 / 表情包没有条目，只有「图包 + 全部素材」；原创书 / 同人书按「归类 → 书袋 → 书」组织；收件箱是待分发区 + 全库总览。',
       fields: [
-        { name: 'name', label: '名称', required: true, placeholder: '比如：人物库、原创库' },
+        { name: 'name', label: '名称', required: true, placeholder: '比如：人物集、原创书' },
         {
           name: 'kind',
           label: '类型',
           type: 'select',
           options: [
-            { value: 'people', label: '人物库 · 真人，填平台账号' },
-            { value: 'work', label: '角色库 · 虚拟角色，标出处' },
-            { value: 'novel:original', label: '原创库 · 小说，按「小说类型」分文件夹' },
-            { value: 'novel:fanfic', label: '同人库 · 同人小说，按「原作品名」分文件夹' },
-            { value: 'loose', label: '散图库 · 没有条目，只有图包和全部素材（散图 / 杂图）' },
-            { value: 'emoji', label: '表情库 · 没有条目，直接放图包（gif / 表情包）' },
-            { value: 'resource', label: '资源库 · 游戏 / 动画 / 电影 / 剧集，按标签串起角色' },
-            { value: 'inbox', label: '全部库 · 收一堆杂图，再分发给人物 / 角色库' },
+            { value: 'people', label: '人物集 · 真人，填平台账号' },
+            { value: 'work', label: '角色集 · 虚拟角色，标出处' },
+            { value: 'novel:original', label: '原创书 · 小说，按「小说类型」分文件夹' },
+            { value: 'novel:fanfic', label: '同人书 · 同人小说，按「原作品名」分文件夹' },
+            { value: 'loose', label: '散图集 · 没有条目，只有图包和全部素材（散图 / 杂图）' },
+            { value: 'emoji', label: '表情包 · 没有条目，直接放图包（gif / 表情包）' },
+            { value: 'resource', label: '作品录 · 游戏 / 动画 / 电影 / 剧集，按标签串起角色' },
+            { value: 'inbox', label: '收件箱 · 收一堆杂图，再分发给人物 / 角色集' },
           ],
           value: 'people',
           hint: '建好之后也能改，只影响条目那一栏的字段。',
@@ -153,7 +153,7 @@ export async function LibraryView(root, shelfId) {
     });
     if (!v) return;
     try {
-      // 「原创库 / 同人库」共用一个 kind=novel，靠 variant 区分
+      // 「原创书 / 同人书」共用一个 kind=novel，靠 variant 区分
       const [kind, variant] = String(v.kind).split(':');
       const created = await api.createShelf(v.name, kind, variant ? { variant } : {});
       toast('库已创建');
@@ -244,7 +244,7 @@ export async function LibraryView(root, shelfId) {
 
   async function renderEmbedded(active, shelves, ov) {
     // 顶栏是这一层画的，所以嵌入视图的搜索也得挂在这儿：
-    // 目前只有资源库有搜索（表情 / 散图 / 小说 / 全部库先按原样）
+    // 目前只有作品录有搜索（表情 / 散图 / 小说 / 收件箱先按原样）
     const searchable = active.kind === 'resource';
     root.innerHTML =
       topbarHtml({
@@ -274,7 +274,7 @@ export async function LibraryView(root, shelfId) {
       });
     }
 
-    // 总览已经拿过了，顺手传给嵌入视图：全部库的「库总览」不用再请求一遍
+    // 总览已经拿过了，顺手传给嵌入视图：收件箱的「总览」不用再请求一遍
     await FLAT_VIEW[active.kind](embed, active.id, {
       embedded: true,
       overview: ov,
@@ -295,7 +295,7 @@ export async function LibraryView(root, shelfId) {
     }
 
     const active = shelves.find((s) => s.id === state.shelfId);
-    // 表情库 / 资源库 / 小说库 / 全部库：不跳页，就在首页原地展开
+    // 表情包 / 作品录 / 小说库 / 收件箱：不跳页，就在首页原地展开
     if (active && FLAT_VIEW[active.kind]) {
       await renderEmbedded(active, shelves, ov);
       return;
@@ -321,7 +321,7 @@ export async function LibraryView(root, shelfId) {
          <div class="toolbar">
            <div class="segmented" data-tabs>${tabsHtml(shelves, state.shelfId)}</div>
            <span class="spacer"></span>
-           <span class="count" data-count>${chars.total} 个角色 · ${fmtNum(active ? active.mediaCount : 0)} 个媒体 · ${fmtBytes(
+           <span class="count" data-count>${chars.total} 个${noun} · ${fmtNum(active ? active.mediaCount : 0)} 个媒体 · ${fmtBytes(
              active ? active.bytes || 0 : 0
            )}</span>
            <span data-sort></span>
@@ -405,13 +405,13 @@ export async function LibraryView(root, shelfId) {
       render();
     }
 
-    // 角色库切换
+    // 角色集切换
     root.querySelector('[data-tabs]').addEventListener('click', onTabClick);
     root.querySelector('[data-new-shelf]').addEventListener('click', openNewShelf);
 
     // 新建角色
     root.querySelector('[data-new-char]').addEventListener('click', async () => {
-      if (!state.shelfId) return toast('先建一个角色库');
+      if (!state.shelfId) return toast('先建一个角色集');
       const v = await openModal({
         title: `新建${noun}`,
         description: `建好后可以在${noun}页面上传图片和视频，出处 / 平台在详情页右侧填。`,

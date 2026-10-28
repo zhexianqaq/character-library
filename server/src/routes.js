@@ -135,7 +135,7 @@ function mediaTagSet(db, charId) {
   return mergeTags([c.name]);
 }
 
-/** 当前月份 'YYYY-MM'（散图库里没有日期的文件按入库月份归包，别用「未分类」这个名） */
+/** 当前月份 'YYYY-MM'（散图集里没有日期的文件按入库月份归包，别用「未分类」这个名） */
 function currentMonth() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -145,7 +145,7 @@ function currentMonth() {
  * 图包标签 = 名字拆出来的 + **所属条目名**。
  *
  * 包挂在谁名下就带上谁的名字，这样在标签池里搜「水淼」能一次看到她的所有图包，
- * 点标签也能落到标签页。容器条目（表情库 / 全部库 / 小说库的袋子）没有这层含义，跳过。
+ * 点标签也能落到标签页。容器条目（表情包 / 收件箱 / 小说库的书袋）没有这层含义，跳过。
  */
 function ownerTagOf(db, charId) {
   if (!charId) return '';
@@ -229,15 +229,15 @@ function safeJson(raw) {
  * 库的类型：
  * people 真人（有社交账号）/ work 虚拟角色（标注出处）
  * emoji 表情包（没有条目层级，库里直接是图包 + 未分类 + 全部素材）
- * resource 资源库（游戏 / 动画 / 电影 / 剧集，卡片按分类分组）
+ * resource 作品录（游戏 / 动画 / 电影 / 剧集，卡片按分类分组）
  * novel 小说库（条目=一本小说，novel_group 是磁盘上的归类文件夹）
- * inbox 全部库（没有条目层级：未分发=落在 <库名>/未分类 里的，已分发=全库其余媒体，只链接不复制）
+ * inbox 收件箱（没有条目层级：未分发=落在 <库名>/未分类 里的，已分发=全库其余媒体，只链接不复制）
  */
 function normalizeShelfKind(v) {
   const k = String(v || '').toLowerCase();
   if (k === 'work') return 'work';
   if (k === 'emoji') return 'emoji';
-  // 散图库：扁平库，只有「图包 / 全部素材」，没有条目也没有未分类入口
+  // 散图集：扁平库，只有「图包 / 全部素材」，没有条目也没有未分类入口
   if (k === 'loose') return 'loose';
   if (k === 'resource') return 'resource';
   if (k === 'novel') return 'novel';
@@ -380,7 +380,7 @@ function titleFromArchive(name) {
 }
 
 /**
- * 算出文件该落在哪个目录：<角色库>/<角色>/<图包>/<图片|视频>
+ * 算出文件该落在哪个目录：<角色集>/<角色>/<图包>/<图片|视频>
  * 图包目录沿用库里已有文件的位置；新图包才新建目录，避免重复生成 -2 -3
  */
 async function resolvePackDir(db, charRelDir, pack, kind, category = null) {
@@ -390,7 +390,7 @@ async function resolvePackDir(db, charRelDir, pack, kind, category = null) {
     const parts = existing.rel_path.split('/');
     return [...parts.slice(0, -2), typeDir].join('/');
   }
-  // 虚拟角色库：库/角色/小库/图包/图片|视频
+  // 虚拟角色集：库/角色/小库/图包/图片|视频
   const base = category ? `${charRelDir}/${category}` : charRelDir;
   // 图包被搬空但目录还在时沿用旧目录，否则每搬一次就分裂出「-2」「-3」
   const plain = slugify(pack.title);
@@ -402,17 +402,17 @@ async function resolvePackDir(db, charRelDir, pack, kind, category = null) {
 }
 
 /**
- * 新建角色的目录：<角色库>/<角色>
- * 角色库那一段必须复用已有角色用过的名字，不能每次 slugify 一遍，
- * 否则同一个库会裂成「角色库」「角色库-2」。
+ * 新建角色的目录：<角色集>/<角色>
+ * 角色集那一段必须复用已有角色用过的名字，不能每次 slugify 一遍，
+ * 否则同一个库会裂成「角色集」「角色集-2」。
  */
-/** 库在磁盘上的目录名：优先复用已有条目用过的前缀，避免同一个库裂成「角色库」「角色库-2」 */
+/** 库在磁盘上的目录名：优先复用已有条目用过的前缀，避免同一个库裂成「角色集」「角色集-2」 */
 function shelfSlugOf(db, shelfId) {
   const shelf = db.prepare('SELECT * FROM shelves WHERE id = ?').get(shelfId);
   const sample = db
     .prepare(`SELECT dir_slug FROM characters WHERE shelf_id = ? AND dir_slug LIKE '%/%' LIMIT 1`)
     .get(shelfId);
-  return sample ? sample.dir_slug.split('/')[0] : slugify(shelf ? shelf.name : '角色库');
+  return sample ? sample.dir_slug.split('/')[0] : slugify(shelf ? shelf.name : '角色集');
 }
 
 /**
@@ -515,8 +515,8 @@ async function ensureCharDirs(relDir, novel = false) {
 const OFFICIAL_PACK = '官方';
 
 /**
- * 书的归类保存后，确保库里有一个同名袋子。
- * 袋子和书靠 characters.novel_group（= 袋子名）关联，这里是唯一的「按需建袋」入口。
+ * 书的归类保存后，确保库里有一个同名书袋。
+ * 书袋和书靠 characters.novel_group（= 书袋名）关联，这里是唯一的「按需建袋」入口。
  */
 function ensureNovelBag(db, shelfId, title) {
   const t = String(title || '').trim();
@@ -538,8 +538,8 @@ function ensureNovelBag(db, shelfId, title) {
 }
 
 /**
- * 资源库的每个「作品」预置一个「官方」图包：
- * `<资源库>/<作品>/官方/图片|视频`，和其他库「条目/图包/图片|视频」的层级完全一致。
+ * 作品录的每个「作品」预置一个「官方」图包：
+ * `<作品录>/<作品>/官方/图片|视频`，和其他库「条目/图包/图片|视频」的层级完全一致。
  * 资源本身不直接存媒体，这里只建空壳（DB 一条 pack + 两个子目录），
  * 官方图可以直接往里放，也能被图包页 / 上传接口按常规流程用起来。
  */
@@ -701,14 +701,14 @@ export function createApp() {
     });
   });
 
-  // ---------- 角色库 ----------
+  // ---------- 角色集 ----------
   app.post('/api/shelves', async (req, res) => {
     const db = getDb();
     const name = String((req.body && req.body.name) || '').trim();
-    if (!name) return res.status(400).json({ error: '角色库名称不能为空' });
+    if (!name) return res.status(400).json({ error: '角色集名称不能为空' });
     const lib = mainLibrary();
     const kind = normalizeShelfKind(req.body.kind);
-    // variant 只有小说库有：原创库 / 同人库
+    // variant 只有小说库有：原创书 / 同人书
     const variant = kind === 'novel' ? normalizeVariant(req.body.variant) : null;
     const id = Number(
       db
@@ -728,7 +728,7 @@ export function createApp() {
         )
         .lastInsertRowid
     );
-    // 表情库 / 散图库 / 全部库都没有条目层级，靠一个隐藏容器条目挂图包（和未分类）
+    // 表情包 / 散图集 / 收件箱都没有条目层级，靠一个隐藏容器条目挂图包（和未分类）
     if (kind === 'emoji' || kind === 'loose' || kind === 'inbox') ensureShelfContainer(id);
     // 库根目录建出来：否则资源管理器里少一个库，用户会以为数据没落盘
     await mkdirRel(shelfSlugOf(db, id));
@@ -756,7 +756,7 @@ export function createApp() {
       nowIso(),
       id
     );
-    // 改成表情库 / 散图库 / 全部库时补一个容器条目，否则前端没有地方挂图包
+    // 改成表情包 / 散图集 / 收件箱时补一个容器条目，否则前端没有地方挂图包
     if (nextKind === 'emoji' || nextKind === 'loose' || nextKind === 'inbox') ensureShelfContainer(id);
     res.json({ ok: true, kind: nextKind, variant: nextVariant });
   });
@@ -813,7 +813,7 @@ export function createApp() {
       return res.status(400).json({ error: '路径越界' });
     }
     try {
-      // 条目目录可能还没建（资源库的卡片本身不存媒体，不做预热 mkdir），
+      // 条目目录可能还没建（作品录的卡片本身不存媒体，不做预热 mkdir），
       // 用户点「打开本地文件夹」时补一个，比报「目录已丢失」合理
       if (kind === 'character' && !fs.existsSync(abs)) fs.mkdirSync(abs, { recursive: true });
       const isDir = fs.statSync(abs).isDirectory();
@@ -941,7 +941,7 @@ export function createApp() {
     const where = ['c.shelf_id = @shelfId', 'c.is_container = 0'];
     const params = { shelfId };
     if (q) {
-      // 标签也算：人物库/角色库里搜「原神」应该把打了这个标签的条目都找出来，
+      // 标签也算：人物集/角色集里搜「原神」应该把打了这个标签的条目都找出来，
       // 而不是只有名字里带「原神」的那几个
       where.push(`(c.name LIKE @q OR c.account LIKE @q OR c.author LIKE @q OR c.aliases LIKE @q
         OR EXISTS (SELECT 1 FROM character_tags ct JOIN tags t ON t.id = ct.tag_id
@@ -968,8 +968,8 @@ export function createApp() {
    * 所以 view 只影响「这页显示哪些书」，group 影响「书放在哪个文件夹」。
    */
   /**
-   * 小说库的「袋子」：把不同的类型 / 原作实体化成一条 pack（kind='novel'）。
-   * 书和袋子的关系仍用 characters.novel_group（= 袋子名），袋子挂在库的容器条目下。
+   * 小说库的「书袋」：把不同的类型 / 原作实体化成一条 pack（kind='novel'）。
+   * 书和书袋的关系仍用 characters.novel_group（= 书袋名），书袋挂在库的容器条目下。
    */
   /**
    * 跨库「关联图包」：别的库里那些标签里带着这个条目名的图包。
@@ -1047,7 +1047,7 @@ export function createApp() {
         title: p.title,
         tags: safeJson(p.tags),
         bookCount: p.book_count || 0,
-        // 袋子自己的封面优先，没有就用组里第一本书的
+        // 书袋自己的封面优先，没有就用组里第一本书的
         coverMediaId: p.cover_media_id || p.bag_cover || null,
         createdAt: p.created_at,
       })),
@@ -1061,13 +1061,13 @@ export function createApp() {
     if (!shelf) return res.status(404).json({ error: '库不存在' });
     if (shelf.kind !== 'novel') return res.status(400).json({ error: '不是小说库' });
     const title = String((req.body && req.body.title) || '').trim().slice(0, 40);
-    if (!title) return res.status(400).json({ error: '袋子名称不能为空' });
+    if (!title) return res.status(400).json({ error: '书袋名称不能为空' });
     const container = ensureShelfContainer(shelfId);
     if (!container) return res.status(404).json({ error: '小说库没有准备好' });
     const dup = db
       .prepare("SELECT id FROM packs WHERE character_id = ? AND kind = 'novel' AND title = ?")
       .get(container.id, title);
-    if (dup) return res.status(409).json({ error: `已经有「${title}」这个袋子了` });
+    if (dup) return res.status(409).json({ error: `已经有「${title}」这个书袋了` });
     const id = Number(
       db
         .prepare(
@@ -1168,7 +1168,7 @@ export function createApp() {
   });
 
   /**
-   * 表情库首页：库里没有条目层级，直接给「图包 + 未分类 + 全部素材」三类。
+   * 表情包首页：库里没有条目层级，直接给「图包 + 未分类 + 全部素材」三类。
    * 图包带上前 9 张图，前端拼成 3×3 封面。
    */
   app.get('/api/shelves/:id/emoji', (req, res) => {
@@ -1177,7 +1177,7 @@ export function createApp() {
     const shelf = db.prepare('SELECT * FROM shelves WHERE id = ?').get(shelfId);
     if (!shelf) return res.status(404).json({ error: '库不存在' });
     const container = ensureShelfContainer(shelfId);
-    if (!container) return res.status(404).json({ error: '表情库没有准备好' });
+    if (!container) return res.status(404).json({ error: '表情包没有准备好' });
 
     const packs = db
       .prepare(
@@ -1259,9 +1259,9 @@ export function createApp() {
     });
   });
 
-  // ---------- 全部库（未分发 / 已分发）----------
+  // ---------- 收件箱（未分发 / 已分发）----------
   /**
-   * 「全部库」不是真的把所有文件复制一份进来，而是两种查询：
+   * 「收件箱」不是真的把所有文件复制一份进来，而是两种查询：
    *  - 未分发：媒体挂在库的隐藏容器条目下面，文件在 <库名>/未分类/图片|视频
    *  - 已分发：库里**其它所有**媒体，只读聚合（点开还是走 /i/:id 原页）
    * 分发动作不在这里：直接复用 POST /api/packs/:id/media（跨条目移动会搬文件 + 写 journal）。
@@ -1271,9 +1271,9 @@ export function createApp() {
     const shelfId = Number(req.params.id);
     const shelf = db.prepare('SELECT * FROM shelves WHERE id = ?').get(shelfId);
     if (!shelf) return res.status(404).json({ error: '库不存在' });
-    if ((shelf.kind || '') !== 'inbox') return res.status(400).json({ error: '不是全部库' });
+    if ((shelf.kind || '') !== 'inbox') return res.status(400).json({ error: '不是收件箱' });
     const container = ensureShelfContainer(shelfId);
-    if (!container) return res.status(404).json({ error: '全部库没有准备好' });
+    if (!container) return res.status(404).json({ error: '收件箱没有准备好' });
 
     const section = String(req.query.section || '') === 'distributed' ? 'distributed' : 'undistributed';
     const kind = ['image', 'video'].includes(String(req.query.kind || '')) ? String(req.query.kind) : '';
@@ -1360,7 +1360,7 @@ export function createApp() {
     });
   });
 
-  // ---------- 资源库（游戏 / 动画 / 电影 / 剧集）----------
+  // ---------- 作品录（游戏 / 动画 / 电影 / 剧集）----------
   /**
    * 资源卡片复用 characters 行：name=资源名、category=分类、tags=标签。
    * 它和「角色 / 人物」的关系完全靠标签（同名标签）或出处（platforms.handle）建立，
@@ -1380,7 +1380,7 @@ export function createApp() {
           OR c2.platforms LIKE ('%"handle":"' || c.name || '"%')
         ))`;
 
-  // 没设封面时，自动借一个关联条目的封面：优先「角色库」（作品里的角色更像封面）
+  // 没设封面时，自动借一个关联条目的封面：优先「角色集」（作品里的角色更像封面）
   const RESOURCE_COVER = `
     COALESCE(c.cover_media_id,
       (SELECT c4.cover_media_id FROM characters c4
@@ -1450,8 +1450,8 @@ export function createApp() {
   });
 
   /**
-   * 出处里写了新作品名 → 自动在资源库建一张卡片（分类 = 出处类型）。
-   * 资源库不存在就顺手建一个，这样「只填名字 + 出处」也能自洽。
+   * 出处里写了新作品名 → 自动在作品录建一张卡片（分类 = 出处类型）。
+   * 作品录不存在就顺手建一个，这样「只填名字 + 出处」也能自洽。
    */
   app.post('/api/resources/ensure', async (req, res) => {
     const db = getDb();
@@ -1471,7 +1471,7 @@ export function createApp() {
             `INSERT INTO shelves(library_id, name, note, kind, sort_order, created_at, updated_at)
              VALUES(?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM shelves WHERE library_id=?),?,?)`
           )
-          .run(lib.id, '资源库', '', 'resource', lib.id, nowIso(), nowIso()).lastInsertRowid
+          .run(lib.id, '作品录', '', 'resource', lib.id, nowIso(), nowIso()).lastInsertRowid
       );
       shelf = db.prepare('SELECT * FROM shelves WHERE id = ?').get(sid);
       createdShelf = true;
@@ -1571,8 +1571,8 @@ export function createApp() {
     const novelGroup = isNovel ? String(b.novelGroup || '').trim().slice(0, 60) : '';
     if (isNovel && !novelGroup) return res.status(400).json({ error: '请先选一个归类文件夹' });
 
-    // 小说库内不允许重名（跨库同名合法：原创库《原神》与同人库分组「原神」互不干扰）。
-    // 人物 / 角色库保持原行为 —— 同名条目以前就允许，会各自生成「名字-2」目录。
+    // 小说库内不允许重名（跨库同名合法：原创书《原神》与同人书分组「原神」互不干扰）。
+    // 人物 / 角色集保持原行为 —— 同名条目以前就允许，会各自生成「名字-2」目录。
     if (isNovel) {
       const dup = db
         .prepare('SELECT id FROM characters WHERE shelf_id = ? AND is_container = 0 AND name = ?')
@@ -1611,11 +1611,11 @@ export function createApp() {
     if (shelf.kind === 'people' || shelf.kind === 'work') await ensureCharDirs(dirSlug);
     // 小说库：正文文件目录 + 插图目录（不建视频，空目录只是噪音）
     else if (isNovel) await ensureCharDirs(dirSlug, true);
-    // 资源库：每张「作品」卡预置一个「官方」图包 + 对应目录
+    // 作品录：每张「作品」卡预置一个「官方」图包 + 对应目录
     else if (shelf.kind === 'resource') await ensureOfficialPack(db, id, dirSlug);
-    // 建书时填的类型 / 原作就是袋子名，顺手把袋子建出来
+    // 建书时填的类型 / 原作就是书袋名，顺手把书袋建出来
     if (isNovel) ensureNovelBag(db, shelf.id, novelGroup);
-    // 同人小说自动带「原作品名」标签 —— 资源库那张作品卡的「关联条目」正是按同名标签统计的
+    // 同人小说自动带「原作品名」标签 —— 作品录那张作品卡的「关联条目」正是按同名标签统计的
     if (isNovel && normalizeVariant(shelf.variant) === 'fanfic' && novelGroup) {
       applyTags(db, id, [...new Set([...(Array.isArray(b.tags) ? b.tags : []), novelGroup])]);
     }
@@ -1758,7 +1758,7 @@ export function createApp() {
         if (isNovel) {
           if (typeof b.novelGroup === 'string') {
             db.prepare('UPDATE characters SET novel_group = ?, updated_at = ? WHERE id = ?').run(nextGroup, nowIso(), id);
-            // 填了一个新类型 / 原作，就顺手把这个袋子建出来
+            // 填了一个新类型 / 原作，就顺手把这个书袋建出来
             ensureNovelBag(db, shelf.id, nextGroup);
           }
           if (b.novelSubtype !== undefined) {
@@ -1877,7 +1877,7 @@ export function createApp() {
         month: r.month,
         category: r.category,
         tags: safeJson(r.tags),
-        // pack 普通图包 / comic 漫画 / novel 小说袋
+        // pack 普通图包 / comic 漫画 / novel 书袋
         kind: r.kind || 'pack',
         mediaCount: r.media_count,
         imageCount: r.image_count,
@@ -2074,7 +2074,7 @@ export function createApp() {
     const id = Number(req.params.id);
     const pack = db.prepare('SELECT * FROM packs WHERE id = ?').get(id);
     if (!pack) return res.status(404).json({ error: '图包不存在' });
-    if (pack.kind === 'novel') return res.status(400).json({ error: '小说袋不能转成漫画' });
+    if (pack.kind === 'novel') return res.status(400).json({ error: '书袋不能转成漫画' });
 
     const to = String((req.body && req.body.to) || '').trim();
     if (to !== 'comic' && to !== 'pack') return res.status(400).json({ error: '只能转成 comic 或 pack' });
@@ -2111,7 +2111,7 @@ export function createApp() {
     res.json({ ok: true, kind: 'comic', pages: images.length, videos: videos.length });
   });
 
-  // 默认「解散」：只删图包，里面的媒体变成未归包；
+  // 默认「解散」：只删图包，里面的媒体变成无包；
   // ?withMedia=1 是「删除」：连图包里的媒体和磁盘文件一起删掉
   app.delete('/api/packs/:id', async (req, res) => {
     const db = getDb();
@@ -2128,7 +2128,7 @@ export function createApp() {
       const items = allMedia;
       const delOne = db.prepare('DELETE FROM media WHERE id = ?');
       for (const m of items) {
-        // 先删文件，删不掉就留着这条记录（变成未归包），别让「已删除」变成谎话
+        // 先删文件，删不掉就留着这条记录（变成无包），别让「已删除」变成谎话
         const del = await removeLibraryFile(m.rel_path);
         if (del.ok || del.alreadyGone) {
           delOne.run(m.id);
@@ -2177,7 +2177,7 @@ export function createApp() {
   });
 
   /**
-   * 图包批量操作：dissolve 只删壳（媒体变成未归包），delete 连媒体和磁盘文件一起删。
+   * 图包批量操作：dissolve 只删壳（媒体变成无包），delete 连媒体和磁盘文件一起删。
    */
   app.post('/api/packs/bulk', async (req, res) => {
     const db = getDb();
@@ -2213,11 +2213,11 @@ export function createApp() {
           } else {
             failIds.add(r.id);
             failed.push({ id: r.id, packId: id, reason: whyDeleteFailed(del), code: del.code || null });
-            looseMedia.run(r.id); // 留在「未归包」里，用户还看得见、能再来一次
+            looseMedia.run(r.id); // 留在「无包」里，用户还看得见、能再来一次
           }
         }
       }
-      // dissolve 时 media.pack_id 有 ON DELETE SET NULL，会自动变成未归包
+      // dissolve 时 media.pack_id 有 ON DELETE SET NULL，会自动变成无包
       delPack.run(id);
       done += 1;
       logOp(
@@ -2428,7 +2428,7 @@ export function createApp() {
 
   /**
    * 素材挑选器（「添加到图包」用）。
-   * scope: all 全部素材 / character 本角色 / loose 未归包 / filed 已归包
+   * scope: all 全部素材 / character 本角色 / loose 无包 / filed 已归包
    */
   app.get('/api/media/pick', (req, res) => {
     const db = getDb();
@@ -2666,9 +2666,9 @@ export function createApp() {
   });
 
   /**
-   * 移出库：把素材从条目（及其图包）里摘出来，放进「全部库」的未分类。
+   * 移出库：把素材从条目（及其图包）里摘出来，放进「收件箱」的未分类。
    * 和「分发」正好相反，共用同一套搬移保证（journal / 全量 sha256 / 写库失败搬回）。
-   * 全部库里已经有同一份内容时不再留两份：文件只留一份，这条记录直接消失（merged）。
+   * 收件箱里已经有同一份内容时不再留两份：文件只留一份，这条记录直接消失（merged）。
    */
   app.post('/api/media/eject', async (req, res) => {
     const db = getDb();
@@ -2678,9 +2678,9 @@ export function createApp() {
     if (ids.length > 2000) return res.status(400).json({ error: '一次最多移出 2000 个素材' });
 
     const shelf = db.prepare("SELECT * FROM shelves WHERE kind = 'inbox' ORDER BY id LIMIT 1").get();
-    if (!shelf) return res.status(400).json({ error: '还没有「全部库」，先在首页建一个' });
+    if (!shelf) return res.status(400).json({ error: '还没有「收件箱」，先在首页建一个' });
     const box = ensureShelfContainer(shelf.id);
-    if (!box) return res.status(400).json({ error: '全部库没有准备好' });
+    if (!box) return res.status(400).json({ error: '收件箱没有准备好' });
 
     const getMedia = db.prepare('SELECT * FROM media WHERE id = ?');
     const moveRow = db.prepare(
@@ -2708,11 +2708,11 @@ export function createApp() {
         continue;
       }
       if (row.character_id === box.id) {
-        skipped.push({ id, reason: '已经在全部库里' });
+        skipped.push({ id, reason: '已经在收件箱里' });
         continue;
       }
 
-      // 全部库里已经有同一份内容（sha256 是导入时按字节算的）：内容不会丢，
+      // 收件箱里已经有同一份内容（sha256 是导入时按字节算的）：内容不会丢，
       // 这条记录直接收掉，不再往未分类里塞第二份；旧文件删不掉就整条留着，如实报告
       const dup = row.sha256
         ? db
@@ -2722,7 +2722,7 @@ export function createApp() {
       if (dup) {
         const gone = await removeLibraryFile(row.rel_path);
         if (!gone.ok && !gone.alreadyGone) {
-          skipped.push({ id, reason: `全部库里已有同一份文件，但这份删不掉（${gone.code || gone.error}）` });
+          skipped.push({ id, reason: `收件箱里已有同一份文件，但这份删不掉（${gone.code || gone.error}）` });
           continue;
         }
         srcDirs.add(row.rel_path.split('/').slice(0, -1).join('/'));
@@ -2752,7 +2752,7 @@ export function createApp() {
 
       try {
         if (info.action === 'reused') {
-          // 全部库里躺着同一份内容（刚比过全量 sha256）：文件不重复存，这条记录收掉
+          // 收件箱里躺着同一份内容（刚比过全量 sha256）：文件不重复存，这条记录收掉
           srcDirs.add(row.rel_path.split('/').slice(0, -1).join('/'));
           clearCharCover.run(id);
           clearPackCover.run(id);
@@ -2813,7 +2813,7 @@ export function createApp() {
         entity: 'media',
         entityId: merged[0].id,
         action: 'delete',
-        reason: '全部库已有同一份内容，合并',
+        reason: '收件箱已有同一份内容，合并',
         payload: { items: merged },
       });
     }
@@ -2913,13 +2913,13 @@ export function createApp() {
       // 先定图包，才知道文件该进哪个目录
       const isDoc = kind === 'file';
       const month = monthOfFileName(originalName);
-      // 表情库没有「按日期归包」：不指定图包就直接落到未分类
+      // 表情包没有「按日期归包」：不指定图包就直接落到未分类
       const pack = isDoc
         ? null
         : forcedPackId
           ? db.prepare('SELECT id, title, category, kind FROM packs WHERE id = ?').get(forcedPackId)
           : char.is_container
-            ? // 散图库只有「图包 / 全部素材」两栏，落下就走未分类等于看不见；
+            ? // 散图集只有「图包 / 全部素材」两栏，落下就走未分类等于看不见；
               // 所以按文件名月份自动建包（和普通条目一样），文件始终有归属
               shelfKind === 'loose'
               ? ensurePackFor(db, charId, month || currentMonth(), category)
@@ -3034,7 +3034,7 @@ export function createApp() {
    *
    * 拖到某个图包里（带 packId）就进那个图包；拖到条目 / 库首页（不带 packId）
    * 就按压缩包名新建一个图包（同名图包已存在时直接复用，避免反复拖同一个包长出一堆重名包）。
-   * 「全部媒体」是收件箱，没有图包概念，解出来的直接落未分类。
+   * 「素材」是收件箱，没有图包概念，解出来的直接落未分类。
    */
   app.post('/api/characters/:id/archive', upload.single('archive'), async (req, res) => {
     const db = getDb();

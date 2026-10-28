@@ -118,9 +118,9 @@ export async function importCharacterDir({
   );
   if (!files.length) throw new Error('该目录下没有可导入的图片或视频');
 
-  // 五层目录：角色库 / 角色 / 图包 / 图片|视频 / 文件
+  // 五层目录：角色集 / 角色 / 图包 / 图片|视频 / 文件
   const shelfRow = db.prepare('SELECT * FROM shelves WHERE id = ?').get(shelfId);
-  const shelfSlug = await uniqueDirName('', shelfRow ? shelfRow.name : '角色库');
+  const shelfSlug = await uniqueDirName('', shelfRow ? shelfRow.name : '角色集');
   const charSlug = await uniqueDirName(shelfSlug, finalName);
   const baseRel = `${shelfSlug}/${charSlug}`;
   const ts = nowIso();

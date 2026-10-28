@@ -6,8 +6,8 @@
  *   node tools/_seed-roster.mjs --apply   真正写库
  *
  * 写入规则：
- *   1. 每部作品先在资源库 ensure 一张作品卡（分类：游戏 / 动画）
- *   2. 角色按「同名合并」：角色库里已有同名的，把这部作品追加进「出处」，
+ *   1. 每部作品先在作品录 ensure 一张作品卡（分类：游戏 / 动画）
+ *   2. 角色按「同名合并」：角色集里已有同名的，把这部作品追加进「出处」，
  *      并补上同名标签（资源卡的「关联条目」正是按标签统计）；没有的新建
  *   3. 新建时带 出处 = 作品名 + 标签 = 作品名，这样两边的关联立刻成立
  */
@@ -85,11 +85,11 @@ if (process.argv[1] && process.argv[1].endsWith('_seed-roster.mjs')) {
     const post = (u, d) => j(u, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d || {}) });
     const patch = (u, d) => j(u, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d || {}) });
 
-    // 角色库
+    // 角色集
     const shelves = (await j('/api/overview')).body.shelves || [];
     const workShelf = shelves.find((s) => s.kind === 'work');
-    if (!workShelf) throw new Error('没有角色库');
-    console.log(`\n角色库 ${workShelf.id} · ${workShelf.name}（现有 ${workShelf.characterCount} 个条目）`);
+    if (!workShelf) throw new Error('没有角色集');
+    console.log(`\n角色集 ${workShelf.id} · ${workShelf.name}（现有 ${workShelf.characterCount} 个条目）`);
 
     // 现有条目：名字 → {id, platforms, tags}
     const existing = new Map();
@@ -146,7 +146,7 @@ if (process.argv[1] && process.argv[1].endsWith('_seed-roster.mjs')) {
     }
     console.log(`\n新建 ${created} 个，合并（同名补出处/标签）${merged} 个，失败 ${fail} 个`);
     const after = (await j('/api/overview')).body.shelves.find((s) => s.id === workShelf.id);
-    console.log(`角色库现在 ${after.characterCount} 个条目 · ${after.mediaCount} 个素材`);
+    console.log(`角色集现在 ${after.characterCount} 个条目 · ${after.mediaCount} 个素材`);
   } else {
     console.log('\n（dry-run，未写库。加 --apply 才真正写入）');
   }

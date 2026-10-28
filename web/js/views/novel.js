@@ -16,7 +16,7 @@ import { ORIGIN_TYPES, novelFieldSet } from '../novel-fields.js';
  * 所以切 tab 不会改变书的归属，只改变「这一页显示哪些书」。
  */
 
-/** 原创库的常用类型；datalist 可手输，没列出来的照样能用 */
+/** 原创书的常用类型；datalist 可手输，没列出来的照样能用 */
 
 const SORTS = [
   { value: 'words', label: '字数' },
@@ -45,16 +45,16 @@ export async function NovelView(root, shelfId, opts = {}) {
   let data = await api.novelShelf(id);
   let shelf = data.shelf;
   let items = data.items;
-  /** 袋子（packs.kind='novel'）：库里按类型 / 原作分的书架 */
+  /** 书袋（packs.kind='novel'）：库里按类型 / 原作分的书架 */
   let bags = [];
   try {
     bags = (await api.novelBags(id)).items || [];
   } catch {
     bags = [];
   }
-  // bag 为空 = 袋子列表；有值 = 打开的那个袋子（按 novel_group 对应）
+  // bag 为空 = 书袋列表；有值 = 打开的那个书袋（按 novel_group 对应）
   const state = { view: '', bag: '', q: '', sort: 'words' };
-  // 同人库：原作品名 → 资源库作品卡 id，用来在分组标题上给一个直达入口
+  // 同人书：原作品名 → 作品录作品卡 id，用来在分组标题上给一个直达入口
   let workMap = new Map();
 
   const isFan = () => shelf.variant === 'fanfic';
@@ -78,7 +78,7 @@ export async function NovelView(root, shelfId, opts = {}) {
     return [...m.entries()].sort((a, b) => b[1] - a[1]).map(([g]) => g);
   }
 
-  /** 同人库的原作品建议值：已有分组 + 资源库的作品名（这样「原神」两边写法能对齐） */
+  /** 同人书的原作品建议值：已有分组 + 作品录的作品名（这样「原神」两边写法能对齐） */
   async function fanficGroups() {
     const own = knownGroups();
     let works = [];
@@ -137,18 +137,18 @@ export async function NovelView(root, shelfId, opts = {}) {
     </a>`;
   }
 
-  /** 袋子对应哪一组书：「未分类」袋子装的是没填类型 / 原作的书（novel_group 为空） */
+  /** 书袋对应哪一组书：「未分类」书袋装的是没填类型 / 原作的书（novel_group 为空） */
   const groupOfBag = (b) => (b.title === '未分类' ? '' : b.title);
 
-  /** 当前分类视图（出版 / 网络）下，这个袋子里有几本书 */
+  /** 当前分类视图（出版 / 网络）下，这个书袋里有几本书 */
   function bagCount(b, view = state.view) {
     const g = groupOfBag(b);
     return items.filter((x) => (x.novelGroup || '') === g && (!view || x.novelSubtype === view)).length;
   }
 
   /**
-   * 只列出当前视图下有书的袋子。
-   * 以前不管视图、不管有没有书都画出来 —— 「出版」视图里冒出一个全是网络书的袋子，
+   * 只列出当前视图下有书的书袋。
+   * 以前不管视图、不管有没有书都画出来 —— 「出版」视图里冒出一个全是网络书的书袋，
    * 点进去空空如也，纯属误导。
    */
   function visibleBags() {
@@ -158,7 +158,7 @@ export async function NovelView(root, shelfId, opts = {}) {
   function paintMeta() {
     const words = items.reduce((a, x) => a + (x.wordCount || 0), 0);
     const shown = visibleBags();
-    const parts = [`${fmtNum(shown.length)} 个袋子`, `${fmtNum(items.length)} 本`];
+    const parts = [`${fmtNum(shown.length)} 个书袋`, `${fmtNum(items.length)} 本`];
     if (words) parts.push(wordsLabel(words));
     if (state.bag) parts.unshift(state.bag);
     root.querySelector('[data-meta]').textContent = parts.join(' · ');
@@ -177,14 +177,14 @@ export async function NovelView(root, shelfId, opts = {}) {
       .join('');
   }
 
-  /** 袋子卡片：外观沿用书卡片，只是元素是 button（袋子不是条目） */
+  /** 书袋卡片：外观沿用书卡片，只是元素是 button（书袋不是条目） */
   function bagCard(b, n = b.bookCount) {
     const img = b.coverMediaId ? api.thumb(b.coverMediaId) : '';
     return `<button class="char-card novel-card bag-card" data-bag="${esc(b.title)}" type="button">
       <div class="cover">
         <div class="cover-title"><span>${esc(b.title)}</span></div>
         ${img ? `<img src="${img}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : ''}
-        <span class="sub-chip">小说袋</span>
+        <span class="sub-chip">书袋</span>
         ${n ? `<span class="badge">${fmtNum(n)}</span>` : ''}
       </div>
       <div class="info">
@@ -199,25 +199,25 @@ export async function NovelView(root, shelfId, opts = {}) {
     if (!body) return;
     const count = root.querySelector('[data-count]');
 
-    // ① 袋子列表
+    // ① 书袋列表
     if (!state.bag) {
       const q = state.q.trim().toLowerCase();
       const shown = visibleBags();
       const list = q ? shown.filter((b) => b.title.toLowerCase().includes(q)) : shown;
-      if (count) count.textContent = `${list.length} 个袋子`;
+      if (count) count.textContent = `${list.length} 个书袋`;
       if (!list.length) {
-        // 分清楚「一个袋子都没有」和「这个视图下没有书」：后者藏起来才是对的
+        // 分清楚「一个书袋都没有」和「这个视图下没有书」：后者藏起来才是对的
         const viewLabel = (data.views.find((v) => v.value === state.view) || {}).label || '';
         body.innerHTML = `<div class="empty"><b>${
-          bags.length ? (q ? '没有匹配的袋子' : `「${esc(viewLabel)}」下还没有书`) : '还没有袋子'
+          bags.length ? (q ? '没有匹配的书袋' : `「${esc(viewLabel)}」下还没有书`) : '还没有书袋'
         }</b>${
           bags.length
             ? q
               ? '换个关键词试试'
               : '切到「全部」看看，或者新建一本'
-            : `点「＋ 新建袋子」先分个类（比如玄幻、科幻）；新建小说时填的${
+            : `点「＋ 新建书袋」先分个类（比如玄幻、科幻）；新建小说时填的${
                 isFan() ? '原作品' : '类型'
-              }也会自动变成袋子`
+              }也会自动变成书袋`
         }</div>`;
         return;
       }
@@ -237,13 +237,13 @@ export async function NovelView(root, shelfId, opts = {}) {
     const list = visibleItems();
     if (count) count.textContent = `${list.length} 本`;
     const head = `<div class="bag-head">
-      <button class="bag-back" data-bag-back type="button">‹ 全部袋子</button>
+      <button class="bag-back" data-bag-back type="button">‹ 全部书袋</button>
       <b>${esc(state.bag)}</b>
       <span>${list.length} 本</span>
     </div>`;
     if (!list.length) {
       body.innerHTML = `${head}<div class="empty">
-        <b>这个袋子里还没有书</b>点右上角「＋ 新建小说」，${isFan() ? '原作品' : '类型'}填「${esc(
+        <b>这个书袋里还没有书</b>点右上角「＋ 新建小说」，${isFan() ? '原作品' : '类型'}填「${esc(
         state.bag
       )}」就会放进来
       </div>`;
@@ -268,7 +268,7 @@ export async function NovelView(root, shelfId, opts = {}) {
     try {
       bags = (await api.novelBags(id)).items || [];
     } catch {
-      /* 袋子读不到就沿用旧的 */
+      /* 书袋读不到就沿用旧的 */
     }
     paintMeta();
     paintTabs();
@@ -283,7 +283,7 @@ export async function NovelView(root, shelfId, opts = {}) {
       fan: isFan(),
       groups,
       item,
-      // 在袋子里点「新建小说」：类型预填成这个袋子
+      // 在书袋里点「新建小说」：类型预填成这个书袋
       defaults: !item && state.bag ? { novelGroup: state.bag } : null,
     });
     const v = await openModal({
@@ -321,7 +321,7 @@ export async function NovelView(root, shelfId, opts = {}) {
              <div class="sh-meta" data-meta></div>
            </div>
            <span class="spacer"></span>
-           <button class="tb-btn" data-new-bag>＋ 新建袋子</button>
+           <button class="tb-btn" data-new-bag>＋ 新建书袋</button>
            <button class="tb-btn primary" data-new-novel>＋ 新建小说</button>
          </div>
          <div class="toolbar">
@@ -373,16 +373,16 @@ export async function NovelView(root, shelfId, opts = {}) {
       state.view = btn.dataset.v;
       paintTabs();
       paintBody();
-      // 袋子数量也跟视图走（出版视图里不该算上只有网络书的袋子）
+      // 书袋数量也跟视图走（出版视图里不该算上只有网络书的书袋）
       paintMeta();
     });
 
     root.querySelector('[data-new-bag]').addEventListener('click', async () => {
       const v = await openModal({
-        title: '新建袋子',
-        description: '袋子就是按类型 / 原作分的书架，书可以后放进去。',
+        title: '新建书袋',
+        description: '书袋就是按类型 / 原作分的书架，书可以后放进去。',
         fields: [
-          { name: 'title', label: '袋子名称', required: true, placeholder: isFan() ? '比如：原神' : '比如：玄幻' },
+          { name: 'title', label: '书袋名称', required: true, placeholder: isFan() ? '比如：原神' : '比如：玄幻' },
         ],
         submitText: '创建',
       });
@@ -390,7 +390,7 @@ export async function NovelView(root, shelfId, opts = {}) {
       try {
         await api.createNovelBag(id, v.title);
         bags = (await api.novelBags(id)).items || [];
-        // 空袋子在列表里是隐藏的，建完直接进去，不然刚建的东西「不见了」
+        // 空书袋在列表里是隐藏的，建完直接进去，不然刚建的东西「不见了」
         state.bag = String(v.title).trim();
         toast(`已创建「${state.bag}」`);
         paintMeta();
@@ -479,10 +479,10 @@ export async function NovelView(root, shelfId, opts = {}) {
       openContextMenu(e, [
         { label: '新建小说', onClick: () => root.querySelector('[data-new-novel]').click() },
         {
-          label: '打开袋子',
+          label: '打开书袋',
           hint: state.bag || '全部',
           children: [
-            { label: '全部袋子', hint: !state.bag ? '当前' : '', onClick: () => setBag('') },
+            { label: '全部书袋', hint: !state.bag ? '当前' : '', onClick: () => setBag('') },
             ...bags.map((b) => ({
               label: b.title,
               hint: state.bag === b.title ? '当前' : `${b.bookCount} 本`,

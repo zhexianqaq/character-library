@@ -3,7 +3,7 @@ import { DB_FILE, DATA_DIR, ensureDirs, slugify } from './config.js';
 import { splitTitleTags } from './pack-tags.js';
 
 /**
- * 层级：资料库 → 角色库 → 角色 → 图包 → 媒体
+ * 层级：资料库 → 角色集 → 角色 → 图包 → 媒体
  * 媒体文件本体存在 library/<角色目录>/ 下，这里只存索引。
  */
 const SCHEMA = `
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS character_tags (
 );
 
 CREATE INDEX IF NOT EXISTS idx_packs_char ON packs(character_id, month DESC);
--- 小库维度：同角色的「同月 + 同小库」只能有一个图包；人物库 category 为空，不受唯一约束
+-- 小库维度：同角色的「同月 + 同小库」只能有一个图包；人物集 category 为空，不受唯一约束
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_packs_scope
   ON packs(character_id, month, category)
   WHERE month IS NOT NULL AND category IS NOT NULL;
@@ -154,7 +154,7 @@ function migrate(d) {
   addColumnIfMissing('characters', 'platforms', `platforms TEXT NOT NULL DEFAULT '[]'`);
   // 别名：简称 / 日文名 / 英文名，JSON 数组；人物、角色、资源（游戏/动画/电影/剧集）共用
   addColumnIfMissing('characters', 'aliases', `aliases TEXT NOT NULL DEFAULT '[]'`);
-  // 小库：官图 / cosplay / 同人（只对虚拟角色库有意义，人物库留空）
+  // 小库：官图 / cos / 同人（只对虚拟角色集有意义，人物集留空）
   addColumnIfMissing('packs', 'category', `category TEXT`);
   // 图包 / 单个媒体自己的标签（JSON 数组），媒体最终标签还要并上角色标签与库标签
   addColumnIfMissing('packs', 'tags', `tags TEXT NOT NULL DEFAULT '[]'`);
@@ -171,13 +171,13 @@ function migrate(d) {
   /* 漫画页序：只在 packs.kind='comic' 里有意义，和图包排序（sort_order）完全分开 ——
      改图包的排序不该打乱漫画的阅读顺序。转成漫画时按文件名自然序写入 1..N。 */
   addColumnIfMissing('media', 'page_no', `page_no INTEGER`);
-  // 库类型：people 真人 / work 虚拟角色 / emoji 表情包 / resource 资源库 / novel 小说库
+  // 库类型：people 真人 / work 虚拟角色 / emoji 表情包 / resource 作品录 / novel 小说库
   addColumnIfMissing('shelves', 'kind', `kind TEXT NOT NULL DEFAULT 'people'`);
   // 小说库细分：original 原创 / fanfic 同人（其他库留空）
   addColumnIfMissing('shelves', 'variant', `variant TEXT`);
-  // 表情库这类「扁平库」用一个隐藏条目承载图包和媒体，不当作真实条目展示
+  // 表情包这类「扁平库」用一个隐藏条目承载图包和媒体，不当作真实条目展示
   addColumnIfMissing('characters', 'is_container', `is_container INTEGER NOT NULL DEFAULT 0`);
-  // 资源库用：游戏 / 动画 / 电影 / 剧集（其他库留空）
+  // 作品录用：游戏 / 动画 / 电影 / 剧集（其他库留空）
   addColumnIfMissing('characters', 'category', `category TEXT`);
   /* 小说库（kind='novel'）
      novel_group   归类文件夹：原创=小说类型（玄幻/都市…），同人=原作品名（原神/明日方舟…）
@@ -190,7 +190,7 @@ function migrate(d) {
   addColumnIfMissing('characters', 'novel_status', `novel_status TEXT`);
   // 索引必须在补列之后建（老库一开始没有 novel_group 这一列）
   d.exec(`CREATE INDEX IF NOT EXISTS idx_chars_novel_group ON characters(shelf_id, novel_group)`);
-  // 内容文件夹类型：pack 图包 / novel 小说袋 / comic 漫画（后两种见 README）
+  // 内容文件夹类型：pack 图包 / novel 书袋 / comic 漫画（后两种见 README）
   addColumnIfMissing('packs', 'kind', `kind TEXT NOT NULL DEFAULT 'pack'`);
   ensureNovelBags(d);
   ensureSelfTags(d);
@@ -199,11 +199,11 @@ function migrate(d) {
 }
 
 /**
- * 小说袋：把每个小说库里不同的「类型 / 原作」实体化成一条 pack（kind='novel'）。
+ * 书袋：把每个小说库里不同的「类型 / 原作」实体化成一条 pack（kind='novel'）。
  *
- * 书与袋子的关系继续沿用 characters.novel_group（= 袋子名），所以这里只补记录、不动书；
+ * 书与书袋的关系继续沿用 characters.novel_group（= 书袋名），所以这里只补记录、不动书；
  * 封面 / 标签 / 排序这些能力直接复用图包那套（packs 表）。
- * 袋子挂在库的容器条目下，和表情库、全部库是同一个模式。
+ * 书袋挂在库的容器条目下，和表情包、收件箱是同一个模式。
  */
 function ensureNovelBags(d) {
   const shelves = d.prepare("SELECT id, name FROM shelves WHERE kind = 'novel'").all();
@@ -324,7 +324,7 @@ function normalizePackTitleTags(d) {
  *
  * 图包挂在某个条目下面，那个条目的名字本身就是一个有意义的标签：搜「水淼」
  * 应该能一次看到她的所有图包，点标签也能落到标签页。只在缺失时补一条，
- * 已有的其他标签一个都不动；容器条目（表情库 / 全部库 / 小说袋）跳过。
+ * 已有的其他标签一个都不动；容器条目（表情包 / 收件箱 / 书袋）跳过。
  */
 function normalizePackOwnerTags(d) {
   const rows = d
@@ -372,7 +372,7 @@ export function ensureSelfTags(d = getDb()) {
 }
 
 /**
- * 扁平库（表情库）的容器条目：一个库一条，不出现在条目列表里。
+ * 扁平库（表情包）的容器条目：一个库一条，不出现在条目列表里。
  * 图包挂在它下面，媒体再挂在图包下面，这样目录层级简化为
  * <库名>/<图包>/<图片|视频>，不用为它单写一套表。
  */
@@ -386,7 +386,7 @@ export function ensureShelfContainer(shelfId) {
   if (found) return found;
 
   // 库目录名直接用库名；万一撞了已有目录就加序号
-  const base = slugify(shelf.name) || '表情库';
+  const base = slugify(shelf.name) || '表情包';
   let dirSlug = base;
   let n = 2;
   while (d.prepare('SELECT 1 FROM characters WHERE dir_slug = ?').get(dirSlug)) {
@@ -409,7 +409,7 @@ export function nowIso() {
   return new Date().toISOString();
 }
 
-/** 首次启动建好「资料库 + 默认角色库」，用户打开就有地方放东西 */
+/** 首次启动建好「资料库 + 默认角色集」，用户打开就有地方放东西 */
 function ensureDefaults(d) {
   const ts = nowIso();
   let lib = d.prepare('SELECT * FROM libraries ORDER BY id LIMIT 1').get();
@@ -421,14 +421,11 @@ function ensureDefaults(d) {
   }
   const shelf = d.prepare('SELECT id FROM shelves WHERE library_id = ? ORDER BY sort_order, id LIMIT 1').get(lib.id);
   if (!shelf) {
-    d.prepare('INSERT INTO shelves(library_id, name, note, sort_order, created_at, updated_at) VALUES(?,?,?,?,?,?)').run(
-      lib.id,
-      '角色库',
-      '',
-      0,
-      ts,
-      ts
-    );
+    // kind 必须显式给：schema 的默认值是 people，不写就变成「名字叫角色集、实际按人物集处理」
+    // （单位词、小库分类都会跟着错）
+    d.prepare(
+      'INSERT INTO shelves(library_id, name, note, kind, sort_order, created_at, updated_at) VALUES(?,?,?,?,?,?,?)',
+    ).run(lib.id, '角色集', '', 'work', 0, ts, ts);
   }
 }
 
