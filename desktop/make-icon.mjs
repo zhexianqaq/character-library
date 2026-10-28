@@ -72,7 +72,22 @@ function buildDib(bgra, size) {
   dib.writeUInt32LE(0, 20); // biSizeImage
 
   const maskRow = Math.ceil(size / 8 / 4) * 4;
-  const mask = Buffer.alloc(maskRow * size, 0); // 有 alpha，掩码全 0
+  const mask = Buffer.alloc(maskRow * size, 0);
+
+  // AND mask 必须按 alpha 写：1 = 透明，0 = 不透明。
+  //
+  // 之前这里全 0（「32bpp 有 alpha，mask 无所谓」）是错的：资源管理器有若干
+  // 渲染路径只认 mask 不认 alpha 位（缩略图缓存、老 API、某些视图），
+  // 全 0 会被当成「整块不透明」，圆角外就露出 XOR 里的 RGB —— 也就是黑边。
+  for (let y = 0; y < size; y++) {
+    const rowOff = (size - 1 - y) * maskRow; // mask 与 XOR 一样是 bottom-up
+    for (let x = 0; x < size; x++) {
+      if (bgra[(y * size + x) * 4 + 3] < 128) {
+        mask[rowOff + (x >> 3)] |= 0x80 >> (x & 7);
+      }
+    }
+  }
+
   return Buffer.concat([dib, bgra, mask]);
 }
 
@@ -127,10 +142,20 @@ async function renderSize(size) {
     for (let x = 0; x < size; x++) {
       const s = srcRow + x * 4;
       const d = dstRow + x * 4;
-      bgra[d] = data[s + 2];
-      bgra[d + 1] = data[s + 1];
-      bgra[d + 2] = data[s];
-      bgra[d + 3] = data[s + 3];
+      const a = data[s + 3];
+      if (a < 8) {
+        // 全透明的像素不要留黑色 RGB：不认 alpha 的渲染路径会把它画成黑边。
+        // 抹成白色后，即使 mask 也失效，看上去也只是「白角」而不是「黑框」。
+        bgra[d] = 255;
+        bgra[d + 1] = 255;
+        bgra[d + 2] = 255;
+        bgra[d + 3] = 0;
+      } else {
+        bgra[d] = data[s + 2];
+        bgra[d + 1] = data[s + 1];
+        bgra[d + 2] = data[s];
+        bgra[d + 3] = a;
+      }
     }
   }
   return buildDib(bgra, size);
