@@ -16,11 +16,13 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tao::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use tao::event::{Event, WindowEvent};
-use tao::event_loop::{ControlFlow, EventLoop};
+use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tao::window::WindowBuilder;
 
 #[cfg(windows)]
@@ -433,6 +435,62 @@ color:#fff;font-size:13px;cursor:pointer}}
     )
 }
 
+/// 服务没起来之前先给一张骨架页。以前是白屏硬等最多 30 秒，
+/// 用户分不清「在加载」和「卡死了」。
+const SKELETON_PAGE: &str = r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<title>资料库</title><style>
+html,body{height:100%;margin:0}
+body{display:grid;place-items:center;background:#f5f5f5;color:#2c2c2a;
+font:14px/1.7 "Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif}
+.box{display:flex;flex-direction:column;align-items:center;gap:16px}
+.ring{width:32px;height:32px;border-radius:50%;border:3px solid #e6e4df;
+border-top-color:#1d1d1b;animation:spin .85s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+h1{margin:0;font-size:15px;font-weight:600}
+p{margin:0;color:#8a8880;font-size:12.5px}
+.dot::after{content:'';animation:dots 1.2s steps(1,end) infinite}
+@keyframes dots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
+</style></head><body><div class="box">
+<div class="ring"></div><h1>正在启动本地服务</h1>
+<p>首次启动要等几秒<span class="dot"></span></p></div></body></html>"#;
+
+/// 服务是我们起的才由我们收尸：先请它自己退（后端会 checkpoint 一次 WAL 再 exit），
+/// 等不到才动手。直接 TerminateProcess 会把 SQLite 停在 checkpoint 中间。
+fn stop_server(child: &mut Child, port: u16) {
+    let started = Instant::now();
+    let graceful = ask_shutdown(port);
+    // 答应了就多给点时间 checkpoint；没答应（连不上 / 不是我们的服务）就别干等
+    let limit = if graceful { 2500 } else { 300 };
+    if !wait_exit(child, Duration::from_millis(limit)) {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    log(&format!(
+        "server stopped: {} in {}ms",
+        if graceful { "graceful" } else { "forced" },
+        started.elapsed().as_millis()
+    ));
+}
+
+/// 后台线程 → UI 线程的两种结果。
+enum UserEvent {
+    /// `GET /api/overview` 拿到 200，可以跳转了
+    Ready,
+    /// spawn 失败 / node 自己退了 / 等满 30 秒
+    Failed(&'static str),
+}
+
+/// 启动前先分类，避免窗口建出来才发现起不来。
+enum Preset {
+    /// 已经有服务在跑（可能是 start.bat 起的），直接连
+    Attach,
+    /// 需要自己起：程序目录 + node 路径
+    Spawn(PathBuf, PathBuf),
+    PortBusy,
+    NoApp,
+    NoNode,
+}
+
 /// 路径要拼进 JS 字符串，反斜杠和引号必须转义（Windows 路径满屏反斜杠）
 fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 8);
@@ -473,39 +531,32 @@ fn main() {
     let app = find_app_dir();
     log(&format!("app dir: {:?}", app));
 
-    let mut child: Option<Child> = None;
-    let mut ready = service_ready(port);
-    let mut port_busy = false;
-
-    if ready {
+    // 先把「要不要自己起服务」判清楚：都是本地几百毫秒内的检查。
+    // 真正起服务挪到后台线程，窗口才能立刻显示骨架页。
+    let preset = if service_ready(port) {
         log("service already running, reuse it");
+        Preset::Attach
+    } else if port_open(port) {
+        log(&format!("port {port} is listened by something else"));
+        Preset::PortBusy
     } else {
-        port_busy = port_open(port);
-        if port_busy {
-            log(&format!("port {port} is listened by something else"));
-        }
-        match (app.as_deref(), find_node()) {
+        match (app, find_node()) {
             (Some(dir), Some(node)) => {
-                if !port_busy {
-                    log(&format!("node: {:?}", node));
-                    match start_server(dir, &node, port) {
-                        Ok(c) => child = Some(c),
-                        Err(err) => log(&format!("spawn failed: {err}")),
-                    }
-                }
-                let deadline = Instant::now() + Duration::from_secs(30);
-                while Instant::now() < deadline && !service_ready(port) {
-                    std::thread::sleep(Duration::from_millis(250));
-                }
-                ready = service_ready(port);
-                log(&format!("service ready: {ready}"));
+                log(&format!("node: {:?}", node));
+                Preset::Spawn(dir, node)
             }
-            (None, _) => log("app dir not found (server/src/index.js)"),
-            (_, None) => log("node.exe not found"),
+            (None, _) => {
+                log("app dir not found (server/src/index.js)");
+                Preset::NoApp
+            }
+            (_, None) => {
+                log("node.exe not found");
+                Preset::NoNode
+            }
         }
-    }
+    };
 
-    let event_loop = EventLoop::new();
+    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
 
     // 位置/大小记忆：先确认上次记的矩形还落在某块屏幕上。外接显示器拔掉、
     // 分辨率改小之后，旧坐标可能整块越界，恢复出来就是「点开什么都没有」。
@@ -599,37 +650,29 @@ fn main() {
         false
     });
 
-    let builder = if ready {
-        builder.with_url(format!("http://127.0.0.1:{port}"))
-    } else {
-        let body = if port_busy {
-            error_page(
-                "端口被别的程序占了",
-                &format!(
-                    "本程序需要一个本地端口跑后端服务，但 <code>{port}</code> 已经有别的程序在监听。关掉它，或者设环境变量 <code>AMS_PORT</code> 换一个端口。"
-                ),
-                port,
-            )
-        } else {
-            match (app.is_some(), find_node().is_some()) {
-                (false, _) => error_page(
-                    "找不到程序目录",
-                    "本程序需要和 <code>server</code> 目录放在一起（会从 exe 所在位置向上找 5 层）。",
-                    port,
-                ),
-                (_, false) => error_page(
-                    "找不到 Node.js",
-                    "后端服务需要本机的 Node.js 20 以上。已尝试：环境变量 <code>AMS_NODE</code>、<code>PATH</code>、<code>Program Files\\nodejs</code>、WorkBuddy 内置目录。",
-                    port,
-                ),
-                _ => error_page(
-                    "后端没有起来",
-                    &format!("等了 30 秒端口 {port} 还没有响应。可以点下面的重试，或者看 <code>%LOCALAPPDATA%\\ams-desktop\\server.log</code>。"),
-                    port,
-                ),
-            }
-        };
-        builder.with_html(body)
+    // 初始页面：能连就直接连；要自己起就先上骨架页，等后台线程报就绪再跳；
+    // 剩下三种是明确的错误，直接给说明页（不必等 30 秒）。
+    let target = format!("http://127.0.0.1:{port}");
+    let builder = match &preset {
+        Preset::Attach => builder.with_url(target.clone()),
+        Preset::Spawn(..) => builder.with_html(SKELETON_PAGE),
+        Preset::PortBusy => builder.with_html(error_page(
+            "端口被别的程序占了",
+            &format!(
+                "本程序需要一个本地端口跑后端服务，但 <code>{port}</code> 已经有别的程序在监听。关掉它，或者设环境变量 <code>AMS_PORT</code> 换一个端口。"
+            ),
+            port,
+        )),
+        Preset::NoApp => builder.with_html(error_page(
+            "找不到程序目录",
+            "本程序需要和 <code>server</code> 目录放在一起（会从 exe 所在位置向上找 5 层）。",
+            port,
+        )),
+        Preset::NoNode => builder.with_html(error_page(
+            "找不到 Node.js",
+            "后端服务需要本机的 Node.js 20 以上。已尝试：环境变量 <code>AMS_NODE</code>、<code>PATH</code>、<code>Program Files\\nodejs</code>、WorkBuddy 内置目录。",
+            port,
+        )),
     };
 
     // WebView 必须活到事件循环结束，交给 Rc 托管（拖拽回调里也要用）
@@ -638,59 +681,158 @@ fn main() {
         .expect("webview2 runtime is required");
     *webview_slot.borrow_mut() = Some(webview);
 
+    // 自己起的服务：spawn 和「等就绪」都挪到后台线程，结果通过 user event 送回 UI 线程。
+    // child 放 Arc<Mutex<>>：主线程关窗要收尸，后台线程要 try_wait 判断是不是早退。
+    let child_slot: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
+    let closing = Arc::new(AtomicBool::new(false));
+    let mut awaiting = matches!(&preset, Preset::Spawn(..));
+
+    if let Preset::Spawn(dir, node) = preset {
+        let slot = child_slot.clone();
+        let closing = closing.clone();
+        let proxy = event_loop.create_proxy();
+        std::thread::spawn(move || {
+            // 关窗抢在前面就别再拉起服务，否则壳退了、node 还活着
+            match slot.lock() {
+                Ok(g) if !closing.load(Ordering::SeqCst) => drop(g),
+                _ => {
+                    log("spawn skipped: shell is closing");
+                    return;
+                }
+            }
+            let mut child = match start_server(&dir, &node, port) {
+                Ok(c) => c,
+                Err(err) => {
+                    log(&format!("spawn failed: {err}"));
+                    let _ = proxy.send_event(UserEvent::Failed("spawn"));
+                    return;
+                }
+            };
+            // 交接点：持锁再判一次。主线程要么已经竖旗（我们收尾），要么接下来
+            // 一定能 take 到 child（它收尾）—— 两种都不会留下孤儿 node。
+            match slot.lock() {
+                Ok(mut g) if !closing.load(Ordering::SeqCst) => *g = Some(child),
+                _ => {
+                    log("spawn raced with close; stop it here");
+                    stop_server(&mut child, port);
+                    return;
+                }
+            }
+
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                if service_ready(port) {
+                    log("service ready: true");
+                    let _ = proxy.send_event(UserEvent::Ready);
+                    return;
+                }
+                // node 自己退了（端口冲突 / 依赖没装 / 数据库打不开）就别死等 30 秒
+                let exited = slot
+                    .lock()
+                    .ok()
+                    .and_then(|mut g| g.as_mut().map(|c| matches!(c.try_wait(), Ok(Some(_)))))
+                    .unwrap_or(false);
+                if exited {
+                    log("service ready: false (node exited)");
+                    let _ = proxy.send_event(UserEvent::Failed("exit"));
+                    return;
+                }
+                if Instant::now() >= deadline {
+                    log("service ready: false (timeout)");
+                    let _ = proxy.send_event(UserEvent::Failed("timeout"));
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        });
+    }
+
+    let slot_for_events = webview_slot.clone();
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
-        let Event::WindowEvent { event, .. } = event else {
-            return;
-        };
         match event {
-            // 拖动 / 缩放时持续记账，关窗那一刻直接用，不用再读窗口
-            WindowEvent::Moved(p) => {
-                if !window.is_maximized() {
-                    last_pos = (p.x, p.y);
+            // 后台线程报结果：就绪就跳转，失败就把骨架页换成说明页
+            Event::UserEvent(ue) => {
+                if !awaiting {
+                    return;
                 }
-            }
-            WindowEvent::Resized(size) => {
-                if !window.is_maximized() && size.width > 0 && size.height > 0 {
-                    last_normal = (size.width, size.height);
-                }
-            }
-            WindowEvent::CloseRequested => {
-                let state = WindowState {
-                    x: last_pos.0,
-                    y: last_pos.1,
-                    w: last_normal.0,
-                    h: last_normal.1,
-                    maximized: window.is_maximized(),
+                awaiting = false;
+                let held = slot_for_events.borrow();
+                let Some(w) = held.as_ref() else {
+                    return;
                 };
-                save_state(state);
-                log(&format!(
-                    "save window state: ({}, {}, {}, {}) max={}",
-                    state.x, state.y, state.w, state.h, state.maximized
-                ));
-
-                // 先让窗口消失。收尾（等 checkpoint、杀进程、销毁 WebView2）还在主线程上，
-                // 但用户已经看不到它了 —— 以前是窗口僵在那里同步 sleep(900)，点完像卡死。
-                let _ = window.set_visible(false);
-                // 服务是我们起的才由我们收尸；复用别人起的就别乱杀
-                if let Some(mut c) = child.take() {
-                    let started = Instant::now();
-                    let graceful = ask_shutdown(port);
-                    // 答应了就多给点时间 checkpoint；没答应（连不上 / 不是我们的服务）就别等
-                    let limit = if graceful { 2500 } else { 300 };
-                    if !wait_exit(&mut c, Duration::from_millis(limit)) {
-                        let _ = c.kill();
-                        let _ = c.wait();
+                match ue {
+                    UserEvent::Ready => {
+                        log(&format!("navigate: {target}"));
+                        let _ = w.load_url(&target);
                     }
-                    log(&format!(
-                        "server stopped: {} in {}ms",
-                        if graceful { "graceful" } else { "forced" },
-                        started.elapsed().as_millis()
-                    ));
+                    UserEvent::Failed(reason) => {
+                        let detail = match reason {
+                            "spawn" => "node 进程没能启动。详见 <code>%LOCALAPPDATA%\\ams-desktop\\server.log</code>。".to_string(),
+                            "exit" => "node 起来后立刻退出了：端口冲突、依赖没装、数据库打不开都可能，详见 <code>%LOCALAPPDATA%\\ams-desktop\\server.log</code>。".to_string(),
+                            _ => format!("等了 30 秒，端口 {port} 还是没有响应。"),
+                        };
+                        let _ = w.load_html(&error_page("后端没有起来", &detail, port));
+                    }
                 }
-                log("---- shell exit ----");
-                *control_flow = ControlFlow::Exit;
             }
+            Event::WindowEvent { event, .. } => match event {
+                // 拖动 / 缩放时持续记账，关窗那一刻直接用，不用再读窗口
+                WindowEvent::Moved(p) => {
+                    // 最小化时 Windows 会把窗口挪到 -32000,-32000 并发 Moved。
+                    // 记下来下次启动就「跑到屏幕外」（state_visible 能挡住改用默认值，
+                    // 但用户记的位置白丢），所以最小化和这种哨兵坐标都要跳过。
+                    if !window.is_maximized() && !window.is_minimized() && p.x > -20000 && p.y > -20000
+                    {
+                        last_pos = (p.x, p.y);
+                    }
+                }
+                WindowEvent::Resized(size) => {
+                    if !window.is_maximized() && size.width > 0 && size.height > 0 {
+                        last_normal = (size.width, size.height);
+                    }
+                }
+                WindowEvent::CloseRequested => {
+                    let state = WindowState {
+                        x: last_pos.0,
+                        y: last_pos.1,
+                        w: last_normal.0,
+                        h: last_normal.1,
+                        maximized: window.is_maximized(),
+                    };
+                    save_state(state);
+                    log(&format!(
+                        "save window state: ({}, {}, {}, {}) max={}",
+                        state.x, state.y, state.w, state.h, state.maximized
+                    ));
+
+                    // 先让窗口消失。收尾（等 checkpoint、杀进程、销毁 WebView2）还在主线程上，
+                    // 但用户已经看不到它了 —— 以前是窗口僵在那里同步 sleep(900)，点完像卡死。
+                    let _ = window.set_visible(false);
+                    // 先竖旗再取 child：后台线程可能刚 spawn 完，靠这把锁交接
+                    closing.store(true, Ordering::SeqCst);
+                    let mut taken = child_slot.lock().ok().and_then(|mut g| g.take());
+                    // 还在等就绪就说明后台线程可能正卡在 spawn 上。这里必须多等一会儿：
+                    // 主线程一 Exit 整个进程就没了，后台线程会被一起带走，node 就成了孤儿。
+                    if taken.is_none() && awaiting {
+                        let deadline = Instant::now() + Duration::from_millis(900);
+                        while taken.is_none() && Instant::now() < deadline {
+                            std::thread::sleep(Duration::from_millis(40));
+                            taken = child_slot.lock().ok().and_then(|mut g| g.take());
+                        }
+                        log(&format!(
+                            "waited for child handoff: {}",
+                            if taken.is_some() { "ok" } else { "none" }
+                        ));
+                    }
+                    if let Some(mut c) = taken {
+                        stop_server(&mut c, port);
+                    }
+                    log("---- shell exit ----");
+                    *control_flow = ControlFlow::Exit;
+                }
+                _ => {}
+            },
             _ => {}
         }
     });
