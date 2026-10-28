@@ -24,9 +24,10 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { DATA_DIR } from '../server/src/config.js';
+import { DATA_DIR, DB_FILE } from '../server/src/config.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -36,12 +37,51 @@ const dirArgs = argv.filter((a) => !a.startsWith('--'));
 const iconArg = argv.find((a) => a.startsWith('--icon='));
 const explicitIcon = iconArg ? path.resolve(iconArg.slice('--icon='.length)) : null;
 
-/** 默认：程序目录用书本、数据目录用角色图标 */
+/** 库类型 → shelves/<名字>.ico */
+const SHELF_ICON = {
+  people: 'people.ico',
+  work: 'work.ico',
+  emoji: 'emoji.ico',
+  resource: 'resource.ico',
+  inbox: 'inbox.ico',
+  loose: 'loose.ico',
+};
+
+function shelfIcon(kind, variant) {
+  if (kind === 'novel') return variant === 'fanfic' ? 'novel-fanfic.ico' : 'novel-original.ico';
+  return SHELF_ICON[kind] || null;
+}
+
+/**
+ * 默认：程序目录用书本、数据目录用角色，八个库目录各挂自己的图标。
+ *
+ * 库名从数据库现读 —— 库里改过名（v3.55 那轮）也不会错位；
+ * 目录不存在就跳过，不会硬造。
+ */
 function defaultPlan() {
-  return [
+  const plan = [
     { dir: root, icon: path.join(root, 'desktop', 'assets', 'icon.ico') },
     { dir: DATA_DIR, icon: path.join(root, 'desktop', 'assets', 'icon-data.ico') },
   ];
+
+  try {
+    const require = createRequire(path.join(root, 'server', 'package.json'));
+    const Database = require('better-sqlite3');
+    const db = new Database(DB_FILE, { readonly: true });
+    const shelves = db.prepare('SELECT name, kind, variant FROM shelves ORDER BY sort_order, id').all();
+    db.close();
+    for (const s of shelves) {
+      const ico = shelfIcon(s.kind, s.variant);
+      if (!ico) continue;
+      plan.push({
+        dir: path.join(DATA_DIR, s.name),
+        icon: path.join(root, 'desktop', 'assets', 'shelves', ico),
+      });
+    }
+  } catch (err) {
+    console.log(`- 读库失败，跳过库目录：${err.message}`);
+  }
+  return plan;
 }
 
 /** 指定了目录就全部用同一个图标（--icon 优先，否则程序图标） */

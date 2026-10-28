@@ -61,6 +61,13 @@ const INSET = (() => {
   return Number.isFinite(v) && v > 0.5 && v <= 1 ? v : 1;
 })();
 
+/**
+ * `--png` 让每个尺寸以 PNG 数据存进 ICO（Vista+ 支持），体积约是未压缩
+ * BMP 的 1/6。只能用于**文件夹图标**这类纯 shell 场景 —— `资料库.exe` 的
+ * PE 资源和壳里的 tao::Icon 都走手写 BMP 解析，喂 PNG 会读不出来。
+ */
+const PNG_MODE = process.argv.includes('--png');
+
 function buildDib(bgra, size) {
   const dib = Buffer.alloc(40);
   dib.writeUInt32LE(40, 0); // biSize
@@ -132,6 +139,13 @@ async function renderSize(size) {
 
   if (info.width !== size || info.height !== size || info.channels !== 4) {
     throw new Error(`unexpected raster: ${info.width}x${info.height} ch=${info.channels}`);
+  }
+
+  if (PNG_MODE) {
+    // PNG 自带 alpha，不需要 AND mask，也不需要 bit 位运算
+    return await sharp(data, { raw: { width: size, height: size, channels: 4 } })
+      .png({ compressionLevel: 9 })
+      .toBuffer();
   }
 
   // ICO 里的 BMP 是 bottom-up 的 BGRA
