@@ -66,11 +66,14 @@ set CL_CACHE_DIR=D:\my-cache
 start.bat
 ```
 
-想让这两个文件夹在资源管理器里显示成项目图标（而不是黄文件夹）：
+想让这两个文件夹在资源管理器里显示成图标（而不是黄文件夹）：
 
 ```bash
-node tools/set-folder-icon.mjs        # 程序目录 + 数据目录；也可以传别的目录
+node tools/set-folder-icon.mjs        # 程序目录用书本图标，数据目录用角色图标
 ```
+
+两张图来自同一套设计稿（`desktop/assets/icon-source.png` 书本、`icon-data-source.png` 角色抱文件），
+用 `node desktop/make-icon.mjs <源图> <输出.ico>` 各自生成七种尺寸。
 
 靠 `desktop.ini`（UTF-16 LE）+ 文件夹的系统属性实现，**只在本机生效** ——
 `desktop.ini` 已被 `.gitignore` 排除，换机器或重新 clone 后重跑一次即可。

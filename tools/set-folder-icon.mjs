@@ -6,6 +6,10 @@
  *   2. `desktop.ini` 加 隐藏 + 系统 属性，目录本身加 系统 属性（否则 shell 不读它）
  *   3. 通知 shell 刷新图标缓存（`ie4uinit.exe -show`）
  *
+ * 默认给两个目录各配一张：
+ *   - 程序目录（仓库根）→ `desktop/assets/icon.ico`        书本
+ *   - 数据目录（CL_DATA_DIR）→ `desktop/assets/icon-data.ico` 角色抱着文件
+ *
  * 为什么用 Node 而不是 .ps1：`desktop.ini` 要 UTF-16 LE（中文路径必须），
  * 而 Windows PowerShell 5.1 跑 UTF-8 无 BOM 的 .ps1 遇到中文注释会解析失败。
  * Node 写文件按字节控制编码，没有这个坑。
@@ -14,8 +18,9 @@
  * 换机器或重新 clone 后重跑一次即可。
  *
  * 用法：
- *   node tools/set-folder-icon.mjs                 # 默认给程序目录和数据目录都设
- *   node tools/set-folder-icon.mjs <目录> [目录…]
+ *   node tools/set-folder-icon.mjs                                   # 两个默认目录
+ *   node tools/set-folder-icon.mjs D:\a E:\b --icon=path\to\x.ico    # 指定目录 + 同一个图标
+ *   node tools/set-folder-icon.mjs --icon=desktop/assets/icon-data.ico  # 换掉默认图标
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -25,20 +30,40 @@ import { DATA_DIR } from '../server/src/config.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
-const icon = path.join(root, 'desktop', 'assets', 'icon.ico');
 
-if (!fs.existsSync(icon)) {
-  console.error(`[x] 找不到图标：${icon}\n    先跑 node desktop/make-icon.mjs`);
-  process.exit(1);
+const argv = process.argv.slice(2);
+const dirArgs = argv.filter((a) => !a.startsWith('--'));
+const iconArg = argv.find((a) => a.startsWith('--icon='));
+const explicitIcon = iconArg ? path.resolve(iconArg.slice('--icon='.length)) : null;
+
+/** 默认：程序目录用书本、数据目录用角色图标 */
+function defaultPlan() {
+  return [
+    { dir: root, icon: path.join(root, 'desktop', 'assets', 'icon.ico') },
+    { dir: DATA_DIR, icon: path.join(root, 'desktop', 'assets', 'icon-data.ico') },
+  ];
 }
 
-const targets = process.argv.slice(2).length ? process.argv.slice(2) : [root, DATA_DIR];
+/** 指定了目录就全部用同一个图标（--icon 优先，否则程序图标） */
+function planFromDirs() {
+  const icon = explicitIcon || path.join(root, 'desktop', 'assets', 'icon.ico');
+  return dirArgs.map((d) => ({ dir: path.resolve(d), icon }));
+}
 
-for (const dir of targets) {
+const plan = dirArgs.length ? planFromDirs() : defaultPlan();
+
+for (const { dir, icon } of plan) {
   if (!fs.existsSync(dir)) {
     console.log(`- ${dir}: 不存在，跳过`);
     continue;
   }
+  if (!fs.existsSync(icon)) {
+    console.error(`[x] ${dir}: 找不到图标 ${icon}`);
+    console.error('    先跑 node desktop/make-icon.mjs（或带参数生成对应 ico）');
+    process.exitCode = 1;
+    continue;
+  }
+
   const ini = path.join(dir, 'desktop.ini');
   // 已存在就先摘掉 隐藏/系统 属性 —— 带这两个属性的文件很多环境不让直接覆盖（EPERM）
   if (fs.existsSync(ini)) {
@@ -55,7 +80,7 @@ for (const dir of targets) {
   // attrib 对已设置的属性是幂等的，重复跑不会出事
   execFileSync('attrib', ['+s', '+h', ini]);
   execFileSync('attrib', ['+s', dir]);
-  console.log(`- ${dir}: desktop.ini 已写入（IconResource=${icon}）`);
+  console.log(`- ${dir}: ${path.basename(icon)}`);
 }
 
 try {

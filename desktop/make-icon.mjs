@@ -15,7 +15,12 @@
  * crate），只认未压缩 BGRA。256 那一张占 262 KB，换来的是 PE 资源、
  * Alt+Tab 大图标将来都能直接用同一份文件。
  *
- * 用法：node desktop/make-icon.mjs
+ * 一套脚本生成两类图标：
+ *   node desktop/make-icon.mjs                                  # 程序图标（书本）→ assets/icon.ico
+ *   node desktop/make-icon.mjs assets/icon-data-source.png assets/icon-data.ico
+ *
+ * 两张源图是同一套设计规范：1254² 画布、铺满、圆角 23%（实测 287~288px），
+ * 所以共用同一个 RADIUS_RATIO。
  */
 import { createRequire } from 'node:module';
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
@@ -24,8 +29,9 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
-const src = path.join(here, 'assets', 'icon-source.png');
-const out = path.join(here, 'assets', 'icon.ico');
+const args = process.argv.slice(2).filter((a) => !a.startsWith('-'));
+const src = args[0] ? path.resolve(args[0]) : path.join(here, 'assets', 'icon-source.png');
+const out = args[1] ? path.resolve(args[1]) : path.join(here, 'assets', 'icon.ico');
 
 if (!existsSync(src)) {
   console.error(`[x] 缺少源图：${src}`);
@@ -39,7 +45,10 @@ const sharp = serverRequire('sharp');
 // Windows 会按 DPI 挑最接近的一张：标题栏 16/24、任务栏 32/48、Alt+Tab 64+、
 // 资源管理器大图标 256。全给，省得它拿 48 硬放大。
 const SIZES = [16, 24, 32, 48, 64, 128, 256];
-const RADIUS_RATIO = 287 / 1254; // 实测值
+const RADIUS_RATIO = 287 / 1254; // 实测值（两张源图分别是 287 / 288）
+
+// 逐级减半的起点按源图实际宽度取，别写死 512 —— 换个尺寸的源图也不至于缩错
+const sourceWidth = (await sharp(src).metadata()).width || 512;
 
 function buildDib(bgra, size) {
   const dib = Buffer.alloc(40);
@@ -66,7 +75,7 @@ async function renderSize(size) {
   // 从 512 一步缩到 16 是 32 倍，lanczos 会混叠出一圈噪点（试过，星星的
   // 白描边全变成麻点）。逐级减半让每一步都不超过 2 倍，边缘干净得多。
   let buf = await sharp(src).png().toBuffer();
-  let cur = 512;
+  let cur = sourceWidth;
   while (cur / 2 >= size && cur / 2 >= 16) {
     cur /= 2;
     buf = await sharp(buf).resize(cur, cur, { kernel: 'lanczos3' }).png().toBuffer();
