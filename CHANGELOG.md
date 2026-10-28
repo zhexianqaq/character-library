@@ -5,6 +5,69 @@
 > 功能索引（每个功能是哪一版加的）、版本历史总表、提交与 tag 约定，见 **[README.md](README.md#功能一览)**。
 > 本文件只记「每个版本具体改了什么、踩到了什么坑」。
 
+## v3.49 ~ v3.53 — 桌面壳五件事
+
+五轮都是改 `desktop/`（Rust + tao 0.37 + wry 0.57），每轮一个 commit 一个 tag，壳的能力没变，只补体验。页面侧一行没动。
+
+### v3.49 单实例
+
+双击两次会开两个窗口：第二个虽然复用已在跑的服务，但仍然建了自己的 WebView2 和窗口。
+
+做法是启动时抢命名互斥量 `Local\ams-character-library-shell`。抢不到就用 `FindWindowW` 找标题为「资料库」的窗口，`IsIconic` 时 `SW_RESTORE`，再 `BringWindowToTop` + `SetForegroundWindow`，然后直接退出（不碰服务）。
+
+- 只声明 6 个 Win32 函数，不引 `windows-sys`，release 增量构建维持在 10 秒内。
+- 互斥量 handle 故意不关闭（裸指针没有 Drop），进程退出由内核回收——这正是需要的生命周期。
+- 旧实例可能还在启动、窗口尚未创建，所以激活在 1.5 秒内重试，覆盖「连点两下」的竞态。
+
+### v3.50 记住窗口位置和大小
+
+`Moved` / `Resized` 时在内存里记账（只在非最大化状态更新，否则最大化时的整屏尺寸会被记成「上次的大小」），关窗前写 `%LOCALAPPDATA%\ams-desktop\window.json`。
+
+两道校验：
+
+| 项 | 规则 | 为什么 |
+|---|---|---|
+| 位置 | 与某块屏幕的交集 ≥ 120×60 才采信 | 拔掉外接屏后旧坐标可能整块在可见区外，窗口就「点开看不到」 |
+| 尺寸 | 上限 = 最大那块屏减 80 宽 / 140 高 | 保证四边都够得着；默认值也过一遍 |
+
+- 本机 200% 缩放，默认 1440×900 逻辑 = 2880×1800 物理，正好顶满整屏，加上外框（2906×1830）右边下边被切。现在默认按 scale 折算后夹一遍。
+- PowerShell / Python 默认 DPI-unaware，`GetWindowRect` 会被系统虚拟化，量出来刚好差一倍；测量端必须先 `SetProcessDpiAwarenessContext(-4)`，否则会把正确的实现误判成写错了。
+- tao 报的 `inner_size` 与 Win32 实际客户区在 200% 下差 41px（标题栏被多算一次）。存和取走同一口径，不会漂移。
+- 手写 JSON 数字/布尔提取，不把 serde 拖进 release 构建。
+
+### v3.51 启动骨架页
+
+冷启动要 3~8 秒，这段时间窗口是白屏，分不清「在加载」和「卡死」。
+
+把「起 node + 轮询 `/api/overview`」整段挪到后台线程，结果通过 `EventLoopProxy` 送回 UI 线程：窗口建好先显示内联骨架页，收到就绪事件再 `load_url`；失败就 `load_html` 换成说明页。
+
+- 主线程一 `Exit` 整个进程就没了，后台线程会被一起带走。所以关窗要先竖 `closing` 再取 child；如果还在等就绪，最多等 900ms 把 child 交接出来——否则壳退了、node 还活着。
+- 交接用同一把锁的两道检查：spawn 前看 `closing`（不然白起服务），写入前再看一次（看到了就自己收尾）。
+- 顺带修 v3.50 的 bug：窗口最小化时 Windows 会发 `Moved(-32000,-32000)`，被记成「上次的位置」（日志里真出现过 `save window state: (-32000, -32000, ...)`）。
+- WebView2 首帧要 1.2 秒左右，启动后 1 秒截图还是白纸，3 秒才看得到骨架页。
+
+### v3.52 窗口图标
+
+默认是 Rust 灰齿轮，任务栏里认不出来。
+
+`desktop/make-icon.mjs` 用项目已有的 sharp 把一段 SVG 渲染成 48×48，再按 ICO 规范手写头（32bpp 无压缩 BMP 那一支），产物 9.6 KB 入库；Rust 侧手写最小解析转 `tao::window::Icon`。
+
+- `with_window_icon` 只落到 `ICON_SMALL`：实测 `WM_GETICON(ICON_BIG)` 是 0，标题栏对了但任务栏分组和 Alt+Tab 会退回默认图标。补 `CreateIconFromResourceEx` + `WM_SETICON` 两个槽。
+- `tao 0.37` 的 `WindowExtWindows::hwnd()` 返回 `isize`，不是 `*mut c_void`。
+- 本机任务栏自动隐藏，截不到按钮；这类验证直接查 `WM_GETICON` 更可靠。
+- 只作用于窗口（运行时），exe 文件本身在资源管理器里仍是默认图标——那要往 PE 里嵌资源（build.rs + winres），另开一轮。
+
+### v3.53 日志轮转
+
+`shell.log` 每次运行都 append，不轮转就永久增长。启动时看一眼大小，超过 2 MB 改名 `.1`，只留一代。Windows 上 rename 到已存在文件会失败，先删旧的。
+
+### 统一验证
+
+- 单实例：首个实例 `single instance: primary`；第二次启动进程数仍为 1。
+- 几何：`SetWindowPos` 到 240,180 / 1100×760 → 存 (240,180,2174,1449) → 重启后 DPI 感知下量到外框正好 240,180 / 2200×1520；写越界坐标 50000,50000 → 启动拒绝、回落默认。
+- 骨架页：1.2s 出现 about:blank，7.9s 就绪后 navigate；3 秒截图可见转圈与文案。
+- 关窗：页面空闲后 252~261ms（服务优雅退出 226ms），与 v3.47 的 257ms 基线一致。单独测纯后端 `POST /api/shutdown` 到端口失效是 251ms，可作对照——页面有活跃请求时会拖到 600ms 左右，那是后端在等 checkpoint，不是壳变慢。
+
 ## v3.48 — 开源准备：仓库转公开 + README 重写
 
 仓库从 private 转为 public。公开前做了三件事。
