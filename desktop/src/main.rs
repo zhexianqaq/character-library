@@ -207,6 +207,24 @@ fn log(msg: &str) {
     }
 }
 
+/// shell.log 只在启动时轮转一次：超过 2 MB 就改名 .1，只留一代。
+/// 壳每次运行都往里 append，一次几十行，但不轮转就是永久增长 ——
+/// 一年下来翻旧记录要滚半天。
+fn rotate_log() {
+    let dir = log_dir();
+    let path = dir.join("shell.log");
+    let Ok(meta) = fs::metadata(&path) else {
+        return;
+    };
+    if meta.len() <= 2 * 1024 * 1024 {
+        return;
+    }
+    let old = dir.join("shell.log.1");
+    // Windows 上 rename 到已存在的文件会失败，先删旧的
+    let _ = fs::remove_file(&old);
+    let _ = fs::rename(&path, &old);
+}
+
 /// 窗口几何。`x` / `y` 是外框左上角，`w` / `h` 是客户区内尺寸，单位都是物理像素
 /// （tao 的 `outer_position` / `inner_size` 原生就是这样，存成逻辑像素反而要反推 DPI）。
 /// `x = -1` 表示「没有记录过位置」，交给系统决定（通常居中）。
@@ -606,6 +624,7 @@ fn main() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_PORT);
 
+    rotate_log();
     log("---- shell start ----");
 
     // 双击两次只该有一个窗口。抢到互斥量 = 第一个；抢不到就把已有窗口叫到前台再退出。
