@@ -17,7 +17,7 @@
 | Desktop shell | Rust · tao + wry (WebView2), **a 1.4 MB single-file exe** (icon and version info compiled into the PE), statically linked CRT, no DLL dependencies |
 | Storage | SQLite index + media files on disk; paths are stored **relative**, so moving the library to another drive needs no data change |
 
-This page documents **v3.54** (2026-10-28), 69 tags. The e2e suite (`npm test` in `server/`) runs 140 cases before a release.
+This page documents **v3.64** (2026-10-28), 80 tags. The e2e suite (`npm test` in `server/`) runs 140 cases before a release.
 
 ## Screenshots
 
@@ -98,7 +98,7 @@ If you want “double-click one file and it works”, build the desktop shell �
 - [Testing](#testing)
 - [Known limitations](#known-limitations)
 - [Version control](#version-control) — commit / tag / push conventions, lookup, rollback
-- [Version history](#version-history) — the full v2.0 → v3.54 table
+- [Version history](#version-history) — the full v2.0 → v3.64 table
 - [CHANGELOG.md](CHANGELOG.md) — per-version detail and the traps hit along the way (Chinese)
 
 > Other languages (Japanese / Korean / Traditional Chinese / Russian / French) carry a condensed overview;
@@ -1321,6 +1321,16 @@ are in **2026**.
 | v3.52 | 10-28 | **Window icon (first pass)** — hand-written ICO parser feeding `tao::Icon`, plus the `ICON_BIG` slot that `with_window_icon` never sets |
 | v3.53 | 10-28 | **Log rotation** — `shell.log` renamed to `.1` once it passes 2 MB, one generation kept |
 | v3.54 | 10-28 | **Final icon + PE resources** — 16/24/32/48/64/128/256 generated from the design (successive halving, rounded corners cut to transparent), `build.rs` drives `rc.exe` to compile the icon and version info into the exe |
+| v3.55 | 10-28 | **Shelf names redone** — all eight shelves renamed to three characters (人物集 / 角色集 / 表情包 / 作品录 / 原创书 / 同人书 / 收件箱 / 散图集); `shelves.name`, `dir_slug`, 5772 `rel_path` rows and the on-disk folders moved together |
+| v3.56 | 10-28 | **Folder icons** — `desktop.ini` plus directory attributes make the app and data folders show the project icon in Explorer |
+| v3.57 | 10-28 | **Separate icon for the data folder** — the generator takes `<source> <output.ico>` |
+| v3.58 | 10-28 | **Inset for the data icon** — content shrunk 5% so the rounded mask stops cutting into the artwork |
+| v3.59 | 10-28 | **Second data-icon revision** — the redrawn artwork carries its own margin, back to the default inset |
+| v3.60 | 10-28 | **Black border fixed** — the ICO AND mask is now written from alpha (an all-zero mask means "fully opaque" per the spec), transparent pixels whitened |
+| v3.61 | 10-28 | **Per-shelf folder icons** — a 2×4 sheet split into eight, PNG-in-ICO keeps them small |
+| v3.62 | 10-28 | **Symbolic shelf icons** — folder plus a motif, still readable at 32 px |
+| v3.63 | 10-28 | **`.catalog` / `.covers` icons** — the two metadata folders get their own, so the data folder looks complete |
+| v3.64 | 10-28 | **Ctrl+F focuses the search box** — the browser find bar is intercepted (it cannot see lazily rendered cards); dialogs keep focus, pages without a search box fall back to the browser |
 
 **e2e count over time** (recorded since v3.14): 111 → 115 → 116 → 118 → 119 → 120 → 122 → 125 → 133 → 140.
 Versions that only add features (like v3.23) keep the previous count.

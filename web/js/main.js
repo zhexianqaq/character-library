@@ -13,6 +13,7 @@ import { ComicView } from './views/comic.js';
 import { TagView } from './views/tag.js';
 import { OpsView } from './views/ops.js';
 import { initUploadHud } from './components/upload-hud.js';
+import { installFindShortcut } from './components/topbar.js';
 
 const app = document.getElementById('app');
 
@@ -193,4 +194,5 @@ window.addEventListener('app:route', () => {
 });
 
 initUploadHud();
+installFindShortcut();
 renderRoute();

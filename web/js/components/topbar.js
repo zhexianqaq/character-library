@@ -70,3 +70,42 @@ export function bindTopbarSearch(root, onQuery, { delay = 200 } = {}) {
     input.removeEventListener('search', onSearch);
   };
 }
+
+/** 弹层开着的时候不抢焦点：搜索框在遮罩底下，聚焦了也看不见 */
+const OVERLAY = '.modal[aria-modal="true"], .picker[aria-modal="true"], .lightbox';
+
+/** 当前页面能用、且真的显示出来的搜索框（有些视图会渲染多个，取第一个可见的） */
+function visibleSearch() {
+  for (const el of document.querySelectorAll('[data-tb-search]')) {
+    if (el.disabled || el.readOnly) continue;
+    if (typeof el.checkVisibility === 'function' && !el.checkVisibility()) continue;
+    const box = el.getBoundingClientRect();
+    if (box.width > 4 && box.height > 4) return el;
+  }
+  return null;
+}
+
+/**
+ * Ctrl+F / Cmd+F → 聚焦顶栏搜索框（已有内容则全选，直接打字就是替换）。
+ *
+ * 为什么值得拦：两种环境里浏览器的「查找」都不好用 ——
+ *   - 桌面壳（WebView2）压根没有查找条，按下去什么都不会发生；
+ *   - 网页版弹的是 Chrome 查找条，但瀑布流是分片渲染的，还没铺出来的卡片
+ *     不在 DOM 里，它搜不到；而且它只滚动不筛选，跟这里的搜索不是一回事。
+ *
+ * 没有搜索框的页面（阅读器、漫画阅读、媒体详情、标签页…）不拦，
+ * 交回浏览器 —— 那些地方对正文做查找仍然有意义。
+ */
+export function installFindShortcut() {
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+    if (e.key !== 'f' && e.key !== 'F') return;
+    if (document.querySelector(OVERLAY)) return;
+    const input = visibleSearch();
+    if (!input) return;
+    e.preventDefault();
+    // preventScroll：顶栏是 sticky 的本来就看得见，别让焦点把页面顶上去
+    if (document.activeElement !== input) input.focus({ preventScroll: true });
+    input.select();
+  });
+}
