@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fmtBytes, fadeIn, toast, copyText, deleteSummary, splitAliases, keepScroll, isSelectAllKey, isTypingTarget, dirRenameNote } from '../util.js';
+import { esc, fmtNum, fmtBytes, fadeIn, toast, copyText, deleteSummary, splitAliases, keepScroll, isSelectAllKey, isTypingTarget, dirRenameNote, fillParagraphs } from '../util.js';
 import { topbarHtml, bindTopbar, bindTopbarSearch } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { openModal, confirmDialog } from '../components/modal.js';
@@ -678,8 +678,7 @@ export async function CharacterView(root, id) {
   function paintIntro() {
     const el = root.querySelector('[data-intro]');
     if (!el) return;
-    el.classList.toggle('is-empty', !c.intro);
-    el.textContent = c.intro || '点击写点简介…';
+    fillParagraphs(el, c.intro, '点击写点简介…');
     syncIntroMore();
   }
 

@@ -666,15 +666,21 @@ button.char-card {
   min-width: 200px;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  /* 段落整行排（宽度受 .hi-p 的 max-width 约束），不再让每段各自缩到内容宽 */
+  align-items: stretch;
   justify-content: flex-start;
-  text-align: left;
-  padding: 7px 11px;
+  padding: 10px 14px;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.76);
-  font-size: 12.5px;
-  line-height: 1.6;
+  /* 12.5px 太挤：1640 宽的页面上简介列能到 800px，字号小、行长长，读起来像一行字 */
+  font-size: 13.5px;
+  line-height: 1.8;
+  letter-spacing: 0.01em;
   color: var(--text-2);
+  /* 中文两端对齐（末行不拉），长段看起来整齐；行末孤字用 text-wrap: pretty 缓解 */
+  text-align: justify;
+  text-justify: inter-ideograph;
+  text-wrap: pretty;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-y: auto;
@@ -684,6 +690,9 @@ button.char-card {
   transition: background 0.18s var(--ease);
 }
 .hero-intro:hover { background: rgba(255, 255, 255, 0.94); }
+/* 段落：空行分段（JS 拆成 <p>），段间留一点气口；行长封顶在 52em（约 700px / 34 字） */
+.hero-intro > p { margin: 0 0 7px; max-width: 52em; }
+.hero-intro > p:last-child { margin-bottom: 0; }
 /* 下面还有内容时的底边渐隐（长度不够时 JS 去掉这个类） */
 .hero-intro.has-more::after {
   content: '';
@@ -691,7 +700,7 @@ button.char-card {
   bottom: -7px;
   align-self: stretch;
   height: 26px;
-  margin: -26px -11px -7px;
+  margin: -26px -14px -10px;
   border-radius: 0 0 10px 10px;
   pointer-events: none;
   background: linear-gradient(to top, rgba(255, 255, 255, 0.98) 18%, rgba(255, 255, 255, 0));
@@ -726,8 +735,10 @@ button.char-card {
   outline: 0;
   background: transparent;
   resize: none;
-  font-size: 12.5px;
-  line-height: 1.6;
+  font-size: 13.5px;
+  line-height: 1.8;
+  /* 编辑时左对齐：两端对齐会让光标在行尾跳动 */
+  text-align: left;
 }
 
 /* 视图切换 */

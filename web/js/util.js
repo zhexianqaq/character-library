@@ -195,6 +195,61 @@ export function columnCount(width, colW = 120, gap = 8) {
  * 别名拆分：「FGO、Fate/Grand Order」→ ['FGO','Fate/Grand Order']。
  * 中英文逗号、顿号、分号、换行都算分隔符；数组直接洗一遍。
  */
+/**
+ * 简介类长文本的排版：按**空行**分段渲染成 <p>，段内单换行保留（父级 white-space: pre-wrap）。
+ *
+ * 直接用 textContent 塞整段的话，段与段之间只能靠一个空行撑开，行距和段间距一刀切；
+ * 拆成段落后既能有段间距，也能给每段套 max-width 控制行长（宽屏下别一行排 60 个字）。
+ * 传空文本时显示 placeholder，并留一个 is-empty 类给样式区分。
+ */
+/* 只认汉字本体：全角标点自带右侧留白，再补空格会变成「Etsu_ko ，」这种 */
+const CJK = '[\u4e00-\u9fff\u3400-\u4dbf]';
+const LATIN = '[A-Za-z0-9]';
+const RE_CJK_LATIN = new RegExp(`(${CJK})(${LATIN})`, 'g');
+const RE_LATIN_CJK = new RegExp(`(${LATIN})(${CJK})`, 'g');
+
+/**
+ * 中文排版的自动补白：中英文 / 数字之间插一个 thin space（U+2009）。
+ *
+ * 「纸悦Etsu_ko」「约8万」这种直接贴在一起的混排，读起来会粘成一块；
+ * 手工加空格既麻烦又会被下一次编辑冲掉，所以只在**显示层**补，数据库里存原样。
+ */
+function autoSpaceCjk(s) {
+  return s.replace(RE_CJK_LATIN, '$1\u2009$2').replace(RE_LATIN_CJK, '$1\u2009$2');
+}
+
+/** 成对的英文直引号转中文引号；引号个数是奇数就原样返回，避免把别处的 " 改坏 */
+function curlyQuotes(s) {
+  const parts = s.split('"');
+  if (parts.length % 2 === 0) return s;
+  return parts.map((seg, i) => (i === 0 ? seg : `${i % 2 === 1 ? '\u201c' : '\u201d'}${seg}`)).join('');
+}
+
+/** 显示用的排版：先规范引号，再补中英间隙 */
+export function typeset(text) {
+  return autoSpaceCjk(curlyQuotes(String(text || '')));
+}
+
+export function fillParagraphs(el, text, emptyText = '') {
+  if (!el) return;
+  el.textContent = '';
+  const body = String(text || '').trim();
+  if (!body) {
+    el.classList.add('is-empty');
+    el.textContent = emptyText;
+    return;
+  }
+  el.classList.remove('is-empty');
+  for (const block of body.split(/\n{2,}/)) {
+    const seg = block.trim();
+    if (!seg) continue;
+    const p = document.createElement('p');
+    // 只改显示：库里存的还是原文，进编辑器看到的也是原文
+    p.textContent = typeset(seg);
+    el.appendChild(p);
+  }
+}
+
 export function splitAliases(v) {
   const raw = Array.isArray(v) ? v : String(v || '').split(/[,，、;；\n]+/);
   const out = [];

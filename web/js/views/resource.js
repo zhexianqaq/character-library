@@ -7,6 +7,7 @@ import {
   copyText,
   charDeleteMessage,
   splitAliases,
+  fillParagraphs,
   isSelectAllKey,
   isTypingTarget,
   keepScroll,
@@ -174,8 +175,7 @@ export async function ResourceView(root, id) {
 
   function paintIntro() {
     const el = root.querySelector('[data-intro]');
-    el.classList.toggle('is-empty', !r.intro);
-    el.textContent = r.intro || '点击写点简介…';
+    fillParagraphs(el, r.intro, '点击写点简介…');
     syncIntroMore();
   }
 
