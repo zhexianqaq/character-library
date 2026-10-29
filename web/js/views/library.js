@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { esc, fmtNum, fmtBytes, fadeIn, toast, charDeleteMessage } from '../util.js';
 import { topbarHtml, bindTopbar, bindTopbarSearch } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
+import { openBioImport } from '../components/bio-import.js';
 import { openContextMenu } from '../components/context-menu.js';
 import { createDropdown } from '../components/dropdown.js';
 import { EmojiView } from './emoji.js';
@@ -321,6 +322,7 @@ export async function LibraryView(root, shelfId) {
          <div class="toolbar">
            <div class="segmented" data-tabs>${tabsHtml(shelves, state.shelfId)}</div>
            <span class="spacer"></span>
+           <button class="tb-btn" data-import-bio title="粘贴 AI 生成的「别名 / 简介」批量写入">导入简介</button>
            <span class="count" data-count>${chars.total} 个${noun} · ${fmtNum(active ? active.mediaCount : 0)} 个媒体 · ${fmtBytes(
              active ? active.bytes || 0 : 0
            )}</span>
@@ -331,6 +333,20 @@ export async function LibraryView(root, shelfId) {
 
     bindTopbar(root);
     root.querySelector('[data-sync-packs]').addEventListener('click', (e) => syncFolders(e.currentTarget));
+
+    // 批量导入别名 / 简介：解析与预览在组件里，这里只负责刷新与提示
+    const importBioBtn = root.querySelector('[data-import-bio]');
+    if (importBioBtn) {
+      importBioBtn.addEventListener('click', async () => {
+        if (!state.shelfId) return;
+        const res = await openBioImport({ shelfId: state.shelfId, shelfName: active ? active.name : '当前库' });
+        if (!res) return;
+        const bits = [`写入 ${res.matched} 条`];
+        if (res.skipped && res.skipped.length) bits.push(`跳过 ${res.skipped.length} 条`);
+        toast(bits.join(' · '));
+        await render();
+      });
+    }
 
     // 排序切换（紧贴计数右边）
     const sortDD = createDropdown({

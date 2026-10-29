@@ -1715,6 +1715,120 @@ export function createApp() {
     res.json({ ok: true, changed, action });
   });
 
+  /**
+   * 批量导入「别名 + 简介」。
+   *
+   * 前端把 AI 生成的文本解析成 items，这里只负责：按名字在库里找到条目 → 合并别名 → 写简介。
+   * 为什么放服务端：同名匹配要走 SQL（还要考虑隐藏容器、同库范围），前端拉全量列表去比对
+   * 既慢又容易和库里的真实状态不一致。
+   *
+   * 只碰 aliases 与 intro 两个字段，名字 / 分类 / 标签 / 封面 / 素材一概不动。
+   * `dryRun !== false` 时只返回匹配结果，不写库（前端用它做粘贴后的实时预览）。
+   */
+  app.post('/api/characters/bulk-bio', (req, res) => {
+    const db = getDb();
+    const b = req.body || {};
+    const items = (Array.isArray(b.items) ? b.items : [])
+      .map((x) => ({
+        name: String((x && x.name) || '').trim().slice(0, 100),
+        aliases: cleanAliases(x && x.aliases),
+        intro: String((x && x.intro) || '').slice(0, 20000),
+      }))
+      .filter((x) => x.name);
+    if (!items.length) return res.status(400).json({ error: '没有解析出条目' });
+
+    const shelfId = b.shelfId ? Number(b.shelfId) : null;
+    const overwriteIntro = b.overwriteIntro === true;
+    // 默认合并：AI 给的别名通常只是补充，直接替换会把手工加过的（比如日文名）冲掉
+    const aliasMode = b.aliasMode === 'replace' ? 'replace' : 'merge';
+    const dryRun = b.dryRun !== false;
+
+    const pick = shelfId
+      ? db.prepare('SELECT id, name, intro, aliases FROM characters WHERE shelf_id = ? AND is_container = 0 AND name = ?')
+      : db.prepare('SELECT id, name, intro, aliases FROM characters WHERE is_container = 0 AND name = ?');
+
+    const updated = [];
+    const skipped = [];
+
+    const plan = [];
+    for (const it of items) {
+      const rows = shelfId ? pick.all(shelfId, it.name) : pick.all(it.name);
+      if (!rows.length) {
+        skipped.push({ name: it.name, reason: '未找到同名条目' });
+        continue;
+      }
+      if (rows.length > 1) {
+        skipped.push({ name: it.name, reason: `匹配到 ${rows.length} 个同名条目，未处理`, ids: rows.map((r) => r.id) });
+        continue;
+      }
+      const row = rows[0];
+      let prev = [];
+      try {
+        const parsed = JSON.parse(row.aliases || '[]');
+        prev = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        prev = [];
+      }
+      const base = aliasMode === 'merge' ? prev : [];
+      const merged = cleanAliases([...base, ...it.aliases]);
+      const prevIntro = String(row.intro || '');
+      const introChanged = !!it.intro && (overwriteIntro || !prevIntro.trim());
+      // 别名一条没多、简介没变化 —— 这条就是「无变化」，别报成已更新
+      const aliasAdded = merged.filter((a) => !prev.includes(a)).length;
+      if (!aliasAdded && !introChanged) {
+        skipped.push({
+          name: it.name,
+          reason: prevIntro.trim() && it.intro && !overwriteIntro ? '已有简介 · 别名无新增' : '没有变化',
+        });
+        continue;
+      }
+      plan.push({ row, merged, intro: it.intro, introChanged, aliasAdded, prevIntro });
+    }
+
+    if (dryRun) {
+      return res.json({
+        dryRun: true,
+        total: items.length,
+        matched: plan.length,
+        skipped,
+        items: plan.map((p) => ({
+          id: p.row.id,
+          name: p.row.name,
+          aliasAdded: p.aliasAdded,
+          aliasTotal: p.merged.length,
+          introChanged: p.introChanged,
+          hasIntro: !!p.prevIntro.trim(),
+          introLength: p.intro.length,
+        })),
+      });
+    }
+
+    const ts = nowIso();
+    const tx = db.transaction(() => {
+      for (const p of plan) {
+        if (p.aliasAdded > 0) {
+          db.prepare('UPDATE characters SET aliases = ?, updated_at = ? WHERE id = ?').run(
+            JSON.stringify(p.merged),
+            ts,
+            p.row.id
+          );
+        }
+        if (p.introChanged) {
+          db.prepare('UPDATE characters SET intro = ?, updated_at = ? WHERE id = ?').run(p.intro, ts, p.row.id);
+        }
+        updated.push({
+          id: p.row.id,
+          name: p.row.name,
+          aliasAdded: p.aliasAdded,
+          aliasTotal: p.merged.length,
+          introChanged: p.introChanged,
+        });
+      }
+    });
+    tx();
+    res.json({ dryRun: false, total: items.length, matched: updated.length, skipped, items: updated });
+  });
+
   app.post('/api/characters', async (req, res) => {
     const db = getDb();
     const b = req.body || {};

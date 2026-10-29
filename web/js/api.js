@@ -131,6 +131,8 @@ export const api = {
   createCharacter: (data) => json('POST')('/api/characters', data),
   character: (id) => req(`/api/characters/${id}`),
   updateCharacter: (id, patch) => json('PATCH')(`/api/characters/${id}`, patch),
+  // 批量写「别名 + 简介」：dryRun 默认 true（只核对匹配），要写库必须显式传 false
+  bulkBio: (payload) => json('POST')('/api/characters/bulk-bio', payload),
   deleteCharacter: (id) => req(`/api/characters/${id}`, { method: 'DELETE' }),
 
   tags: () => req('/api/tags'),

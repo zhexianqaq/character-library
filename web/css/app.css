@@ -1330,6 +1330,63 @@ button.char-card {
 .ae-input:disabled { background: var(--fill); color: var(--text-3); }
 .ae-add { flex: 0 0 auto; height: 36px; padding: 0 14px; }
 .ae-hint { margin: 0; font-size: 11.5px; line-height: 1.6; color: var(--text-3); }
+
+/* ============ 批量导入简介 ============ */
+.bio-modal { width: min(520px, 100%); }
+.bio-import { display: flex; flex-direction: column; gap: 9px; }
+.bi-input {
+  width: 100%;
+  min-height: 132px;
+  max-height: 42vh;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text);
+  resize: vertical;
+}
+.bi-input::placeholder { color: var(--text-3); }
+.bi-input:focus { outline: 0; border-color: var(--text-3); }
+.bi-opts { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--text-2); }
+.bi-check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.bi-check input { width: 14px; height: 14px; accent-color: var(--accent); }
+.bi-seg { display: inline-flex; padding: 2px; border-radius: var(--r-pill); background: var(--fill); }
+.bi-seg button {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: var(--r-pill);
+  font-size: 11.5px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.bi-seg button.on { background: var(--card); color: var(--text); box-shadow: var(--s1); }
+.bi-summary { font-size: 12px; color: var(--text-2); }
+.bi-summary.is-warn { color: #b8392f; }
+.bi-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 34vh;
+  overflow-y: auto;
+  margin: 0 -4px;
+  padding: 2px 4px;
+}
+.bi-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  font-size: 12px;
+}
+.bi-row:nth-child(odd) { background: var(--fill); }
+.bi-row.is-miss { opacity: 0.6; }
+.bi-name { font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 32%; }
+.bi-meta { color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bi-flag { margin-left: auto; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 44%; }
+.bi-row.is-miss .bi-flag { color: #b8392f; }
 .tb-btn.danger { background: #e24b4a; color: #fff; }
 .tb-btn.danger:hover { background: #c93b3a; }
 
