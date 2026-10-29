@@ -18,22 +18,22 @@ import { installFindShortcut } from './components/topbar.js';
 const app = document.getElementById('app');
 
 const routes = [
-  [/^\/$/, () => LibraryView(app, null)],
-  [/^\/s\/(\d+)$/, (m) => LibraryView(app, Number(m[1]))],
-  [/^\/c\/(\d+)$/, (m) => CharacterView(app, Number(m[1]))],
-  [/^\/e\/(\d+)$/, (m) => EmojiView(app, Number(m[1]))],
-  [/^\/x\/(\d+)$/, (m) => InboxView(app, Number(m[1]))],
-  [/^\/n\/(\d+)$/, (m) => NovelView(app, Number(m[1]))],
-  [/^\/rs\/(\d+)$/, (m) => ResourcesView(app, Number(m[1]))],
-  [/^\/r\/(\d+)$/, (m) => ResourceView(app, Number(m[1]))],
-  [/^\/p\/(\d+)$/, (m) => PackView(app, Number(m[1]))],
-  [/^\/i\/(\d+)$/, (m) => MediaView(app, Number(m[1]))],
-  [/^\/read\/(\d+)$/, (m) => ReaderView(app, Number(m[1]))],
-  [/^\/cm\/(\d+)$/, (m) => ComicView(app, Number(m[1]))],
+  [/^\/$/, (_m, scope) => LibraryView(scope, null)],
+  [/^\/s\/(\d+)$/, (m, scope) => LibraryView(scope, Number(m[1]))],
+  [/^\/c\/(\d+)$/, (m, scope) => CharacterView(scope, Number(m[1]))],
+  [/^\/e\/(\d+)$/, (m, scope) => EmojiView(scope, Number(m[1]))],
+  [/^\/x\/(\d+)$/, (m, scope) => InboxView(scope, Number(m[1]))],
+  [/^\/n\/(\d+)$/, (m, scope) => NovelView(scope, Number(m[1]))],
+  [/^\/rs\/(\d+)$/, (m, scope) => ResourcesView(scope, Number(m[1]))],
+  [/^\/r\/(\d+)$/, (m, scope) => ResourceView(scope, Number(m[1]))],
+  [/^\/p\/(\d+)$/, (m, scope) => PackView(scope, Number(m[1]))],
+  [/^\/i\/(\d+)$/, (m, scope) => MediaView(scope, Number(m[1]))],
+  [/^\/read\/(\d+)$/, (m, scope) => ReaderView(scope, Number(m[1]))],
+  [/^\/cm\/(\d+)$/, (m, scope) => ComicView(scope, Number(m[1]))],
   // 标签名里可能有空格 / # / 斜杠，整体 decode
-  [/^\/tag\/(.+)$/, (m) => TagView(app, decodeURIComponent(m[1]))],
-  [/^\/uploads$/, () => UploadsView(app)],
-  [/^\/ops$/, () => OpsView(app)],
+  [/^\/tag\/(.+)$/, (m, scope) => TagView(scope, decodeURIComponent(m[1]))],
+  [/^\/uploads$/, (_m, scope) => UploadsView(scope)],
+  [/^\/ops$/, (_m, scope) => OpsView(scope)],
 ];
 
 let busy = false;
@@ -143,7 +143,15 @@ export async function renderRoute() {
       }
       cleanup = null;
       app.innerHTML = '';
-      const ret = await fn(m);
+      /* 每次渲染换一个**新容器**再交给视图。
+         视图里大量 root.addEventListener(...) 是挂在 root 上的；root 若是常驻的 #app，
+         路由切换只清了 innerHTML，监听器与它捕获的闭包会一直留着 ——
+         访问过的每个条目都叠一套，点简介时最先注册的那套先跑，于是把内容写到**上一个**
+         条目上（v3.72 修：简介串人、别名弹窗一次弹好几个）。 */
+      const scope = document.createElement('div');
+      scope.className = 'route-scope';
+      app.appendChild(scope);
+      const ret = await fn(m, scope);
       if (typeof ret === 'function') cleanup = ret;
       if (!/^\/(c|p|i|e|r|rs|n|x|cm|read|tag)\/|^\/(uploads|ops)/.test(path)) document.title = '资料库';
       lastPath = here;

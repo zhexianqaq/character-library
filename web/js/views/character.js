@@ -688,15 +688,17 @@ export async function CharacterView(root, id) {
   }
 
   function bindAliases() {
-    root.addEventListener('click', (e) => {
-      if (!e.target.closest('[data-aliases]')) return;
-      // 点的是别名栏里的任何地方（标题、+、chip、空白）都进编辑
-      editAliases();
-    });
+    // 绑在**别名栏元素**上而不是 root：root 以前是常驻的 #app，
+    // 访问过的条目各留一套监听，点一次会开出好几个弹窗
+    const el = root.querySelector('[data-aliases]');
+    if (!el) return;
+    el.addEventListener('click', () => editAliases());
   }
 
   function bindIntro() {
-    root.addEventListener('click', (e) => {
+    const host = root.querySelector('[data-intro]');
+    if (!host) return;
+    host.addEventListener('click', (e) => {
       const el = e.target.closest('[data-intro]');
       if (!el || el.querySelector('textarea')) return;
       const ta = document.createElement('textarea');
