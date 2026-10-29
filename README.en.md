@@ -17,7 +17,7 @@
 | Desktop shell | Rust · tao + wry (WebView2), **a 1.4 MB single-file exe** (icon and version info compiled into the PE), statically linked CRT, no DLL dependencies |
 | Storage | SQLite index + media files on disk; paths are stored **relative**, so moving the library to another drive needs no data change |
 
-This page documents **v3.76** (2026-10-29), 92 tags. The e2e suite (`npm test` in `server/`) runs 140 cases before a release.
+This page documents **v3.77** (2026-10-29), 93 tags. The e2e suite (`npm test` in `server/`) runs 140 cases before a release.
 
 ## Screenshots
 
@@ -98,7 +98,7 @@ If you want “double-click one file and it works”, build the desktop shell �
 - [Testing](#testing)
 - [Known limitations](#known-limitations)
 - [Version control](#version-control) — commit / tag / push conventions, lookup, rollback
-- [Version history](#version-history) — the full v2.0 → v3.76 table
+- [Version history](#version-history) — the full v2.0 → v3.77 table
 - [CHANGELOG.md](CHANGELOG.md) — per-version detail and the traps hit along the way (Chinese)
 
 > Other languages (Japanese / Korean / Traditional Chinese / Russian / French) carry a condensed overview;
@@ -1349,4 +1349,4 @@ fallback, novel body files (already shipped in v3.34), a tag disambiguation UI.
 
 Personal project, **no open-source license declared** (All rights reserved). The code is public so the implementation
 can be read and issues can be filed; that does not grant commercial use or redistribution. If you want to reuse a
-piece of it, open an issue and say so first.\n| v3.72 | 10-29 | **Listener leak fixed** — the view container was reused, so `root.addEventListener` piled up with every visit; editing a bio wrote to the previously visited entry and the alias dialog opened several times. Each render now gets a fresh scope container |\n| v3.73 | 10-29 | **Hero height pinned** — the three fixed columns now shrink with lower bounds, `.hero-main` matches the cover height (224px), the bio scrolls inside its own box with a bottom fade, and below 900px the hero stacks. Changing the window width no longer changes the hero height |\n| v3.74 | 10-29 | **Aliases added one at a time** — chip list plus a single-line input (Enter appends, clicking a chip removes, uncommitted text is folded in on save); shared by the character page and the works page |\n| v3.75 | 10-29 | **Bio typography** — 13.5px/1.8, blank-line paragraphs, line length capped at 52em, justified CJK; display-only spacing between CJK and Latin plus curly quotes (the stored text is untouched) |\n| v3.76 | 10-29 | **Bulk bio import** — paste many AI-written entries on a shelf page; names, aliases and intros are parsed (`---` separators and `(English)`/`(Japanese)` annotations handled), previewed against the library, then written in one transaction (aliases + intro only) |
+piece of it, open an issue and say so first.\n| v3.72 | 10-29 | **Listener leak fixed** — the view container was reused, so `root.addEventListener` piled up with every visit; editing a bio wrote to the previously visited entry and the alias dialog opened several times. Each render now gets a fresh scope container |\n| v3.73 | 10-29 | **Hero height pinned** — the three fixed columns now shrink with lower bounds, `.hero-main` matches the cover height (224px), the bio scrolls inside its own box with a bottom fade, and below 900px the hero stacks. Changing the window width no longer changes the hero height |\n| v3.74 | 10-29 | **Aliases added one at a time** — chip list plus a single-line input (Enter appends, clicking a chip removes, uncommitted text is folded in on save); shared by the character page and the works page |\n| v3.75 | 10-29 | **Bio typography** — 13.5px/1.8, blank-line paragraphs, line length capped at 52em, justified CJK; display-only spacing between CJK and Latin plus curly quotes (the stored text is untouched) |\n| v3.76 | 10-29 | **Bulk bio import** — paste many AI-written entries on a shelf page; names, aliases and intros are parsed (`---` separators and `(English)`/`(Japanese)` annotations handled), previewed against the library, then written in one transaction (aliases + intro only) |\n| v3.77 | 10-29 | **Import button moved to the sticky topbar** — it stays reachable while scrolling (it used to sit in the page toolbar) |

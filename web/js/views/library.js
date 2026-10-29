@@ -316,13 +316,13 @@ export async function LibraryView(root, shelfId) {
         search: true,
         searchValue: state.q,
         actions: `${syncBtn()}
+          <button class="tb-btn" data-import-bio title="粘贴 AI 生成的「别名 / 简介」批量写入">导入简介</button>
           <button class="tb-btn primary" data-new-char>＋ 新建${noun}</button>`,
       }) +
       `<main class="page">
          <div class="toolbar">
            <div class="segmented" data-tabs>${tabsHtml(shelves, state.shelfId)}</div>
            <span class="spacer"></span>
-           <button class="tb-btn" data-import-bio title="粘贴 AI 生成的「别名 / 简介」批量写入">导入简介</button>
            <span class="count" data-count>${chars.total} 个${noun} · ${fmtNum(active ? active.mediaCount : 0)} 个媒体 · ${fmtBytes(
              active ? active.bytes || 0 : 0
            )}</span>
