@@ -1267,6 +1267,58 @@ button.char-card {
 }
 
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+
+/* ============ 别名编辑器（弹窗里） ============
+   一个单行输入 + 回车入列，取代以前那个四行 textarea */
+.alias-modal { width: min(420px, 100%); }
+.alias-editor { display: flex; flex-direction: column; gap: 9px; }
+.ae-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 6px;
+  min-height: 52px;
+  padding: 9px 10px;
+  border-radius: var(--r-sm);
+  background: var(--fill);
+}
+.ae-empty { align-self: center; font-size: 12px; color: var(--text-3); }
+.ae-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  max-width: 100%;
+  padding: 0 9px 0 11px;
+  border-radius: var(--r-pill);
+  background: var(--card);
+  box-shadow: 0 0 0 1px var(--line);
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.14s var(--ease), box-shadow 0.14s var(--ease), color 0.14s var(--ease);
+}
+.ae-chip > span { font-size: 13px; line-height: 1; color: var(--text-3); }
+.ae-chip:hover { background: #fdecec; color: #b8392f; box-shadow: 0 0 0 1px rgba(184, 57, 47, 0.2); }
+.ae-chip:hover > span { color: #b8392f; }
+.ae-chip:focus-visible { outline: 2px solid var(--line-strong); outline-offset: 1px; }
+.ae-row { display: flex; gap: 8px; }
+.ae-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  font-size: 13px;
+  color: var(--text);
+}
+.ae-input::placeholder { color: var(--text-3); }
+.ae-input:focus { outline: 0; border-color: var(--text-3); }
+.ae-input:disabled { background: var(--fill); color: var(--text-3); }
+.ae-add { flex: 0 0 auto; height: 36px; padding: 0 14px; }
+.ae-hint { margin: 0; font-size: 11.5px; line-height: 1.6; color: var(--text-3); }
 .tb-btn.danger { background: #e24b4a; color: #fff; }
 .tb-btn.danger:hover { background: #c93b3a; }
 

@@ -3,6 +3,7 @@ import { esc, fmtNum, fmtBytes, fadeIn, toast, copyText, deleteSummary, splitAli
 import { topbarHtml, bindTopbar, bindTopbarSearch } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { openModal, confirmDialog } from '../components/modal.js';
+import { mountAliasEditor } from '../components/alias-editor.js';
 import { openTagPicker } from '../components/tag-picker.js';
 import { openContextMenu } from '../components/context-menu.js';
 import { mediaMenu } from '../components/media-actions.js';
@@ -647,26 +648,20 @@ export async function CharacterView(root, id) {
 
   async function editAliases() {
     const cur = Array.isArray(c.aliases) ? c.aliases : [];
+    let ed = null;
     const v = await openModal({
       title: '编辑别名',
-      description: `简称、日文名、英文名都放这里 —— 一行一个，也可以直接用逗号隔开。搜${noun()}时别名也参与匹配。`,
-      fields: [
-        {
-          name: 'aliases',
-          label: '别名',
-          type: 'textarea',
-          value: cur.join('\n'),
-          placeholder: 'FGO\nFate/Grand Order\nフェイト・グランドオーダー',
-        },
-      ],
+      description: '输一个别名按回车就加进去；点标签可以删。',
+      fields: [],
+      className: 'alias-modal',
       submitText: '保存',
+      onMount: (body) => {
+        ed = mountAliasEditor(body, cur, { hint: `简称 / 日文名 / 英文名都行，搜索${noun()}时别名也参与匹配。` });
+      },
+      transform: () => ({ aliases: ed ? ed.read() : cur }),
     });
     if (!v) return;
-    const next = String(v.aliases || '')
-      .split(/[,，、\n]+/)
-      .map((x) => x.trim())
-      .filter(Boolean)
-      .slice(0, 20);
+    const next = (Array.isArray(v.aliases) ? v.aliases : []).slice(0, 20);
     const prev = c.aliases;
     c.aliases = next;
     paintAliases();
