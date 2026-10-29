@@ -250,6 +250,12 @@ export async function LibraryView(root, shelfId) {
     // 半角逗号 + 空格：AI 基本都按半角逗号切分
     const ok = await copyText(names.join(', '));
     toast(ok ? `已复制 ${names.length} 个名称（逗号分隔）` : '复制失败，请手动选择');
+    // 复制成功后只清空勾选，仍留在多选模式（还要接着选下一批）
+    if (ok && selecting) {
+      picked.clear();
+      anchorId = null;
+      paintSelection();
+    }
   }
 
   function onSelAction(action) {
