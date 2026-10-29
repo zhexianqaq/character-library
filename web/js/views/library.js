@@ -1,5 +1,18 @@
 import { api } from '../api.js';
-import { esc, fmtNum, fmtBytes, fadeIn, toast, charDeleteMessage } from '../util.js';
+import {
+  esc,
+  fmtNum,
+  fmtBytes,
+  fadeIn,
+  toast,
+  charDeleteMessage,
+  copyText,
+  keepScroll,
+  isSelectAllKey,
+  isTypingTarget,
+} from '../util.js';
+import { applyPickClick } from '../selection.js';
+import { escDepth } from '../esc.js';
 import { topbarHtml, bindTopbar, bindTopbarSearch } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
 import { openBioImport } from '../components/bio-import.js';
@@ -64,6 +77,13 @@ export async function LibraryView(root, shelfId) {
   let activeShelf = null;
   let noun = '人物';
 
+  /* 多选：只为「把选中的条目名一次复制出去」（丢给 AI 用）。
+     picked 存 id，跨搜索保留；nameById 记住名字，避免筛掉之后拿不到名称。 */
+  let selecting = false;
+  const picked = new Set();
+  let anchorId = null;
+  const nameById = new Map();
+
   function paintCount() {
     const el = root.querySelector('[data-count]');
     if (!el) return;
@@ -82,10 +102,13 @@ export async function LibraryView(root, shelfId) {
       </div>`;
       return;
     }
+    for (const c of chars.items) nameById.set(c.id, c.name);
     grid.innerHTML = chars.items
       .map((c) => {
         const img = c.coverMediaId ? api.thumb(c.coverMediaId) : '';
-        return `<a class="char-card" href="/c/${c.id}" data-link>
+        const on = selecting && picked.has(c.id);
+        return `<a class="char-card${on ? ' is-sel' : ''}" href="/c/${c.id}" data-link>
+            ${selecting ? '<span class="tick" aria-hidden="true"></span>' : ''}
             <div class="cover">
               ${img ? `<img src="${img}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : '<div class="cover-empty">待添加</div>'}
               <span class="badge">${fmtNum(c.mediaCount)}</span>
@@ -102,6 +125,154 @@ export async function LibraryView(root, shelfId) {
       })
       .join('');
     grid.querySelectorAll('img').forEach(fadeIn);
+    if (selecting) syncSelCount();
+  }
+
+  /* ---------------- 多选：导出条目名给 AI ---------------- */
+
+  const selBar = () => root.querySelector('[data-selbar]');
+
+  /** 按当前列表顺序输出（方便和界面对照），被搜索筛掉的排在后面 */
+  function pickedOrdered() {
+    const inView = chars.items.map((c) => c.id).filter((id) => picked.has(id));
+    const rest = [...picked].filter((id) => !inView.includes(id));
+    return [...inView, ...rest];
+  }
+
+  function pickedNames() {
+    return pickedOrdered()
+      .map((id) => nameById.get(id))
+      .filter(Boolean);
+  }
+
+  function syncSelCount() {
+    const bar = selBar();
+    if (!bar || bar.hidden) return;
+    const n = bar.querySelector('.sel-n b');
+    if (n) n.textContent = String(picked.size);
+    const hidden = pickedOrdered().filter((id) => !chars.items.some((c) => c.id === id)).length;
+    const hint = bar.querySelector('.sel-hide');
+    if (hint) hint.textContent = hidden ? `（${hidden} 个不在当前筛选里）` : '';
+    bar.querySelectorAll('button[data-sel]').forEach((b) => {
+      const k = b.dataset.sel;
+      b.disabled = picked.size === 0 && k !== 'all' && k !== 'exit';
+    });
+  }
+
+  function paintSelection() {
+    root.querySelectorAll('.char-card').forEach((el) => {
+      const id = Number(el.getAttribute('href').split('/').pop());
+      const on = selecting && picked.has(id);
+      el.classList.toggle('is-sel', on);
+      const tick = el.querySelector('.tick');
+      if (selecting && !tick) el.insertAdjacentHTML('afterbegin', '<span class="tick" aria-hidden="true"></span>');
+      else if (!selecting && tick) tick.remove();
+    });
+    syncSelCount();
+  }
+
+  function buildSelBar() {
+    const bar = selBar();
+    if (!bar) return;
+    bar.hidden = false;
+    bar.innerHTML = `
+      <span class="sel-n">已选 <b>0</b> 个<span class="sel-hide"></span></span>
+      <button data-sel="all">全选当前结果</button>
+      <button data-sel="copy">复制名称（逗号）</button>
+      <button data-sel="exit" class="primary">完成</button>`;
+    bar.querySelectorAll('button[data-sel]').forEach((b) => {
+      b.addEventListener('click', () => onSelAction(b.dataset.sel));
+    });
+    syncSelCount();
+  }
+
+  function markSelecting(on) {
+    selecting = on;
+    root.classList.toggle('is-selecting', on);
+  }
+
+  function enterSelect() {
+    keepScroll(() => {
+      picked.clear();
+      anchorId = null;
+      markSelecting(true);
+      paintGrid();
+      buildSelBar();
+    });
+  }
+
+  function exitSelect() {
+    keepScroll(() => {
+      markSelecting(false);
+      picked.clear();
+      anchorId = null;
+      const bar = selBar();
+      if (bar) {
+        bar.hidden = true;
+        bar.innerHTML = '';
+      }
+      paintGrid();
+    });
+  }
+
+  function pickByClick(id, ev) {
+    const ordered = chars.items.map((c) => c.id);
+    const r = applyPickClick({ picked, ordered, id, ev, anchorId });
+    anchorId = r.anchorId;
+    paintSelection();
+  }
+
+  function selectAllShown() {
+    const ids = chars.items.map((c) => c.id);
+    const allOn = ids.length > 0 && ids.every((id) => picked.has(id));
+    if (allOn) picked.clear();
+    else ids.forEach((id) => picked.add(id));
+    anchorId = ids.length ? ids[ids.length - 1] : null;
+    paintSelection();
+  }
+
+  /** Ctrl+A：不在多选里就先进入多选，再一次选满当前筛选结果 */
+  function selectAllAndEnter() {
+    if (!chars.items.length) return;
+    keepScroll(() => {
+      if (!selecting) markSelecting(true);
+      picked.clear();
+      chars.items.forEach((c) => picked.add(c.id));
+      anchorId = chars.items[chars.items.length - 1].id;
+      paintGrid();
+      buildSelBar();
+    });
+  }
+
+  async function copyPickedNames() {
+    const names = pickedNames();
+    if (!names.length) return;
+    // 半角逗号 + 空格：AI 基本都按半角逗号切分
+    const ok = await copyText(names.join(', '));
+    toast(ok ? `已复制 ${names.length} 个名称（逗号分隔）` : '复制失败，请手动选择');
+  }
+
+  function onSelAction(action) {
+    if (action === 'exit') return exitSelect();
+    if (action === 'all') return selectAllShown();
+    if (action === 'copy') return copyPickedNames();
+  }
+
+  /** Esc 退出多选；Ctrl+A 全选当前结果（输入框里让位给原生行为） */
+  function onPageKey(e) {
+    if (isTypingTarget(e.target)) return;
+    if (escDepth() > 0) return; // 弹窗 / 右键菜单 / 下拉开着时键盘归它们
+    if (isSelectAllKey(e)) {
+      if (!chars.items.length) return;
+      e.preventDefault();
+      selectAllAndEnter();
+      return;
+    }
+    if (!selecting) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      exitSelect();
+    }
   }
 
   /** 搜索 / 换排序都只重画列表区，不动顶栏和工具栏（否则输入框和下拉会重建） */
@@ -329,6 +500,7 @@ export async function LibraryView(root, shelfId) {
            <span data-sort></span>
          </div>
          <div class="char-grid" data-grid></div>
+         <div class="sel-bar" data-selbar hidden></div>
        </main>`;
 
     bindTopbar(root);
@@ -365,8 +537,26 @@ export async function LibraryView(root, shelfId) {
     });
     root.querySelector('[data-sort]').replaceWith(sortDD.el);
     paintGrid();
+    if (selecting) {
+      buildSelBar();
+      paintSelection();
+    }
 
     const grid = root.querySelector('[data-grid]');
+
+    // 多选态里点卡片 = 勾选，不跳转（捕获阶段拦下 a[data-link] 的跳转处理器）
+    grid.addEventListener(
+      'click',
+      (e) => {
+        if (!selecting) return;
+        const card = e.target.closest('.char-card');
+        if (!card) return;
+        e.preventDefault();
+        e.stopPropagation();
+        pickByClick(Number(card.getAttribute('href').split('/').pop()), e);
+      },
+      true
+    );
 
     // 右键：卡片 → 条目操作；空白处 → 新建
     grid.addEventListener('contextmenu', (e) => {
@@ -375,6 +565,12 @@ export async function LibraryView(root, shelfId) {
         openContextMenu(e, [
           { label: `新建${noun}`, onClick: () => root.querySelector('[data-new-char]').click() },
           { label: '新建库', onClick: () => root.querySelector('[data-new-shelf]').click() },
+          { separator: true },
+          { label: selecting ? '退出多选' : '进入多选', hint: '选中后可导出名称', onClick: () => (selecting ? exitSelect() : enterSelect()) },
+          selecting
+            ? { label: '全选当前结果', onClick: selectAllShown }
+            : { label: '全选并复制名称', onClick: async () => { selectAllAndEnter(); await copyPickedNames(); } },
+          selecting ? { label: '复制名称（逗号）', onClick: copyPickedNames } : null,
           { separator: true },
           { label: '操作记录', hint: '磁盘操作日志', onClick: () => {
               history.pushState({}, '', '/ops');
@@ -388,11 +584,21 @@ export async function LibraryView(root, shelfId) {
       const cid = Number(card.getAttribute('href').split('/').pop());
       const item = chars.items.find((x) => x.id === cid);
       if (!item) return;
+      const on = picked.has(cid);
       openContextMenu(e, [
         { label: '打开', onClick: () => { history.pushState({}, '', `/c/${cid}`); window.dispatchEvent(new CustomEvent('app:route')); } },
         { label: '编辑名称', onClick: () => renameCharacter(item) },
+        { label: '复制名称', onClick: async () => { const ok = await copyText(item.name); toast(ok ? '名称已复制' : '复制失败'); } },
         { label: `添加素材`, hint: '进入后上传', onClick: () => (location.href = `/c/${cid}?upload=1`) },
         { label: '打开本地文件夹', onClick: () => api.reveal('character', cid).catch(() => toast('目录已丢失')) },
+        { separator: true },
+        { label: selecting ? '退出多选' : '进入多选', hint: '选中后可导出名称', onClick: () => (selecting ? exitSelect() : enterSelect()) },
+        selecting
+          ? {
+              label: on ? '取消选中这个条目' : '把这个条目加入选中',
+              onClick: () => { if (on) picked.delete(cid); else picked.add(cid); paintSelection(); },
+            }
+          : null,
         { separator: true },
         { label: '删除', danger: true, onClick: () => removeCharacter(item) },
       ]);
@@ -524,5 +730,8 @@ export async function LibraryView(root, shelfId) {
     });
   }
 
+  document.addEventListener('keydown', onPageKey);
   await render();
+  // 视图切走时把键盘监听摘掉（和条目页一样，别让闭包越积越多）
+  return () => document.removeEventListener('keydown', onPageKey);
 }
