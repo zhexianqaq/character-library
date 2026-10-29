@@ -685,6 +685,15 @@ export async function CharacterView(root, id) {
     if (!el) return;
     el.classList.toggle('is-empty', !c.intro);
     el.textContent = c.intro || '点击写点简介…';
+    syncIntroMore();
+  }
+
+  /* 简介框高度固定（和封面等高），长文在框内滚。滚不动的时候要让人看出来
+     —— 底边渐隐，和平台栏的 has-more 同一个套路。 */
+  function syncIntroMore() {
+    const el = root.querySelector('[data-intro]');
+    if (!el) return;
+    el.classList.toggle('has-more', el.scrollHeight - el.scrollTop - el.clientHeight > 2);
   }
 
   function bindAliases() {
@@ -695,9 +704,17 @@ export async function CharacterView(root, id) {
     el.addEventListener('click', () => editAliases());
   }
 
+  let introRO = null;
+
   function bindIntro() {
     const host = root.querySelector('[data-intro]');
     if (!host) return;
+    host.addEventListener('scroll', syncIntroMore, { passive: true });
+    // 宽窄变化会改变换行数，进而改变「能不能滚」
+    if (typeof ResizeObserver === 'function') {
+      introRO = new ResizeObserver(() => syncIntroMore());
+      introRO.observe(host);
+    }
     host.addEventListener('click', (e) => {
       const el = e.target.closest('[data-intro]');
       if (!el || el.querySelector('textarea')) return;
@@ -2118,5 +2135,8 @@ export async function CharacterView(root, id) {
     pickFiles();
   }
 
-  return () => document.removeEventListener('keydown', onPageKey);
+  return () => {
+    document.removeEventListener('keydown', onPageKey);
+    if (introRO) introRO.disconnect();
+  };
 }

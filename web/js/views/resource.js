@@ -181,12 +181,28 @@ export async function ResourceView(root, id) {
     const el = root.querySelector('[data-intro]');
     el.classList.toggle('is-empty', !r.intro);
     el.textContent = r.intro || '点击写点简介…';
+    syncIntroMore();
+  }
+
+  /** 简介框定高，长文在框内滚；底边渐隐提示「下面还有」 */
+  function syncIntroMore() {
+    const el = root.querySelector('[data-intro]');
+    if (!el) return;
+    el.classList.toggle('has-more', el.scrollHeight - el.scrollTop - el.clientHeight > 2);
   }
 
   // 别名栏整块可点（标题、＋、chip、空白都行）
   root.querySelector('[data-aliases]').addEventListener('click', editAliases);
 
-  root.querySelector('[data-intro]').addEventListener('click', (e) => {
+  const introEl = root.querySelector('[data-intro]');
+  introEl.addEventListener('scroll', syncIntroMore, { passive: true });
+  let introRO = null;
+  if (typeof ResizeObserver === 'function') {
+    introRO = new ResizeObserver(() => syncIntroMore());
+    introRO.observe(introEl);
+  }
+
+  introEl.addEventListener('click', (e) => {
     const el = e.currentTarget;
     if (el.querySelector('textarea')) return;
     const ta = document.createElement('textarea');
@@ -920,5 +936,8 @@ export async function ResourceView(root, id) {
   document.title = `${r.name} · 资料库`;
 
   // 换页时把这个视图的键盘监听摘掉，否则会越积越多
-  return () => document.removeEventListener('keydown', onPageKey);
+  return () => {
+    document.removeEventListener('keydown', onPageKey);
+    if (introRO) introRO.disconnect();
+  };
 }

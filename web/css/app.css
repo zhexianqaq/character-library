@@ -385,6 +385,10 @@ button.char-card {
 .hero-main {
   flex: 1 1 auto;
   min-width: 0;
+  /* 高度对齐封面（168 × 4/3 = 224）：简介多长都只在自己的框里滚。
+     以前只写了 min-height，简介一长就把 hero 撑高 —— 窗口一窄、简介变窄，
+     字数不变行数翻倍，hero 从 240 涨到 500+，整页跟着跳。 */
+  height: 224px;
   min-height: 224px;
   display: flex;
   flex-direction: column;
@@ -412,12 +416,19 @@ button.char-card {
 }
 
 .chip-row {
+  flex: 0 0 auto;
   display: flex;
-  flex-wrap: wrap;
+  /* 单行 + 横向滚动：标签多时不再换行去挤占下面的简介高度 */
+  flex-wrap: nowrap;
   gap: 5px;
   align-items: center;
-  min-height: 0;
+  min-height: 23px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
 }
+.chip-row::-webkit-scrollbar { display: none; }
+.chip-row > * { flex: 0 0 auto; }
 .chip {
   height: 23px;
   padding: 0 9px;
@@ -447,9 +458,12 @@ button.char-card {
   min-height: 0;
   display: flex;
   gap: 7px;
+  /* 简介在自己的框里滚（hero-main 已定高），这里别再让子项把父级撑开 */
+  overflow: hidden;
 }
 .stat-grid {
-  flex: 0 0 300px;
+  flex: 0 1 300px;
+  min-width: 220px;
   width: 300px;
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -478,7 +492,8 @@ button.char-card {
 /* 平台账号栏：一行一个圆角卡片，点击复制账号 */
 .platform-pane {
   position: relative;
-  flex: 0 0 178px;
+  flex: 0 1 178px;
+  min-width: 140px;
   width: 178px;
   padding: 4px 6px 5px;
   border-radius: 10px;
@@ -646,8 +661,9 @@ button.char-card {
 
 
 .hero-intro {
-  flex: 1 1 auto;
-  min-width: 0;
+  position: relative;
+  flex: 1 1 260px;
+  min-width: 200px;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -662,12 +678,47 @@ button.char-card {
   white-space: pre-wrap;
   word-break: break-word;
   overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   cursor: text;
   transition: background 0.18s var(--ease);
 }
 .hero-intro:hover { background: rgba(255, 255, 255, 0.94); }
+/* 下面还有内容时的底边渐隐（长度不够时 JS 去掉这个类） */
+.hero-intro.has-more::after {
+  content: '';
+  position: sticky;
+  bottom: -7px;
+  align-self: stretch;
+  height: 26px;
+  margin: -26px -11px -7px;
+  border-radius: 0 0 10px 10px;
+  pointer-events: none;
+  background: linear-gradient(to top, rgba(255, 255, 255, 0.98) 18%, rgba(255, 255, 255, 0));
+}
+/* 常驻细滚动条：简介框高度固定，长文只能滚 —— 没有条会像「文字被硬切」 */
+.hero-intro { scrollbar-width: thin; scrollbar-color: rgba(0, 0, 0, 0.2) transparent; }
+.hero-intro::-webkit-scrollbar { width: 7px; }
+.hero-intro::-webkit-scrollbar-track { background: transparent; }
+.hero-intro::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.hero-intro::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.3); background-clip: content-box; }
 .hero-intro.is-empty { color: var(--text-3); }
 .hero-intro > *:first-child { margin-top: 0; }
+/* 窄屏：四列排不下（固定列有下限、简介也有下限），改成两行 —— 简介整行放，
+   避免简介被右边缘裁掉。960 是桌面壳的最小窗口，所以这条主要是网页版兜底。 */
+@media (max-width: 900px) {
+  .hero-inner { flex-direction: column; gap: 12px; }
+  .hero-cover { flex: 0 0 auto; width: 132px; }
+  .hero-main { height: auto; min-height: 0; width: 100%; }
+  .hero-body { flex-wrap: wrap; overflow: visible; row-gap: 8px; }
+  .hero-intro { flex: 1 1 100%; min-height: 140px; max-height: 220px; }
+}
+
 .hero-intro textarea {
   width: 100%;
   min-height: 100%;
@@ -2532,7 +2583,8 @@ button.char-card {
 /* 简称 / 日文名 / 英文名。整块可点进编辑，chip 只做展示 */
 .alias-pane {
   position: relative;
-  flex: 0 0 160px;
+  flex: 0 1 160px;
+  min-width: 124px;
   width: 160px;
   padding: 4px 6px 5px;
   border-radius: 10px;
