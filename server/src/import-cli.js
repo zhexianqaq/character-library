@@ -46,18 +46,25 @@ for (const dir of dirs) {
   console.log(`       显示名: ${displayName}`);
 
   let lastTick = 0;
-  const result = await importCharacterDir({
-    shelfId,
-    sourceDir: abs,
-    name: displayName,
-    moveSource,
-    onProgress: (p) => {
-      const now = Date.now();
-      if (now - lastTick < 400 && p.done < p.total) return;
-      lastTick = now;
-      process.stdout.write(`\r       ${p.done}/${p.total}  ${p.skipped ? '[跳过重复]' : ''} ${p.name.slice(0, 50)}          `);
-    },
-  });
+  let result;
+  try {
+    result = await importCharacterDir({
+      shelfId,
+      sourceDir: abs,
+      name: displayName,
+      moveSource,
+      onProgress: (p) => {
+        const now = Date.now();
+        if (now - lastTick < 400 && p.done < p.total) return;
+        lastTick = now;
+        process.stdout.write(`\r       ${p.done}/${p.total}  ${p.skipped ? '[跳过重复]' : ''} ${p.name.slice(0, 50)}          `);
+      },
+    });
+  } catch (err) {
+    console.error(`\n       失败：${err.message || err}`);
+    process.exitCode = 1;
+    continue;
+  }
   const bits = [`${result.added} 个媒体`, `${result.packs} 个图包`, `${(result.bytes / 1024 ** 2).toFixed(0)} MB`];
   if (result.skipped) bits.push(`跳过重复 ${result.skipped} 个`);
   if (moveSource) {

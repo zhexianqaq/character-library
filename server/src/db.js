@@ -1,5 +1,8 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import Database from 'better-sqlite3';
-import { DB_FILE, DATA_DIR, ensureDirs, slugify } from './config.js';
+import { CATALOG_DIR, DB_FILE, DATA_DIR, ensureDirs, slugify } from './config.js';
+import { entryNameKey } from './entry-name.js';
 import { splitTitleTags } from './pack-tags.js';
 
 /**
@@ -196,6 +199,100 @@ function migrate(d) {
   ensureSelfTags(d);
   normalizePackTitleTags(d);
   normalizePackOwnerTags(d);
+  addColumnIfMissing('characters', 'name_key', `name_key TEXT`);
+  addColumnIfMissing('characters', 'name_legacy_dup', `name_legacy_dup INTEGER NOT NULL DEFAULT 0`);
+  syncEntryNames(d);
+}
+
+let dupReport = { at: null, groups: [] };
+
+/** 最近一次启动扫到的同库重名。不删除、不合并，只供查看。 */
+export function duplicateEntryReport() {
+  return dupReport;
+}
+
+/** 改名或挪库之后，按当前数量重算这一组要不要算「历史重名」。 */
+export function refreshEntryNameFlags(d, shelfId, nameKey) {
+  if (!shelfId || !nameKey) return;
+  const rows = d
+    .prepare('SELECT id FROM characters WHERE shelf_id = ? AND is_container = 0 AND name_key = ?')
+    .all(shelfId, nameKey);
+  const flag = rows.length > 1 ? 1 : 0;
+  const setFlag = d.prepare('UPDATE characters SET name_legacy_dup = ? WHERE id = ?');
+  for (const r of rows) setFlag.run(flag, r.id);
+}
+
+/**
+ * 给每个条目写上比较用的 name_key。
+ * 同库同 key 已经有多条的，全部标成 name_legacy_dup，不删任何一行。
+ * 唯一索引排除这些旧重复，所以迁移不会因为历史数据失败。
+ */
+function syncEntryNames(d) {
+  const rows = d.prepare('SELECT id, name, is_container FROM characters').all();
+  const setKey = d.prepare('UPDATE characters SET name_key = ? WHERE id = ?');
+  d.transaction(() => {
+    for (const r of rows) setKey.run(entryNameKey(r.name) || null, r.id);
+  })();
+
+  const people = d
+    .prepare(
+      `SELECT c.id, c.shelf_id, c.name, c.name_key, s.name AS shelf_name
+         FROM characters c LEFT JOIN shelves s ON s.id = c.shelf_id
+        WHERE c.is_container = 0 AND c.name_key IS NOT NULL AND c.name_key != ''`
+    )
+    .all();
+  const groups = new Map();
+  for (const r of people) {
+    const k = `${r.shelf_id}\0${r.name_key}`;
+    const list = groups.get(k);
+    if (list) list.push(r);
+    else groups.set(k, [r]);
+  }
+  const setFlag = d.prepare('UPDATE characters SET name_legacy_dup = ? WHERE id = ?');
+  const reportGroups = [];
+  d.transaction(() => {
+    for (const list of groups.values()) {
+      const dup = list.length > 1;
+      for (const r of list) setFlag.run(dup ? 1 : 0, r.id);
+      if (!dup) continue;
+      reportGroups.push({
+        shelfId: list[0].shelf_id,
+        shelfName: list[0].shelf_name || '',
+        nameKey: list[0].name_key,
+        entries: list.map((r) => ({ id: r.id, name: r.name })),
+      });
+    }
+  })();
+
+  try {
+    d.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uniq_char_shelf_name
+         ON characters(shelf_id, name_key)
+       WHERE is_container = 0 AND name_legacy_dup = 0
+         AND name_key IS NOT NULL AND name_key != ''`
+    );
+  } catch (err) {
+    console.error(`同名唯一索引没能建上（已有条目都还在）：${err.message}`);
+  }
+
+  dupReport = {
+    at: new Date().toISOString(),
+    normalization: '同一库内比较。NFKC，首尾空白去掉，连续空白并成一个，英文大小写不敏感。别名不参与。',
+    groups: reportGroups,
+  };
+  try {
+    fs.mkdirSync(CATALOG_DIR, { recursive: true });
+    fs.writeFileSync(path.join(CATALOG_DIR, 'duplicate-entries.json'), JSON.stringify(dupReport, null, 2));
+  } catch (err) {
+    console.error(`重名清单没写上：${err.message}`);
+  }
+  if (reportGroups.length) {
+    console.log(`同库重名 ${reportGroups.length} 组（已保留，没有合并，也没有删除）：`);
+    for (const g of reportGroups) {
+      const names = g.entries.map((e) => `${e.name}#${e.id}`).join('、');
+      console.log(`  · ${g.shelfName || `库 ${g.shelfId}`} / ${g.nameKey}：${names}`);
+    }
+  }
 }
 
 /**
