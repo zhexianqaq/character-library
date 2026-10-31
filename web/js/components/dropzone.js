@@ -18,10 +18,18 @@ function describeImport(res) {
   if (res.added) bits.push(`入库 ${res.added} 个`);
   if (res.removed && res.removed.length) bits.push(`删源 ${res.removed.length} 项`);
   if (res.kept && res.kept.length) bits.push(`保留 ${res.kept.length} 项`);
-  const skipped = res.skipped || [];
-  if (skipped.length) {
-    const allDup = skipped.every((x) => x.reason === '重复文件');
-    bits.push(allDup ? `已在库里（${skipped.length} 项）` : `跳过 ${skipped.length} 项：${skipped[0].reason}`);
+  const failures = Array.isArray(res.failures) ? res.failures : [];
+  if (failures.length) {
+    const f = failures[0];
+    const who = f.name ? `${f.name}（${f.reason}）` : f.reason;
+    const more = failures.length > 1 ? ` 等 ${failures.length} 个` : '';
+    bits.push(`未全部入库，源压缩包还在原处：${who}${more}`);
+  }
+  const skipped = (res.skipped || []).filter((x) => x.reason === '重复文件');
+  if (skipped.length) bits.push(`已在库里（${skipped.length} 项）`);
+  else if (!failures.length && (res.skipped || []).length) {
+    const rest = res.skipped;
+    bits.push(`跳过 ${rest.length} 项：${rest[0].reason}`);
   }
   return bits.join(' · ') || '没有可导入的内容';
 }

@@ -18,6 +18,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -274,6 +275,8 @@ async function main() {
   );
   check('回滚后 pending 记录清空', pend.length === 0, `剩 ${pend.length} 条`);
 
+  await checkArchiveSource(mkChar);
+
   // 6) 删除失败：另一个进程独占打开文件（等同播放器正在播），必须返回 409 且记录还在
   const buf4 = await genImage('four');
   const up4 = await upload(A.id, pA.id, 'four.png', buf4);
@@ -423,6 +426,134 @@ async function main() {
     bk4.code === 0 && validNow.length === 1 && failedNow.length === (failedDirs.length || failedNow.length),
     `正式 ${validNow.length} 份 · 失败目录 ${failedNow.length} 个`
   );
+
+  // 压缩包用例在 checkArchiveSource，放在文件锁测试之前（那一步依赖 Windows 的 powershell）
+}
+
+async function checkArchiveSource(mkChar) {
+  const archChar = await mkChar('压缩包甲');
+  const zipDir = path.join(TMP, 'zips');
+  await fsp.mkdir(zipDir, { recursive: true });
+  const pngA = await genImage('zip-a');
+  const pngB = await genImage('zip-b');
+  const pngC = await genImage('zip-c');
+  const pngD = await genImage('zip-d');
+
+  const partialPath = path.join(zipDir, 'partial.zip');
+  fs.writeFileSync(
+    partialPath,
+    buildStoredZip([
+      { name: 'ok.png', data: pngA },
+      { name: 'bad.png', data: pngB, crc: (zlib.crc32(pngB) ^ 0xffffffff) >>> 0 },
+    ])
+  );
+  const partial = await jpost('/api/import/paths', { paths: [partialPath], charId: archChar.id, move: true });
+  const partialFails = partial.body && partial.body.failures;
+  check(
+    '部分解压失败：源压缩包留在原地，并列出失败文件',
+    partial.status === 200 &&
+      fs.existsSync(partialPath) &&
+      (partial.body.removed || []).length === 0 &&
+      (partial.body.kept || []).includes(partialPath) &&
+      Array.isArray(partialFails) &&
+      partialFails.some((f) => f.name === 'bad.png'),
+    `HTTP ${partial.status} · ${(partialFails || []).map((f) => f.name + ':' + f.reason).join('; ')}`
+  );
+
+  const okPath = path.join(zipDir, 'both.zip');
+  const okBytes = buildStoredZip([
+    { name: 'one.png', data: pngC },
+    { name: 'two.png', data: pngD },
+  ]);
+  fs.writeFileSync(okPath, okBytes);
+  const okRes = await jpost('/api/import/paths', { paths: [okPath], charId: archChar.id, move: true });
+  check(
+    '全部入库：源压缩包被删',
+    okRes.status === 200 && okRes.body.added === 2 && !fs.existsSync(okPath) && (okRes.body.failures || []).length === 0,
+    `added=${okRes.body && okRes.body.added} 还在=${fs.existsSync(okPath)}`
+  );
+
+  fs.writeFileSync(okPath, okBytes);
+  const dupRes = await jpost('/api/import/paths', { paths: [okPath], charId: archChar.id, move: true });
+  const dupReasons = ((dupRes.body && dupRes.body.skipped) || []).map((s) => s.reason);
+  check(
+    '全部是已核对的重复：源压缩包被删',
+    dupRes.status === 200 &&
+      dupRes.body.added === 0 &&
+      !fs.existsSync(okPath) &&
+      dupReasons.length === 2 &&
+      dupReasons.every((r) => r === '重复文件'),
+    `added=${dupRes.body && dupRes.body.added} · ${dupReasons.join(',')}`
+  );
+
+  const fd = new FormData();
+  fd.append('archive', new Blob([fs.readFileSync(partialPath)]), 'partial-upload.zip');
+  const upRes = await fetch(`${BASE}/api/characters/${archChar.id}/archive`, { method: 'POST', body: fd });
+  const upBody = await upRes.json().catch(() => null);
+  check(
+    '网页上传部分失败：保留服务器上的压缩包，并列出失败文件',
+    upRes.status === 200 &&
+      upBody &&
+      upBody.sourceKept === true &&
+      upBody.keptArchive &&
+      fs.existsSync(upBody.keptArchive) &&
+      (upBody.failures || []).some((f) => f.name === 'bad.png'),
+    `HTTP ${upRes.status} · ${upBody && upBody.keptArchive}`
+  );
+
+  const lockPath = path.join(zipDir, 'lock.zip');
+  fs.writeFileSync(lockPath, buildStoredZip([{ name: 'lock.png', data: pngA, flags: 1 }]));
+  const lockRes = await jpost('/api/import/paths', { paths: [lockPath], charId: archChar.id, move: true });
+  check(
+    '需要密码：不删源压缩包',
+    lockRes.status === 400 && lockRes.body.code === 'NEED_PASSWORD' && fs.existsSync(lockPath),
+    lockRes.body && (lockRes.body.code || lockRes.body.error)
+  );
+}
+
+/** 测试用的未压缩 zip。crc / flags 用来造「校验失败」和「有密码」。 */
+function buildStoredZip(entries) {
+  const locals = [];
+  const centrals = [];
+  let offset = 0;
+  for (const e of entries) {
+    const name = Buffer.from(e.name, 'utf8');
+    const data = e.data;
+    const crc = (e.crc != null ? e.crc : zlib.crc32(data)) >>> 0;
+    const flags = e.flags || 0;
+    const local = Buffer.alloc(30 + name.length);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(flags, 6);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    name.copy(local, 30);
+    const blob = Buffer.concat([local, data]);
+    locals.push(blob);
+    const central = Buffer.alloc(46 + name.length);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(flags, 8);
+    central.writeUInt32LE(crc, 16);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt32LE(offset, 42);
+    name.copy(central, 46);
+    centrals.push(central);
+    offset += blob.length;
+  }
+  const cd = Buffer.concat(centrals);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(cd.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, cd, eocd]);
 }
 
 try {

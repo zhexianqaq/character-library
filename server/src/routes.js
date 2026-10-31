@@ -3223,7 +3223,68 @@ export function createApp() {
     });
   });
 
-  /**
+/**
+ * 库里这条记录对应的文件还在，并且字节数和入库时一致。
+ * 压缩包要删源之前，靠它确认「重复文件」不是一条悬空记录。
+ */
+function libraryCopyOk(relPath, bytes) {
+  try {
+    const st = fs.statSync(absPathOf(relPath));
+    return st.isFile() && Number(st.size) === Number(bytes);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 这批新写入的媒体，磁盘上的副本是不是都在、大小是不是和记录一致。
+ * 对不上的不能算「已经安全入库」。
+ */
+function unverifiedAdds(db, ids) {
+  const get = db.prepare('SELECT file_name, rel_path, bytes FROM media WHERE id = ?');
+  const bad = [];
+  for (const id of ids || []) {
+    const row = get.get(id);
+    if (!row) {
+      bad.push({ name: `#${id}`, reason: '入库记录没有写上' });
+      continue;
+    }
+    if (!libraryCopyOk(row.rel_path, row.bytes)) {
+      bad.push({ name: row.file_name, reason: '库内副本不在磁盘上或大小不符' });
+    }
+  }
+  return bad;
+}
+
+/**
+ * 压缩包能不能删掉。
+ *
+ * 每一张图片 / 视频都要有着落：要么这次新写入且磁盘副本核对过，
+ * 要么跳过的原因正好是「重复文件」（库里已有一份核对过的相同内容）。
+ * 解压有跳过、读写失败、数量对不上，都不许删 —— 源包留在原地。
+ */
+function archiveMayDelete({ mediaCount, addedIds, ingestSkipped, extractSkipped, verifiedBad }) {
+  const failures = [];
+  for (const s of extractSkipped || []) {
+    failures.push({ name: s.name || '', reason: s.reason || '解压失败' });
+  }
+  for (const s of ingestSkipped || []) {
+    if (s.reason === '重复文件') continue;
+    failures.push({ name: s.name || '', reason: s.reason || '导入失败' });
+  }
+  for (const s of verifiedBad || []) failures.push(s);
+  const dup = (ingestSkipped || []).filter((s) => s.reason === '重复文件').length;
+  const added = (addedIds || []).length;
+  if (mediaCount > 0 && added + dup !== mediaCount && !failures.length) {
+    failures.push({
+      name: '',
+      reason: `解出 ${mediaCount} 个图片或视频，只确认了 ${added + dup} 个`,
+    });
+  }
+  return { ok: mediaCount > 0 && failures.length === 0 && added + dup === mediaCount, failures };
+}
+
+/**
    * 把一批「已经落在临时目录里」的文件收进条目。
    *
    * 上传（multer 先落到 .cache/inbox）和解压（落到 .cache/unzip-*）走同一条链路：
@@ -3262,7 +3323,12 @@ export function createApp() {
         skipped.push({ name: originalName, reason: `读取失败：${err.code || err.message}` });
         continue;
       }
-      if (db.prepare('SELECT id FROM media WHERE character_id = ? AND sha256 = ?').get(charId, sha)) {
+      const existing = db
+        .prepare('SELECT id, rel_path, bytes FROM media WHERE character_id = ? AND sha256 = ?')
+        .get(charId, sha);
+      // 「重复」必须是磁盘上那份还在、大小也对得上。只有一条记录、文件已经丢了，
+      // 不能当成已经入库 —— 否则压缩包会在源被删掉之后再也补不回来。
+      if (existing && libraryCopyOk(existing.rel_path, existing.bytes)) {
         await drop();
         skipped.push({ name: originalName, reason: '重复文件' });
         continue;
@@ -3408,8 +3474,11 @@ export function createApp() {
     const tmpArchive = req.file ? req.file.path : null;
     let archivePath = tmpArchive;
     let workDir = null;
+    // 没全部入库时置上：cleanup 只清解压目录，不删压缩包本身
+    let preserveArchive = false;
     const cleanup = async () => {
       if (workDir) await fsp.rm(workDir, { recursive: true, force: true, maxRetries: 2 }).catch(() => {});
+      if (preserveArchive) return;
       if (tmpArchive) await fsp.unlink(tmpArchive).catch(() => {});
       if (archivePath && archivePath !== tmpArchive) await fsp.unlink(archivePath).catch(() => {});
     };
@@ -3508,6 +3577,7 @@ export function createApp() {
           code: err.code || 'ARCHIVE_FAILED',
           error: err.message || '解压失败',
         });
+        preserveArchive = true;
         const kept = await keepArchive();
         await cleanup();
         return res.status(400).json({
@@ -3531,11 +3601,14 @@ export function createApp() {
           sample: packed.files.slice(0, 8).map((f) => f.name),
           code: 'NO_MEDIA',
         });
+        preserveArchive = true;
         const kept = await keepArchive();
         await cleanup();
         return res.status(400).json({
           error: `压缩包里有 ${packed.files.length} 个文件，但没有图片或视频`,
+          failures: (packed.skipped || []).map((s) => ({ name: s.name, reason: s.reason || '解压失败' })),
           keptArchive: kept,
+          sourceKept: true,
         });
       }
 
@@ -3544,8 +3617,10 @@ export function createApp() {
       if (forcedPackId) {
         pack = db.prepare('SELECT id, title, kind FROM packs WHERE id = ? AND character_id = ?').get(forcedPackId, charId);
         if (!pack) {
+          preserveArchive = true;
+          const kept = await keepArchive();
           await cleanup();
-          return res.status(404).json({ error: '图包不存在' });
+          return res.status(404).json({ error: '图包不存在', keptArchive: kept, sourceKept: true });
         }
       } else if (!char.is_container || shelfKind === 'loose') {
         pack = ensureNamedPack(db, charId, titleFromArchive(originalName), category);
@@ -3580,33 +3655,55 @@ export function createApp() {
           },
         });
       }
+      const decision = archiveMayDelete({
+        mediaCount: media.length,
+        addedIds: out.added,
+        ingestSkipped: out.skipped,
+        extractSkipped: packed.skipped,
+        verifiedBad: unverifiedAdds(db, out.added),
+      });
       logArchiveAttempt({
         via: 'upload',
         name: originalName,
-        stage: 'done',
+        stage: decision.ok ? 'done' : 'partial',
         format: packed.format,
         tool: packed.tool || null,
         entries: packed.files.length,
         media: media.length,
         added: out.added.length,
         skipped: out.skipped.length,
+        failures: decision.failures.length,
         packId: pack ? pack.id : null,
       });
       const summary = {
         added: out.added.length,
         ids: out.added,
-        skipped: [...packed.skipped.map((s) => ({ name: s.name, reason: s.reason })), ...out.skipped],
+        skipped: [
+          ...packed.skipped.map((s) => ({ name: s.name, reason: s.reason })),
+          ...out.skipped,
+          ...decision.failures.filter((f) => f.reason === '库内副本不在磁盘上或大小不符' || f.reason === '入库记录没有写上'),
+        ],
+        failures: decision.failures,
+        sourceKept: !decision.ok,
         pack: pack ? { id: pack.id, title: pack.title, created } : null,
         format: packed.format,
         tool: packed.tool || null,
         entries: packed.files.length,
       };
+      // 浏览器这条没有用户磁盘上的路径，multer 的临时包就是唯一副本。
+      // 没全部入库就挪到 .cache/failed 留着，别在清理解压目录时把它一起删掉。
+      if (!decision.ok) {
+        preserveArchive = true;
+        summary.keptArchive = await keepArchive();
+      }
       await cleanup();
       res.json(summary);
     } catch (err) {
+      preserveArchive = true;
+      const kept = await keepArchive();
       await cleanup();
       console.error('[archive] 解压导入失败', err);
-      res.status(500).json({ error: `解压导入失败：${err.message || err}` });
+      res.status(500).json({ error: `解压导入失败：${err.message || err}`, keptArchive: kept, sourceKept: true });
     }
   });
 
@@ -3880,6 +3977,7 @@ export function createApp() {
     const skipped = [];
     const removed = [];
     const kept = [];
+    const failures = [];
     const workDirs = [];
 
     const tmpName = (ext) => `import-${Date.now()}-${Math.random().toString(16).slice(2, 8)}${ext}`;
@@ -3928,6 +4026,8 @@ export function createApp() {
         let batch = [];
         let packForThis = forcedPackId;
         let archiveName = '';
+        let packed = null;
+        let media = [];
 
         if (st.isDirectory()) {
           const files = await collectMedia(abs);
@@ -3943,7 +4043,6 @@ export function createApp() {
           }
         } else if (isArchiveName(path.basename(abs))) {
           const tries = [...new Set([password, ...savedPasswords].filter(Boolean))];
-          let packed = null;
           let lastErr = null;
           for (const pw of tries.length ? tries : ['']) {
             // 每次都用新目录：密码错了会写出一堆解坏的半成品，不能复用
@@ -3987,11 +4086,15 @@ export function createApp() {
             continue;
           }
           archiveName = path.basename(abs);
-          const media = packed.files.filter((f) =>
+          media = packed.files.filter((f) =>
             ['image', 'video'].includes(kindOfExt(path.extname(f.name)))
           );
           if (!media.length) {
+            for (const s of packed.skipped || []) {
+              skipped.push({ name: s.name, reason: s.reason || '解压失败' });
+            }
             skipped.push({ name: archiveName, reason: `解出 ${packed.files.length} 个文件，没有图片或视频` });
+            if (move) kept.push(abs);
             continue;
           }
           batch = media.map((f) => ({ path: f.abs, name: f.name }));
@@ -4034,11 +4137,20 @@ export function createApp() {
           }
           removed.push(`${path.basename(abs)}/ (${gone}/${files.length})`);
         } else if (archiveName) {
-          // 压缩包本身不入库。**只有真的从里面捞出新东西才删源盘上的包**。
-          // 以前「全是重复」也算成功 → 拖一个库里已经有的包，界面提示「跳过」，
-          // 源文件却被删了（v3.71 修）。宁可留个重复的包，也不静默删用户的文件。
-          const allOk = out.added.length > 0;
-          if (allOk) {
+          // 源包留在用户拖进来的那个路径，失败时不挪走。
+          // 只有每张图片/视频都已在库里（新写入并核对过，或因相同内容跳过）才删。
+          const decision = archiveMayDelete({
+            mediaCount: media.length,
+            addedIds: out.added,
+            ingestSkipped: out.skipped,
+            extractSkipped: packed.skipped,
+            verifiedBad: unverifiedAdds(db, out.added),
+          });
+          for (const f of decision.failures) {
+            if (!skipped.some((s) => s.name === f.name && s.reason === f.reason)) skipped.push(f);
+          }
+          failures.push(...decision.failures.map((f) => ({ archive: archiveName, ...f })));
+          if (decision.ok) {
             await fsp
               .unlink(abs)
               .then(() => removed.push(abs))
@@ -4074,8 +4186,9 @@ export function createApp() {
         skipped: skipped.length,
         removed: removed.length,
         kept: kept.length,
+        failures: failures.length,
       });
-      res.json({ added: added.length, ids: added, skipped, removed, kept, passwordUsed: usedPassword });
+      res.json({ added: added.length, ids: added, skipped, removed, kept, failures, passwordUsed: usedPassword });
     } catch (err) {
       // 密码类的错误要有自己的形状：前端靠 code 决定「弹窗问密码」还是「直接报错」
       if (err && ['NEED_PASSWORD', 'BAD_PASSWORD', 'ZIP_AES'].includes(err.code)) {
