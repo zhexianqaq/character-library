@@ -37,6 +37,7 @@ import { extractArchive, isArchiveName } from './archive.js';
 import { syncPackDirs, renamePackDir, pruneDirsOf } from './pack-sync.js';
 import { logOp, initialStatus, opsSummary, listOps, archiveOps } from './ops-log.js';
 import { applyOps } from './ops-apply.js';
+import { beginCheckpointJob, beginJob, beginShutdown, inflightStatus, isShuttingDown } from './inflight.js';
 
 const MIME = {
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
@@ -662,10 +663,58 @@ async function noteDirLeftover(relDir, r) {
   return `目录没能完全删除：${whyDeleteFailed(r)}${r.remaining != null ? `，还剩 ${r.remaining} 个文件` : ''}`;
 }
 
+function isLocalRequest(req) {
+  const ip = String(req.ip || req.socket?.remoteAddress || '');
+  return ip.includes('127.0.0.1') || ip === '::1';
+}
+
+/** 关窗口时要等它做完的请求：写操作，以及会生成缩略图 / 预览并回写数据库的读。 */
+function trackedJob(req) {
+  const p = req.path || '';
+  if (p === '/api/shutdown' || p === '/api/shutdown-status' || p.startsWith('/api/shutdown-test')) return null;
+  if (p.startsWith('/t/')) return { kind: 'thumb', label: '正在生成缩略图' };
+  if (p.startsWith('/pv/')) return { kind: 'preview', label: '正在生成预览图' };
+  if (req.method === 'GET' || req.method === 'HEAD') return null;
+  if (!p.startsWith('/api/')) return null;
+  if (p.includes('/archive')) return { kind: 'import', label: '正在解压并导入压缩包' };
+  if (p.startsWith('/api/import/')) return { kind: 'import', label: '正在从磁盘导入' };
+  if (p.endsWith('/media') && req.method === 'POST') return { kind: 'import', label: '正在上传入库' };
+  if (p.includes('/sync') || p === '/api/ops/apply') return { kind: 'sync', label: '正在同步文件夹' };
+  if (p === '/api/media/bulk' || p === '/api/media/eject' || /\/packs\/[^/]+\/media$/.test(p)) {
+    return { kind: 'move', label: '正在移动或整理文件' };
+  }
+  if (req.method === 'DELETE') return { kind: 'delete', label: '正在删除' };
+  if (req.method === 'PATCH') return { kind: 'write', label: '正在保存修改' };
+  return { kind: 'write', label: '正在完成操作' };
+}
+
 export function createApp() {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '4mb' }));
+
+  app.use((req, res, next) => {
+    const job = trackedJob(req);
+    if (isShuttingDown()) {
+      const statusOnly =
+        req.path === '/api/shutdown' ||
+        req.path === '/api/shutdown-status' ||
+        req.path === '/api/shutdown-test-release';
+      if (!statusOnly && (job || (req.method !== 'GET' && req.method !== 'HEAD' && req.path.startsWith('/api/')))) {
+        return res.status(503).json({ error: '服务正在退出，已不再接受新的操作', code: 'SHUTTING_DOWN' });
+      }
+    }
+    if (!job) return next();
+    let end;
+    try {
+      end = beginJob(job.kind, job.label);
+    } catch (err) {
+      return res.status(err.status || 503).json({ error: err.message, code: err.code || 'SHUTTING_DOWN' });
+    }
+    res.locals.endJob = end;
+    res.on('finish', end);
+    next();
+  });
 
   // 必须在 static 之前：首页由服务端注入版本号
   app.get('/', serveIndex);
@@ -4011,25 +4060,52 @@ export function createApp() {
   });
 
   /**
+   * 进行中的操作。桌面壳关窗口时先看这里，空了再请求退出。
+   * 只给本机：列表里有正在解压 / 导入 / 移动 / 生成缩略图的说明。
+   */
+  app.get('/api/shutdown-status', (req, res) => {
+    if (!isLocalRequest(req)) return res.status(403).json({ error: '只允许本机调用' });
+    res.json(inflightStatus());
+  });
+
+  /**
    * 优雅退出，只给桌面壳用。
    *
+   * 先停止接受新的写操作和缩略图生成，等已经开始的做完，再 wal_checkpoint，然后自己 exit。
+   * 还有操作时这次调用只登记「正在退出」并返回列表，进程先不退；最后一项结束才会 checkpoint。
    * 壳关窗口时如果直接 TerminateProcess，SQLite 的 WAL 有可能停在 checkpoint 中间：
-   * 实测「刚导入的 69 条记录」在下一次启动后凭空消失（WAL 被截成 0 字节、主库没写完）。
-   * 这里让服务自己把 WAL 落盘再 exit，壳那边关了窗口等 600ms 才 kill。
+   * 实测「刚导入的 69 条记录」在下一次启动后凭空消失。
    */
   app.post('/api/shutdown', (req, res) => {
-    const ip = String(req.ip || '');
-    if (!ip.includes('127.0.0.1')) return res.status(403).json({ error: '只允许本机调用' });
-    res.json({ ok: true });
-    setTimeout(() => {
+    if (!isLocalRequest(req)) return res.status(403).json({ error: '只允许本机调用' });
+    const snap = beginShutdown(() => {
+      const end = beginCheckpointJob('正在把数据写入磁盘');
       try {
         getDb().pragma('wal_checkpoint(TRUNCATE)');
       } catch {
         /* 库可能已经关了，退出优先 */
       }
+      end();
       process.exit(0);
-    }, 120);
+    });
+    res.json({ ok: true, ...snap });
   });
+
+  if (process.env.CL_SHUTDOWN_TEST === '1') {
+    let holdEnd = null;
+    app.post('/api/shutdown-test-hold', (req, res) => {
+      if (!isLocalRequest(req)) return res.status(403).json({ error: '只允许本机调用' });
+      if (holdEnd) return res.status(409).json({ error: '已经有一个测试占用' });
+      holdEnd = beginJob('test', '测试占用');
+      res.json({ ok: true });
+    });
+    app.post('/api/shutdown-test-release', (req, res) => {
+      if (!isLocalRequest(req)) return res.status(403).json({ error: '只允许本机调用' });
+      if (holdEnd) holdEnd();
+      holdEnd = null;
+      res.json({ ok: true });
+    });
+  }
 
   // 兜底：不带版本前缀的请求一律协商缓存
   app.use(
@@ -4048,6 +4124,7 @@ export function createApp() {
   // 错误兜底：接口一律回 JSON。没有这一层时，抛错会返回 HTML 错误页，
   // 前端 JSON 解析失败，toast 只剩一句 "Unexpected token <"，真正原因全丢了。
   app.use((err, req, res, next) => {
+    if (typeof res.locals.endJob === 'function') res.locals.endJob();
     if (res.headersSent) return next(err);
     const status = err && Number(err.status) >= 400 ? Number(err.status) : 500;
     console.error('[api]', req.method, req.originalUrl, err && (err.stack || err.message || err));

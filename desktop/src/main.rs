@@ -185,6 +185,59 @@ mod win32 {
     }
 }
 
+#[cfg(windows)]
+static SESSION_PROXY: Mutex<Option<tao::event_loop::EventLoopProxy<UserEvent>>> = Mutex::new(None);
+#[cfg(windows)]
+static PREV_WNDPROC: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+/// 关机 / 注销时 Windows 会发 WM_QUERYENDSESSION。挂上关机阻塞原因，
+/// 并通知事件循环走和点关闭一样的排空流程，而不是把进程立刻拆掉。
+#[cfg(windows)]
+fn install_session_hook(hwnd: isize) {
+    use std::ffi::c_void;
+    unsafe extern "system" {
+        fn CallWindowProcW(
+            prev: *mut c_void,
+            hwnd: *mut c_void,
+            msg: u32,
+            wparam: usize,
+            lparam: isize,
+        ) -> isize;
+        fn SetWindowLongPtrW(hwnd: *mut c_void, index: i32, new: isize) -> isize;
+        fn ShutdownBlockReasonCreate(hwnd: *mut c_void, reason: *const u16) -> i32;
+    }
+    const GWLP_WNDPROC: i32 = -4;
+    const WM_QUERYENDSESSION: u32 = 0x0011;
+
+    unsafe extern "system" fn proc(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize {
+        unsafe {
+            if msg == WM_QUERYENDSESSION {
+                let reason: Vec<u16> = "资料库正在完成未结束的操作，请稍候"
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                let _ = ShutdownBlockReasonCreate(hwnd, reason.as_ptr());
+                if let Ok(guard) = SESSION_PROXY.lock() {
+                    if let Some(proxy) = guard.as_ref() {
+                        let _ = proxy.send_event(UserEvent::SessionEnd);
+                    }
+                }
+            }
+            let prev = PREV_WNDPROC.load(std::sync::atomic::Ordering::SeqCst);
+            if prev != 0 {
+                CallWindowProcW(prev as *mut c_void, hwnd, msg, wparam, lparam)
+            } else {
+                1
+            }
+        }
+    }
+
+    unsafe {
+        let prev = SetWindowLongPtrW(hwnd as *mut c_void, GWLP_WNDPROC, proc as *const () as isize);
+        PREV_WNDPROC.store(prev, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 fn stamp() -> String {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
     format!("{}.{:03}", now.as_secs(), now.subsec_millis())
@@ -391,33 +444,68 @@ fn port_open(port: u16) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
 }
 
-/// 关窗口前先请服务「自己退出」：它会 checkpoint 一次 WAL 再 exit(0)。
-/// 直接 TerminateProcess 偶尔会把 SQLite 停在 checkpoint 中间，最近写入的记录就没了。
-///
-/// 返回 true = 服务答应了退出（收到 200）。它先 res.json 再 checkpoint，所以
-/// 「读到响应」不等于「进程已经退了」，后面还要轮询 try_wait。
-fn ask_shutdown(port: u16) -> bool {
-    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
-    let mut stream = match TcpStream::connect_timeout(&addr, Duration::from_millis(300)) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(600)));
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
-    let req = format!(
-        "POST /api/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-    );
-    if stream.write_all(req.as_bytes()).is_err() {
-        return false;
-    }
-    let mut buf = [0u8; 128];
-    match stream.read(&mut buf) {
-        Ok(n) if n > 0 => {
-            let head = String::from_utf8_lossy(&buf[..n]);
-            head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200")
+/// 读完一个 HTTP/1.1 响应的正文。只用于本机的 shutdown 接口，上限 256KB。
+fn read_http_body(stream: &mut TcpStream) -> Option<String> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 4096];
+    let header_end = loop {
+        if buf.len() > 256 * 1024 {
+            return None;
         }
-        _ => false,
+        match stream.read(&mut tmp) {
+            Ok(0) => break buf.len(),
+            Ok(n) => {
+                buf.extend_from_slice(&tmp[..n]);
+                if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break i + 4;
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+                break buf.len();
+            }
+            Err(_) => return None,
+        }
+    };
+    if header_end == 0 || buf.len() < 12 {
+        return None;
     }
+    let head = String::from_utf8_lossy(&buf[..header_end.min(buf.len())]);
+    if !(head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200")) {
+        return None;
+    }
+    let mut content_length = 0usize;
+    for line in head.split("\r\n") {
+        let lower = line.to_ascii_lowercase();
+        if let Some(rest) = lower.strip_prefix("content-length:") {
+            content_length = rest.trim().parse().unwrap_or(0);
+        }
+    }
+    let mut body = buf[header_end.min(buf.len())..].to_vec();
+    while body.len() < content_length && body.len() < 256 * 1024 {
+        match stream.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => body.extend_from_slice(&tmp[..n]),
+            Err(_) => break,
+        }
+    }
+    Some(String::from_utf8_lossy(&body).into_owned())
+}
+
+fn http_call(port: u16, method: &str, path: &str) -> Option<String> {
+    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(400)).ok()?;
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(800)));
+    let req = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(req.as_bytes()).ok()?;
+    read_http_body(&mut stream)
+}
+
+/// 没有进行中的操作时，响应里的 pending 是空数组。解析失败就当成「还不知道」。
+fn pending_is_empty(body: &str) -> bool {
+    body.contains("\"pending\":[]") || body.contains("\"pending\": []")
 }
 
 /// 轮询等子进程自己退出。后端收到 shutdown 后 120ms 就开始 checkpoint，
@@ -521,14 +609,18 @@ p{margin:0;color:#8a8880;font-size:12.5px}
 <div class="ring"></div><h1>正在启动本地服务</h1>
 <p>首次启动要等几秒<span class="dot"></span></p></div></body></html>"#;
 
-/// 服务是我们起的才由我们收尸：先请它自己退（后端会 checkpoint 一次 WAL 再 exit），
-/// 等不到才动手。直接 TerminateProcess 会把 SQLite 停在 checkpoint 中间。
+/// 没有界面可交互时的收尾（启动线程和关窗抢在一起）。
+/// 先请服务排空并 checkpoint，安全超时很长，避免 2.5 秒就把 WAL 掐断。
 fn stop_server(child: &mut Child, port: u16) {
     let started = Instant::now();
-    let graceful = ask_shutdown(port);
-    // 答应了就多给点时间 checkpoint；没答应（连不上 / 不是我们的服务）就别干等
-    let limit = if graceful { 2500 } else { 300 };
-    if !wait_exit(child, Duration::from_millis(limit)) {
+    let graceful = http_call(port, "POST", "/api/shutdown").is_some();
+    let limit = if graceful {
+        Duration::from_secs(20 * 60)
+    } else {
+        Duration::from_millis(300)
+    };
+    if !wait_exit(child, limit) {
+        log("stop_server safety timeout, killing");
         let _ = child.kill();
         let _ = child.wait();
     }
@@ -539,12 +631,194 @@ fn stop_server(child: &mut Child, port: u16) {
     ));
 }
 
-/// 后台线程 → UI 线程的两种结果。
+fn js_quote(s: &str) -> String {
+    let mut out = String::from('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '<' => out.push_str("\\u003c"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn drain_page(initial_json: &str) -> String {
+    format!(
+        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>请稍候</title>
+<style>
+html,body{{height:100%;margin:0}}
+body{{display:grid;place-items:center;background:#f5f5f5;color:#2c2c2a;
+font:14px/1.7 "Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif}}
+.card{{width:min(480px,88vw);padding:28px 30px;background:#fff;border-radius:16px}}
+h1{{margin:0 0 8px;font-size:16px;font-weight:600}}
+p{{margin:0 0 12px;color:#5f5e5a;font-size:13px}}
+ul{{margin:0;padding:0;list-style:none;max-height:240px;overflow:auto}}
+li{{padding:8px 0;border-top:1px solid rgba(0,0,0,.06);font-size:13px}}
+li b{{display:block;font-weight:600}}
+li span{{color:#8a8880;font-size:12px}}
+button{{margin-top:16px;padding:7px 16px;border:0;border-radius:9px;background:#fff;
+color:#9a3b32;font-size:13px;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(154,59,50,.45)}}
+.warn{{margin-top:8px;color:#9a3b32;font-size:12px}}
+</style></head><body><div class="card">
+<h1>正在完成未结束的操作，请稍候…</h1>
+<p>窗口会在这些操作写完、数据落盘之后自己关闭。</p>
+<ul id="list"></ul>
+<button id="force" type="button">强制退出</button>
+<p class="warn">强制退出会立刻结束程序，尚未写入磁盘的导入、移动或缩略图记录可能会丢失。</p>
+</div>
+<script>
+function esc(s){{return String(s||'').replace(/[&<>]/g,function(c){{return {{'&':'&amp;','<':'&lt;','>':'&gt;'}}[c];}});}}
+function ago(iso){{
+  var t = Date.parse(iso);
+  if (!t) return '';
+  var s = Math.max(0, Math.round((Date.now()-t)/1000));
+  return s < 1 ? '刚开始' : '已进行 ' + s + ' 秒';
+}}
+window.__shutdownUpdate = function(snap){{
+  var list = document.getElementById('list');
+  var jobs = (snap && snap.pending) || [];
+  if (!jobs.length){{
+    var msg = snap && snap.checkpointing ? '正在把数据写入磁盘…' : '正在收尾…';
+    list.innerHTML = '<li><b>'+msg+'</b></li>';
+    return;
+  }}
+  list.innerHTML = jobs.map(function(j){{
+    return '<li><b>'+esc(j.label)+'</b><span>'+esc(ago(j.startedAt))+'</span></li>';
+  }}).join('');
+}};
+window.__shutdownUpdate(JSON.parse({initial}));
+document.getElementById('force').onclick = function(){{
+  if (!window.confirm('确定要强制退出吗？未完成的操作可能丢失数据。')) return;
+  try {{
+    if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(JSON.stringify({{t:'force-exit'}}));
+  }} catch (e) {{}}
+}};
+</script></body></html>"#,
+        initial = js_quote(initial_json)
+    )
+}
+
+/// 把 node 子进程交给后台线程去排空。没有子进程（连的是别人起的服务）时返回 true，调用方直接退出壳。
+fn start_shell_drain(
+    child_slot: &Arc<Mutex<Option<Child>>>,
+    closing: &Arc<AtomicBool>,
+    awaiting: bool,
+    port: u16,
+    force: Arc<AtomicBool>,
+    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+) -> bool {
+    closing.store(true, Ordering::SeqCst);
+    let mut taken = child_slot.lock().ok().and_then(|mut g| g.take());
+    // 启动线程可能还没把 child 交出来。主线程一旦 Exit，node 会变成孤儿。
+    if taken.is_none() && awaiting {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while taken.is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(40));
+            taken = child_slot.lock().ok().and_then(|mut g| g.take());
+        }
+        log(&format!(
+            "waited for child handoff: {}",
+            if taken.is_some() { "ok" } else { "none" }
+        ));
+    }
+    if let Some(child) = taken {
+        std::thread::spawn(move || drain_server(child, port, force, proxy));
+        false
+    } else {
+        true
+    }
+}
+
+/// 关窗口后的后台收尾。有进行中的操作就让界面列出它们；没有就尽快退出。
+/// 安全超时 20 分钟，到点才 kill。强制退出由界面上的按钮把 `force` 置上。
+fn drain_server(
+    mut child: Child,
+    port: u16,
+    force: Arc<AtomicBool>,
+    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+) {
+    let started = Instant::now();
+    let safety = Duration::from_secs(20 * 60);
+    let first = http_call(port, "POST", "/api/shutdown");
+    let idle = first.as_deref().map(pending_is_empty).unwrap_or(false);
+    log(&format!(
+        "drain start: idle={idle} body={}",
+        first.as_deref().unwrap_or("").chars().take(180).collect::<String>()
+    ));
+    if idle {
+        let _ = proxy.send_event(UserEvent::QuietDrain);
+        if wait_exit(&mut child, Duration::from_secs(3)) {
+            log(&format!("drain quiet exit in {}ms", started.elapsed().as_millis()));
+            let _ = proxy.send_event(UserEvent::DrainFinished);
+            return;
+        }
+        // checkpoint 比预期久（大 WAL）。把窗口请回来，避免进程藏在后台又不能强制退出。
+        let _ = proxy.send_event(UserEvent::ShowDrain(
+            r#"{"shuttingDown":true,"checkpointing":true,"pending":[]}"#.to_string(),
+        ));
+    } else {
+        let _ = proxy.send_event(UserEvent::ShowDrain(
+            first.unwrap_or_else(|| r#"{"shuttingDown":true,"checkpointing":false,"pending":[]}"#.to_string()),
+        ));
+    }
+
+    let deadline = Instant::now() + safety;
+    loop {
+        if force.load(Ordering::SeqCst) {
+            log("drain force-exit requested");
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = proxy.send_event(UserEvent::DrainFinished);
+            return;
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                log(&format!("drain exited in {}ms", started.elapsed().as_millis()));
+                let _ = proxy.send_event(UserEvent::DrainFinished);
+                return;
+            }
+            Ok(None) => {}
+            Err(_) => {
+                let _ = proxy.send_event(UserEvent::DrainFinished);
+                return;
+            }
+        }
+        if Instant::now() >= deadline {
+            log("drain safety timeout (20min), killing");
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = proxy.send_event(UserEvent::DrainFinished);
+            return;
+        }
+        if let Some(body) = http_call(port, "GET", "/api/shutdown-status") {
+            let _ = proxy.send_event(UserEvent::DrainList(body));
+        }
+        std::thread::sleep(Duration::from_millis(400));
+    }
+}
+
+/// 后台线程 → UI 线程。
 enum UserEvent {
     /// `GET /api/overview` 拿到 200，可以跳转了
     Ready,
     /// spawn 失败 / node 自己退了 / 等满 30 秒
     Failed(&'static str),
+    /// 没有进行中的操作：先把窗口藏起来，后台等 checkpoint
+    QuietDrain,
+    /// 还有操作，或 checkpoint 太久：把等待页摆到前台。参数是状态 JSON。
+    ShowDrain(String),
+    /// 刷新等待页上的列表
+    DrainList(String),
+    /// 服务进程已经结束，壳可以退了
+    DrainFinished,
+    /// Windows 正在关机 / 注销
+    SessionEnd,
 }
 
 /// 启动前先分类，避免窗口建出来才发现起不来。
@@ -757,6 +1031,7 @@ fn main() {
     {
         use tao::platform::windows::WindowExtWindows;
         win32::apply_icons(window.hwnd(), ICON_ICO);
+        install_session_hook(window.hwnd());
     }
     if initial.maximized {
         window.set_maximized(true);
@@ -776,6 +1051,8 @@ fn main() {
     let _ = fs::create_dir_all(&profile_dir);
     let mut web_context = wry::WebContext::new(Some(profile_dir));
 
+    let force_exit = Arc::new(AtomicBool::new(false));
+    let force_ipc = force_exit.clone();
     let builder = wry::WebViewBuilder::new_with_web_context(&mut web_context)
         .with_background_color((245, 245, 245, 255))
         .with_initialization_script(SHELL_JS)
@@ -787,7 +1064,13 @@ fn main() {
             };
             log(&format!("load {phase}: {url}"));
         })
-        .with_ipc_handler(|req| log(&format!("page: {}", req.body())));
+        .with_ipc_handler(move |req| {
+            let body = req.body();
+            log(&format!("page: {body}"));
+            if body.contains("force-exit") {
+                force_ipc.store(true, Ordering::SeqCst);
+            }
+        });
 
     // 拖进窗口的文件：只有壳知道它在磁盘上的真实路径（浏览器拿到的只是字节），
     // 拿到之后交给页面，由页面调 /api/import/paths —— 入库成功才能删掉源文件。
@@ -848,10 +1131,16 @@ fn main() {
     let closing = Arc::new(AtomicBool::new(false));
     let mut awaiting = matches!(&preset, Preset::Spawn(..));
 
+    let proxy = event_loop.create_proxy();
+    #[cfg(windows)]
+    if let Ok(mut slot) = SESSION_PROXY.lock() {
+        *slot = Some(proxy.clone());
+    }
+
     if let Preset::Spawn(dir, node) = preset {
         let slot = child_slot.clone();
         let closing = closing.clone();
-        let proxy = event_loop.create_proxy();
+        let proxy = proxy.clone();
         std::thread::spawn(move || {
             // 关窗抢在前面就别再拉起服务，否则壳退了、node 还活着
             match slot.lock() {
@@ -872,8 +1161,15 @@ fn main() {
             // 交接点：持锁再判一次。主线程要么已经竖旗（我们收尾），要么接下来
             // 一定能 take 到 child（它收尾）—— 两种都不会留下孤儿 node。
             match slot.lock() {
-                Ok(mut g) if !closing.load(Ordering::SeqCst) => *g = Some(child),
-                _ => {
+                Ok(mut g) => {
+                    let raced = closing.load(Ordering::SeqCst);
+                    *g = Some(child);
+                    if raced {
+                        log("spawn raced with close; child handed to shell");
+                        return;
+                    }
+                }
+                Err(_) => {
                     log("spawn raced with close; stop it here");
                     stop_server(&mut child, port);
                     return;
@@ -909,31 +1205,60 @@ fn main() {
     }
 
     let slot_for_events = webview_slot.clone();
+    let mut draining = false;
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
-            // 后台线程报结果：就绪就跳转，失败就把骨架页换成说明页
+            // 后台线程报结果：就绪就跳转，失败就把骨架页换成说明页。
+            // 关窗口之后的排空事件不走 awaiting，窗口还在，用来显示等待页。
             Event::UserEvent(ue) => {
-                if !awaiting {
-                    return;
-                }
-                awaiting = false;
                 let held = slot_for_events.borrow();
                 let Some(w) = held.as_ref() else {
                     return;
                 };
                 match ue {
+                    UserEvent::Ready | UserEvent::Failed(_) if !awaiting => return,
                     UserEvent::Ready => {
+                        awaiting = false;
                         log(&format!("navigate: {target}"));
                         let _ = w.load_url(&target);
                     }
                     UserEvent::Failed(reason) => {
+                        awaiting = false;
                         let detail = match reason {
                             "spawn" => "node 进程没能启动。详见 <code>%LOCALAPPDATA%\\ams-desktop\\server.log</code>。".to_string(),
                             "exit" => "node 起来后立刻退出了：端口冲突、依赖没装、数据库打不开都可能，详见 <code>%LOCALAPPDATA%\\ams-desktop\\server.log</code>。".to_string(),
                             _ => format!("等了 30 秒，端口 {port} 还是没有响应。"),
                         };
                         let _ = w.load_html(&error_page("后端没有起来", &detail, port));
+                    }
+                    UserEvent::QuietDrain => {
+                        let _ = window.set_visible(false);
+                    }
+                    UserEvent::ShowDrain(json) => {
+                        let _ = window.set_visible(true);
+                        let _ = w.load_html(&drain_page(&json));
+                    }
+                    UserEvent::DrainList(json) => {
+                        let _ = w.evaluate_script(&format!(
+                            "window.__shutdownUpdate && window.__shutdownUpdate(JSON.parse({}))",
+                            js_quote(&json)
+                        ));
+                    }
+                    UserEvent::DrainFinished => {
+                        log("---- shell exit ----");
+                        *control_flow = ControlFlow::Exit;
+                    }
+                    UserEvent::SessionEnd => {
+                        log("session end");
+                        if draining {
+                            return;
+                        }
+                        draining = true;
+                        if start_shell_drain(&child_slot, &closing, awaiting, port, force_exit.clone(), proxy.clone()) {
+                            log("---- shell exit (no child) ----");
+                            *control_flow = ControlFlow::Exit;
+                        }
                     }
                 }
             }
@@ -954,6 +1279,9 @@ fn main() {
                     }
                 }
                 WindowEvent::CloseRequested => {
+                    if draining {
+                        return;
+                    }
                     let state = WindowState {
                         x: last_pos.0,
                         y: last_pos.1,
@@ -966,31 +1294,13 @@ fn main() {
                         "save window state: ({}, {}, {}, {}) max={}",
                         state.x, state.y, state.w, state.h, state.maximized
                     ));
-
-                    // 先让窗口消失。收尾（等 checkpoint、杀进程、销毁 WebView2）还在主线程上，
-                    // 但用户已经看不到它了 —— 以前是窗口僵在那里同步 sleep(900)，点完像卡死。
-                    let _ = window.set_visible(false);
-                    // 先竖旗再取 child：后台线程可能刚 spawn 完，靠这把锁交接
-                    closing.store(true, Ordering::SeqCst);
-                    let mut taken = child_slot.lock().ok().and_then(|mut g| g.take());
-                    // 还在等就绪就说明后台线程可能正卡在 spawn 上。这里必须多等一会儿：
-                    // 主线程一 Exit 整个进程就没了，后台线程会被一起带走，node 就成了孤儿。
-                    if taken.is_none() && awaiting {
-                        let deadline = Instant::now() + Duration::from_millis(900);
-                        while taken.is_none() && Instant::now() < deadline {
-                            std::thread::sleep(Duration::from_millis(40));
-                            taken = child_slot.lock().ok().and_then(|mut g| g.take());
-                        }
-                        log(&format!(
-                            "waited for child handoff: {}",
-                            if taken.is_some() { "ok" } else { "none" }
-                        ));
+                    draining = true;
+                    // 没有进行中的操作时，drain 线程会马上发 QuietDrain 把窗口藏起来，
+                    // 用户感觉是立刻关上的。有操作才留在等待页上。
+                    if start_shell_drain(&child_slot, &closing, awaiting, port, force_exit.clone(), proxy.clone()) {
+                        log("---- shell exit (no child) ----");
+                        *control_flow = ControlFlow::Exit;
                     }
-                    if let Some(mut c) = taken {
-                        stop_server(&mut c, port);
-                    }
-                    log("---- shell exit ----");
-                    *control_flow = ControlFlow::Exit;
                 }
                 _ => {}
             },
