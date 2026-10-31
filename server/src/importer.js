@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { statSync } from 'node:fs';
 import path from 'node:path';
 import { getDb, nowIso, refreshCharacter, refreshCharacterPacks } from './db.js';
+import { entryNameKey, storedEntryName } from './entry-name.js';
 import { importFileFromPath, uniqueDirName, kindOfExt, removeLibraryFile, absPathOf } from './store.js';
 import { splitTitleTags } from './pack-tags.js';
 import { getDerivative } from './thumbs.js';
@@ -109,8 +110,21 @@ export async function importCharacterDir({
   const db = getDb();
   const dirName = path.basename(sourceDir);
   const parsed = parseDirName(dirName);
-  const finalName = name || parsed.name;
+  const finalName = storedEntryName(name || parsed.name);
   const finalAccount = account !== undefined ? account : parsed.account;
+  if (!finalName) throw new Error('条目名不能为空');
+  const dup = db
+    .prepare(
+      `SELECT id, name FROM characters
+        WHERE shelf_id = ? AND is_container = 0 AND name_key = ? ORDER BY id LIMIT 1`
+    )
+    .get(shelfId, entryNameKey(finalName));
+  if (dup) {
+    const err = new Error(`这个库里已经有「${dup.name}」了（条目 ${dup.id}），没有新建，源文件也没动`);
+    err.code = 'DUPLICATE_ENTRY';
+    err.existingId = dup.id;
+    throw err;
+  }
 
   // 外部导入只收图片 / 视频：正文文件（txt / epub）不进这个流程
   const files = (await walkFiles(sourceDir)).filter((f) =>
@@ -128,10 +142,10 @@ export async function importCharacterDir({
   const charId = Number(
     db
       .prepare(
-        `INSERT INTO characters(shelf_id, name, account, intro, dir_slug, sort_order, created_at, updated_at)
-         VALUES(?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM characters WHERE shelf_id=?),?,?)`
+        `INSERT INTO characters(shelf_id, name, account, intro, dir_slug, name_key, name_legacy_dup, sort_order, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,0,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM characters WHERE shelf_id=?),?,?)`
       )
-      .run(shelfId, finalName, finalAccount, '', baseRel, shelfId, ts, ts).lastInsertRowid
+      .run(shelfId, finalName, finalAccount, '', baseRel, entryNameKey(finalName), shelfId, ts, ts).lastInsertRowid
   );
 
   const packByMonth = new Map();

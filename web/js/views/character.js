@@ -3,6 +3,7 @@ import { esc, fmtNum, fmtBytes, fadeIn, toast, copyText, deleteSummary, splitAli
 import { topbarHtml, bindTopbar, bindTopbarSearch } from '../components/topbar.js';
 import { renderMasonry } from '../components/masonry.js';
 import { openModal, confirmDialog } from '../components/modal.js';
+import { offerExistingEntry } from '../dup-entry.js';
 import { mountAliasEditor } from '../components/alias-editor.js';
 import { openTagPicker } from '../components/tag-picker.js';
 import { openContextMenu } from '../components/context-menu.js';
@@ -2028,7 +2029,10 @@ export async function CharacterView(root, id) {
       try {
         await api.updateCharacter(c.id, typeof v.aliases === 'string' ? { ...v, aliases: splitAliases(v.aliases) } : v);
       } catch (err) {
-        // 重名会被服务端挡回来（409），把原话显示出来，别静默失败
+        if (err.status === 409 && err.body && err.body.id) {
+          await offerExistingEntry(err.body.name || v.name, err.body.id);
+          return;
+        }
         toast(err.message || '保存失败');
         return;
       }

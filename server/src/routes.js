@@ -16,7 +16,10 @@ import {
   ensureSelfTags,
   ensureShelfContainer,
   pruneOrphanTags,
+  duplicateEntryReport,
+  refreshEntryNameFlags,
 } from './db.js';
+import { entryNameKey, storedEntryName } from './entry-name.js';
 import { getDerivative, capturePoster, clearPoster, warmAll, warmState } from './thumbs.js';
 import { WEB_DIR, INBOX_DIR, CACHE_DIR, DATA_DIR, slugify } from './config.js';
 import {
@@ -213,9 +216,25 @@ function cleanAliases(v) {
  * 哪个是哪个，素材也会散在两边。
  */
 function sameNameChar(db, shelfId, name, excludeId = 0) {
+  const key = entryNameKey(name);
+  if (!key) return null;
   return db
-    .prepare('SELECT id, dir_slug FROM characters WHERE shelf_id = ? AND is_container = 0 AND name = ? AND id <> ?')
-    .get(shelfId, name, excludeId);
+    .prepare(
+      `SELECT id, name, dir_slug FROM characters
+        WHERE shelf_id = ? AND is_container = 0 AND name_key = ? AND id <> ?
+        ORDER BY id LIMIT 1`
+    )
+    .get(shelfId, key, excludeId || 0);
+}
+
+function duplicateEntryBody(dup) {
+  return {
+    error: `这个库里已经有「${dup.name}」了`,
+    code: 'DUPLICATE_ENTRY',
+    id: dup.id,
+    name: dup.name,
+    dirSlug: dup.dir_slug,
+  };
 }
 
 function mapChar(row, tags) {
@@ -1511,9 +1530,8 @@ export function createApp() {
       createdShelf = true;
     }
 
-    const found = db
-      .prepare('SELECT id FROM characters WHERE shelf_id = ? AND is_container = 0 AND name = ?')
-      .get(shelf.id, name);
+    const shown = storedEntryName(name);
+    const found = sameNameChar(db, shelf.id, shown);
     if (found) {
       return res.json({ id: found.id, shelfId: shelf.id, created: false, createdShelf });
     }
@@ -1523,10 +1541,10 @@ export function createApp() {
     const id = Number(
       db
         .prepare(
-          `INSERT INTO characters(shelf_id, name, account, intro, dir_slug, category, sort_order, created_at, updated_at)
-           VALUES(?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM characters WHERE shelf_id=?),?,?)`
-        )
-        .run(shelf.id, name.slice(0, 100), '', '', dirSlug, category || null, shelf.id, ts, ts)
+        `INSERT INTO characters(shelf_id, name, account, intro, dir_slug, category, name_key, name_legacy_dup, sort_order, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,0,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM characters WHERE shelf_id=?),?,?)`
+      )
+      .run(shelf.id, shown, '', '', dirSlug, category || null, entryNameKey(shown), shelf.id, ts, ts)
         .lastInsertRowid
     );
     ensureSelfTags(db); // 资源名本身也是标签，标签库里能搜到
@@ -1744,15 +1762,22 @@ export function createApp() {
     const dryRun = b.dryRun !== false;
 
     const pick = shelfId
-      ? db.prepare('SELECT id, name, intro, aliases FROM characters WHERE shelf_id = ? AND is_container = 0 AND name = ?')
-      : db.prepare('SELECT id, name, intro, aliases FROM characters WHERE is_container = 0 AND name = ?');
+      ? db.prepare(
+          'SELECT id, name, intro, aliases FROM characters WHERE shelf_id = ? AND is_container = 0 AND name_key = ?'
+        )
+      : db.prepare('SELECT id, name, intro, aliases FROM characters WHERE is_container = 0 AND name_key = ?');
 
     const updated = [];
     const skipped = [];
 
     const plan = [];
     for (const it of items) {
-      const rows = shelfId ? pick.all(shelfId, it.name) : pick.all(it.name);
+      const nameKey = entryNameKey(it.name);
+      if (!nameKey) {
+        skipped.push({ name: it.name, reason: '名字是空的' });
+        continue;
+      }
+      const rows = shelfId ? pick.all(shelfId, nameKey) : pick.all(nameKey);
       if (!rows.length) {
         skipped.push({ name: it.name, reason: '未找到同名条目' });
         continue;
@@ -1829,10 +1854,14 @@ export function createApp() {
     res.json({ dryRun: false, total: items.length, matched: updated.length, skipped, items: updated });
   });
 
+  app.get('/api/duplicate-entries', (req, res) => {
+    res.json(duplicateEntryReport());
+  });
+
   app.post('/api/characters', async (req, res) => {
     const db = getDb();
     const b = req.body || {};
-    const name = String(b.name || '').trim();
+    const name = storedEntryName(b.name);
     if (!name) return res.status(400).json({ error: '角色名不能为空' });
     const shelfId = Number(b.shelfId) || defaultShelfId();
     const shelf = db.prepare('SELECT * FROM shelves WHERE id = ?').get(shelfId);
@@ -1845,23 +1874,21 @@ export function createApp() {
 
     // 同库内不允许重名，跨库同名合法（原创书《原神》与同人书分组「原神」互不干扰）。
     // 以前只拦小说库，人物 / 角色集重名会静默建出第二个条目 + 「名字-2」目录。
-    const dupName = name.slice(0, 100);
-    const dup = sameNameChar(db, shelfId, dupName);
-    if (dup) {
-      return res.status(409).json({ error: `这个库里已经有「${dupName}」了`, id: dup.id, dirSlug: dup.dir_slug });
-    }
+    const dup = sameNameChar(db, shelfId, name);
+    if (dup) return res.status(409).json(duplicateEntryBody(dup));
 
     const dirSlug = await uniqueCharRelDir(db, shelfId, name, novelGroup);
     const ts = nowIso();
     const info = db
       .prepare(
         `INSERT INTO characters(shelf_id, name, account, intro, dir_slug, category, aliases,
-           novel_group, novel_subtype, author, word_count, novel_status, sort_order, created_at, updated_at)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM characters WHERE shelf_id=?),?,?)`
+           novel_group, novel_subtype, author, word_count, novel_status, name_key, name_legacy_dup,
+           sort_order, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM characters WHERE shelf_id=?),?,?)`
       )
       .run(
         shelfId,
-        name.slice(0, 100),
+        name,
         String(b.account || '').slice(0, 100),
         String(b.intro || '').slice(0, 20000),
         dirSlug,
@@ -1872,6 +1899,7 @@ export function createApp() {
         isNovel ? String(b.author || '').trim().slice(0, 60) || null : null,
         isNovel ? Math.max(0, Number(b.wordCount) || 0) : 0,
         isNovel ? String(b.novelStatus || '').trim().slice(0, 20) || null : null,
+        entryNameKey(name),
         shelfId,
         ts,
         ts
@@ -1959,16 +1987,19 @@ export function createApp() {
     /* 小说库的目录 = <库>/<归类文件夹>/<书名>。
        改书名或改归类文件夹时目录必须跟着搬，否则界面一套、磁盘一套。
        目录搬运用异步 fs，放在事务外；DB 更新失败再把目录搬回去。 */
-    const nextName = typeof b.name === 'string' && b.name.trim() ? b.name.trim().slice(0, 100) : row.name;
+    const nextName = typeof b.name === 'string' && storedEntryName(b.name) ? storedEntryName(b.name) : row.name;
     const nextGroup =
       typeof b.novelGroup === 'string' ? b.novelGroup.trim().slice(0, 60) : String(row.novel_group || '');
 
     // 改名或者换库都要重新查重名 —— 同库不允许两个同名条目。
     // 只改简介 / 别名这类操作不查，省一次查询。
     const nextShelfId = b.shelfId ? Number(b.shelfId) : row.shelf_id;
-    if (nextName !== row.name || nextShelfId !== row.shelf_id) {
+    const oldKey = entryNameKey(row.name);
+    const nextKey = entryNameKey(nextName);
+    // 只改简介 / 别名不查。历史重名自己改自己的简介必须放行。
+    if (nextKey !== oldKey || nextShelfId !== row.shelf_id) {
       const dup = sameNameChar(db, nextShelfId, nextName, id);
-      if (dup) return res.status(409).json({ error: `这个库里已经有「${nextName}」了`, id: dup.id });
+      if (dup) return res.status(409).json(duplicateEntryBody(dup));
     }
 
     let targetRel = row.dir_slug;
@@ -1983,7 +2014,9 @@ export function createApp() {
     try {
       const tx = db.transaction(() => {
         if (typeof b.name === 'string' && b.name.trim()) {
-          db.prepare('UPDATE characters SET name = ?, updated_at = ? WHERE id = ?').run(nextName, nowIso(), id);
+          db.prepare(
+            'UPDATE characters SET name = ?, name_key = ?, name_legacy_dup = 0, updated_at = ? WHERE id = ?'
+          ).run(nextName, nextKey, nowIso(), id);
         }
         if (typeof b.account === 'string') {
           db.prepare('UPDATE characters SET account = ?, updated_at = ? WHERE id = ?').run(b.account.slice(0, 100), nowIso(), id);
@@ -2080,6 +2113,8 @@ export function createApp() {
     }
     // 名字标签始终跟着条目走：改名补新名，手删了也会补回来
     ensureSelfTags(db);
+    refreshEntryNameFlags(db, row.shelf_id, oldKey);
+    refreshEntryNameFlags(db, nextShelfId, nextKey);
     const fresh = db.prepare(`${CHAR_SELECT} WHERE c.id = ?`).get(id);
     res.json({ ...mapChar(fresh, tagsOf(db, id)), dirMoved: !!(mv && mv.moved) });
   });

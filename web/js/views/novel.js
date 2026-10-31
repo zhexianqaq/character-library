@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { esc, fmtNum, fadeIn, toast, charDeleteMessage } from '../util.js';
 import { topbarHtml, bindTopbar } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
+import { offerExistingEntry } from '../dup-entry.js';
 import { openContextMenu } from '../components/context-menu.js';
 import { createDropdown } from '../components/dropdown.js';
 import { ORIGIN_TYPES, novelFieldSet } from '../novel-fields.js';
@@ -421,22 +422,31 @@ export async function NovelView(root, shelfId, opts = {}) {
         exist.add(n);
         todo.push(n);
       }
-      if (!todo.length) return toast(`这些书都已经有了：${skipped.slice(0, 3).join('、')}`);
+      if (!todo.length) {
+        toast(`这些书都已经有了：${skipped.slice(0, 3).join('、')}`);
+        const hit = skipped.length === 1 ? items.find((x) => x.name === skipped[0]) : null;
+        if (hit) await offerExistingEntry(hit.name, hit.id);
+        return;
+      }
 
       const failed = [];
+      const dups = [];
       for (const name of todo) {
         try {
           await api.createCharacter({ shelfId: id, ...v, name });
-        } catch {
-          failed.push(name);
+        } catch (err) {
+          if (err.status === 409 && err.body && err.body.id) dups.push({ name: err.body.name || name, id: err.body.id });
+          else failed.push(name);
         }
       }
-      const ok = todo.length - failed.length;
+      const ok = todo.length - failed.length - dups.length;
       const parts = [];
       if (ok) parts.push(todo.length === 1 && !failed.length ? `《${todo[0]}》已创建` : `已创建 ${ok} 本`);
       if (skipped.length) parts.push(`跳过 ${skipped.length} 本已存在`);
+      if (dups.length) parts.push(`这个库里已经有 ${dups.length} 本同名`);
       if (failed.length) parts.push(`失败 ${failed.length} 本（${failed.slice(0, 3).join('、')}）`);
       toast(parts.join(' · ') || '创建失败');
+      if (dups.length === 1) await offerExistingEntry(dups[0].name, dups[0].id);
       await reload();
     });
 
@@ -527,6 +537,10 @@ export async function NovelView(root, shelfId, opts = {}) {
       toast(r && r.dirMoved ? '已保存，磁盘目录已同步移动' : '已保存');
       await reload();
     } catch (err) {
+      if (err.status === 409 && err.body && err.body.id) {
+        await offerExistingEntry(err.body.name || v.name, err.body.id);
+        return;
+      }
       toast(err.message || '保存失败');
     }
   }

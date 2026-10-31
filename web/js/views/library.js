@@ -15,6 +15,7 @@ import { applyPickClick } from '../selection.js';
 import { escDepth } from '../esc.js';
 import { topbarHtml, bindTopbar, bindTopbarSearch } from '../components/topbar.js';
 import { openModal, confirmDialog } from '../components/modal.js';
+import { offerExistingEntry } from '../dup-entry.js';
 import { openBioImport } from '../components/bio-import.js';
 import { openContextMenu } from '../components/context-menu.js';
 import { createDropdown } from '../components/dropdown.js';
@@ -620,6 +621,10 @@ export async function LibraryView(root, shelfId) {
       try {
         await api.updateCharacter(item.id, { name: v.name });
       } catch (err) {
+        if (err.status === 409 && err.body && err.body.id) {
+          await offerExistingEntry(err.body.name || v.name, err.body.id);
+          return;
+        }
         toast(err.message || '改名失败');
         return;
       }
@@ -681,9 +686,7 @@ export async function LibraryView(root, shelfId) {
           } catch (err) {
             // 同名条目已经存在（服务端 409）：别再建第二个，直接带到已有的那个去
             if (err.status === 409 && err.body && err.body.id) {
-              toast(`${noun}「${names[0]}」已经存在，已为你打开`);
-              history.pushState({}, '', `/c/${err.body.id}`);
-              window.dispatchEvent(new CustomEvent('app:route'));
+              await offerExistingEntry(err.body.name || names[0], err.body.id);
               return;
             }
             throw err;
@@ -704,21 +707,25 @@ export async function LibraryView(root, shelfId) {
         const targetShelf = state.shelfId;
         const failed = [];
         const dupNames = [];
+        let onlyDupId = null;
         for (const name of names) {
           try {
             await api.createCharacter({ shelfId: targetShelf, name, intro: v.intro });
           } catch (err) {
             // 重名和真失败分开报，否则用户以为是自己输入错了
-            if (err.status === 409 && err.body && err.body.id) dupNames.push(name);
-            else failed.push(name);
+            if (err.status === 409 && err.body && err.body.id) {
+              dupNames.push(err.body.name || name);
+              onlyDupId = dupNames.length === 1 ? err.body.id : null;
+            } else failed.push(name);
           }
         }
         const okCount = names.length - failed.length - dupNames.length;
         const bits = [`已创建 ${okCount} 个${noun}`];
-        if (dupNames.length) bits.push(`${dupNames.length} 个重名已跳过（${dupNames.slice(0, 3).join('、')}）`);
+        if (dupNames.length) bits.push(`这个库里已经有 ${dupNames.length} 个同名条目（${dupNames.slice(0, 3).join('、')}）`);
         if (failed.length) bits.push(`${failed.length} 个失败（${failed.slice(0, 3).join('、')}）`);
         toast(bits.join('，'));
         await render();
+        if (onlyDupId) await offerExistingEntry(dupNames[0], onlyDupId);
       } catch (err) {
         toast(err.message || '创建失败');
       }
