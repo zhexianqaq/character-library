@@ -220,15 +220,39 @@ function start(t) {
       if (t.kind === 'archive') {
         const added = Number(res && res.added) || 0;
         const skipped = (res && res.skipped) || [];
+        const failures = (res && res.failures) || [];
         const packTitle = res && res.pack ? res.pack.title : '';
         if (packTitle) t.packTitle = packTitle;
+        const dup = skipped.filter((s) => s.reason === '重复文件').length;
+        if (failures.length) {
+          const preview = failures
+            .slice(0, 3)
+            .map((f) => (f.name ? `${f.name}（${f.reason}）` : f.reason))
+            .join('、');
+          const msg = `有文件没入库，压缩包已保留：${preview}`;
+          t.ids = (res && res.ids) || [];
+          t.loaded = t.size;
+          t.total = t.size;
+          if (added > 0) {
+            t.state = 'done';
+            t.note = `入库 ${added} 个 · ${msg}`;
+          } else {
+            t.state = 'error';
+            t.error = msg;
+          }
+          return;
+        }
         if (added > 0) {
           t.state = 'done';
           t.loaded = t.size;
           t.total = t.size;
           t.ids = (res && res.ids) || [];
-          t.note = `解压入库 ${added} 个${skipped.length ? ` · 跳过 ${skipped.length}` : ''}`;
+          t.note = `解压入库 ${added} 个${dup ? ` · 已在库里 ${dup}` : ''}`;
           // 解开了才记密码，错的密码不进列表
+          if (t.password) rememberPassword(t.password);
+        } else if (dup && !skipped.some((s) => s.reason !== '重复文件')) {
+          t.state = 'skipped';
+          t.reason = `已在库里（${dup} 项）`;
           if (t.password) rememberPassword(t.password);
         } else {
           t.state = 'skipped';
